@@ -1,0 +1,15 @@
+{
+  "mode": "proposer",
+  "plugin": "../../tests/fixtures/plugins/github-repo.json",
+  "adapter": {
+    "url": "http://localhost:7544"
+  },
+  "agent": {
+    "did": "did:key:z6Mk...",
+    "keyFile": "../../tests/fixtures/keys/proposer.json"
+  },
+  "target": {
+    "applicationDid": "did:web:github.example"
+  },
+  "approvalStrategy": "return"
+}

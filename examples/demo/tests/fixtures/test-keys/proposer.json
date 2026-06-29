@@ -1,0 +1,22 @@
+{
+  "label": "proposer",
+  "did": "did:key:z6MkpPanM5XyyGcp6HAwJSm7SmWmmb4MpfmBfgRSq4t7GokV",
+  "kid": "did:key:z6MkpPanM5XyyGcp6HAwJSm7SmWmmb4MpfmBfgRSq4t7GokV#z6MkpPanM5XyyGcp6HAwJSm7SmWmmb4MpfmBfgRSq4t7GokV",
+  "privateJwk": {
+    "crv": "Ed25519",
+    "d": "UA1VsxVt4yqqnFyc4xENa10rWJOqNnWO27v-f1_nUmk",
+    "x": "k6O7ciQkmphuEEt1i3yAimJJWeGKmOq3t_fsNkzza6o",
+    "kty": "OKP",
+    "alg": "EdDSA",
+    "use": "sig",
+    "kid": "did:key:z6MkpPanM5XyyGcp6HAwJSm7SmWmmb4MpfmBfgRSq4t7GokV#z6MkpPanM5XyyGcp6HAwJSm7SmWmmb4MpfmBfgRSq4t7GokV"
+  },
+  "publicJwk": {
+    "crv": "Ed25519",
+    "x": "k6O7ciQkmphuEEt1i3yAimJJWeGKmOq3t_fsNkzza6o",
+    "kty": "OKP",
+    "alg": "EdDSA",
+    "use": "sig",
+    "kid": "did:key:z6MkpPanM5XyyGcp6HAwJSm7SmWmmb4MpfmBfgRSq4t7GokV#z6MkpPanM5XyyGcp6HAwJSm7SmWmmb4MpfmBfgRSq4t7GokV"
+  }
+}

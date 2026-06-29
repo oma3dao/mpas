@@ -1,0 +1,64 @@
+{
+  "version": "1",
+  "type": "ActionPackage",
+  "executionPayload": {
+    "name": "create_issue",
+    "arguments": {
+      "owner": "example-org",
+      "repo": "mpas-demo-repository",
+      "title": "Add MPAS fixture coverage",
+      "body": "Created by the MPAS Credential Adapter fixture set."
+    }
+  },
+  "actionEnvelope": {
+    "version": "1",
+    "type": "ActionEnvelope",
+    "proposer": {
+      "did": "did:key:z6MkpPanM5XyyGcp6HAwJSm7SmWmmb4MpfmBfgRSq4t7GokV"
+    },
+    "target": {
+      "applicationDid": "did:web:github.example",
+      "resource": "repo:example-org/mpas-demo-repository"
+    },
+    "executionProfile": {
+      "id": "did:web:profiles.oma3.org:mcp",
+      "format": "mcp.toolsCall"
+    },
+    "executionPayloadHash": {
+      "alg": "sha-256",
+      "value": "Cvb3Tri55RQKivjza-up3SxNxe_-8k_0gi-YUuwUHeU"
+    },
+    "actionId": {
+      "value": "urn:uuid:11111111-1111-4111-8111-111111111111"
+    },
+    "createdAt": "2026-06-05T18:00:00.000Z",
+    "expiresAt": "2030-01-01T00:00:00.000Z"
+  },
+  "approvalBundle": {
+    "version": "1",
+    "type": "ApprovalBundle",
+    "actionEnvelopeHash": {
+      "alg": "sha-256",
+      "value": "T1u58Itwv7aKE3pIVhTGJLy-YQdNUUBDiZrGB_HKWDM"
+    },
+    "approvals": [
+      {
+        "version": "1",
+        "type": "Approval",
+        "actionEnvelopeHash": {
+          "alg": "sha-256",
+          "value": "T1u58Itwv7aKE3pIVhTGJLy-YQdNUUBDiZrGB_HKWDM"
+        },
+        "decision": "propose",
+        "signature": {
+          "format": "jws",
+          "value": "eyJhbGciOiJFZERTQSIsImtpZCI6ImRpZDprZXk6ejZNa3BQYW5NNVh5eUdjcDZIQXdKU203U21XbW1iNE1wZm1CZmdSU3E0dDdHb2tWI3o2TWtwUGFuTTVYeXlHY3A2SEF3SlNtN1NtV21tYjRNcGZtQmZnUlNxNHQ3R29rViJ9.eyJhY3Rpb25FbnZlbG9wZUhhc2giOnsiYWxnIjoic2hhLTI1NiIsInZhbHVlIjoiVDF1NThJdHd2N2FLRTNwSVZoVEdKTHktWVFkTlVVQkRpWnJHQl9IS1dETSJ9LCJjcmVhdGVkQXQiOiIyMDI2LTA2LTA1VDE4OjAxOjAwLjAwMFoiLCJkZWNpc2lvbiI6InByb3Bvc2UiLCJzaWduZXJEaWQiOiJkaWQ6a2V5Ono2TWtwUGFuTTVYeXlHY3A2SEF3SlNtN1NtV21tYjRNcGZtQmZnUlNxNHQ3R29rViIsInR5cGUiOiJBcHByb3ZhbFBheWxvYWQifQ.Sd-eleu413jIfgDmE0edGNhanZrbI-ZvaNbudRS7X46MhuJOV3tOmiP6CGiFfY-pXxFchLmelW2aKLezQ90-DA"
+        },
+        "createdAt": "2026-06-05T18:01:00.000Z"
+      }
+    ],
+    "assembledBy": "did:key:z6MkpPanM5XyyGcp6HAwJSm7SmWmmb4MpfmBfgRSq4t7GokV",
+    "createdAt": "2026-06-05T18:10:00.000Z"
+  },
+  "createdAt": "2026-06-05T18:10:00.000Z"
+}

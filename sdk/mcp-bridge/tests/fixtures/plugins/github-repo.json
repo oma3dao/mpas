@@ -1,0 +1,211 @@
+{
+  "version": "1",
+  "type": "MpasApplicationPlugin",
+  "pluginDid": "did:web:plugins.example.com:github-repo",
+  "pluginVersion": "1.0.0",
+  "publisherDid": "did:web:wivity.example",
+  "applicationDid": "did:web:github.example",
+  "executionProfile": {
+    "id": "did:web:profiles.oma3.org:mcp",
+    "format": "mcp.toolsCall"
+  },
+  "credentialRequirements": [
+    {
+      "type": "oauthToken",
+      "requiredCapabilities": [
+        "issue.write",
+        "pullRequest.merge",
+        "pullRequest.read",
+        "branch.delete"
+      ],
+      "description": "GitHub OAuth token with repository access for configured repositories."
+    }
+  ],
+  "operations": [
+    {
+      "name": "create_issue",
+      "description": "Create a new issue in a repository.",
+      "executionPayloadSchema": {
+        "type": "object",
+        "required": [
+          "name",
+          "arguments"
+        ],
+        "properties": {
+          "name": {
+            "const": "create_issue"
+          },
+          "arguments": {
+            "type": "object",
+            "required": [
+              "owner",
+              "repo",
+              "title"
+            ],
+            "properties": {
+              "owner": {
+                "type": "string"
+              },
+              "repo": {
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              },
+              "body": {
+                "type": "string"
+              },
+              "labels": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "merge_pull_request",
+      "description": "Merge a pull request into its base branch.",
+      "executionPayloadSchema": {
+        "type": "object",
+        "required": [
+          "name",
+          "arguments"
+        ],
+        "properties": {
+          "name": {
+            "const": "merge_pull_request"
+          },
+          "arguments": {
+            "type": "object",
+            "required": [
+              "owner",
+              "repo",
+              "pullNumber",
+              "baseRef",
+              "expectedHeadSha",
+              "mergeMethod"
+            ],
+            "properties": {
+              "owner": {
+                "type": "string"
+              },
+              "repo": {
+                "type": "string"
+              },
+              "pullNumber": {
+                "type": "integer"
+              },
+              "baseRef": {
+                "type": "string"
+              },
+              "expectedHeadSha": {
+                "type": "string"
+              },
+              "mergeMethod": {
+                "type": "string",
+                "enum": [
+                  "merge",
+                  "squash",
+                  "rebase"
+                ]
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "delete_branch",
+      "description": "Delete a branch from a repository.",
+      "executionPayloadSchema": {
+        "type": "object",
+        "required": [
+          "name",
+          "arguments"
+        ],
+        "properties": {
+          "name": {
+            "const": "delete_branch"
+          },
+          "arguments": {
+            "type": "object",
+            "required": [
+              "owner",
+              "repo",
+              "branch"
+            ],
+            "properties": {
+              "owner": {
+                "type": "string"
+              },
+              "repo": {
+                "type": "string"
+              },
+              "branch": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  ],
+  "policySuggestions": [
+    {
+      "description": "Merging into main is high impact and should require maintainer approval.",
+      "impact": "high",
+      "match": {
+        "conditions": [
+          {
+            "source": "executionPayload",
+            "path": "/name",
+            "op": "eq",
+            "value": "merge_pull_request"
+          },
+          {
+            "source": "executionPayload",
+            "path": "/arguments/baseRef",
+            "op": "eq",
+            "value": "main"
+          }
+        ]
+      },
+      "suggestedRequirement": {
+        "kind": "approvalThreshold",
+        "eligibleSignerRole": "maintainer",
+        "minimumThreshold": 2,
+        "decision": "approve"
+      }
+    },
+    {
+      "description": "Deleting any branch is destructive and should require maintainer approval.",
+      "impact": "medium",
+      "match": {
+        "conditions": [
+          {
+            "source": "executionPayload",
+            "path": "/name",
+            "op": "eq",
+            "value": "delete_branch"
+          }
+        ]
+      },
+      "suggestedRequirement": {
+        "kind": "approvalThreshold",
+        "eligibleSignerRole": "maintainer",
+        "minimumThreshold": 1,
+        "decision": "approve"
+      }
+    }
+  ]
+}

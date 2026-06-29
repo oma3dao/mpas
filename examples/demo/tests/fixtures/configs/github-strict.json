@@ -1,0 +1,139 @@
+{
+  "version": "1",
+  "type": "MpasAdapterDeploymentConfig",
+  "name": "github-strict",
+  "target": {
+    "applicationDid": "did:web:github.example"
+  },
+  "plugin": {
+    "pluginDid": "did:web:plugins.example.com:github-repo",
+    "pluginVersion": "1.0.0",
+    "artifactDid": "did:artifact:bafkreibnoteoczwrweh75o3tkk2kiuxrdd3xfh7truizydelxtytun3x5i",
+    "path": "../plugins/github-repo.json"
+  },
+  "enabledOperations": [
+    "create_issue",
+    "merge_pull_request",
+    "delete_branch"
+  ],
+  "credentialBindings": [
+    {
+      "credentialHandle": "github-test-token",
+      "provider": "file"
+    }
+  ],
+  "resourceRestrictions": {
+    "allowedRepositories": [
+      "example-org/mpas-demo-repository"
+    ],
+    "allowedOrganizations": [
+      "example-org"
+    ]
+  },
+  "executionTarget": {
+    "type": "mcp.stdio",
+    "command": "node",
+    "args": [
+      "tests/fixtures/adapter/echo-mcp-server.mjs"
+    ],
+    "env": {
+      "GITHUB_PERSONAL_ACCESS_TOKEN": "{{credential:github-test-token}}"
+    }
+  },
+  "policy": {
+    "defaultPolicy": "allow",
+    "rules": [
+      {
+        "description": "All merges into main require one maintainer approval.",
+        "match": {
+          "conditions": [
+            {
+              "source": "executionPayload",
+              "path": "/name",
+              "op": "eq",
+              "value": "merge_pull_request"
+            },
+            {
+              "source": "executionPayload",
+              "path": "/arguments/baseRef",
+              "op": "eq",
+              "value": "main"
+            }
+          ]
+        },
+        "requirements": {
+          "type": "threshold",
+          "threshold": 1,
+          "eligibleSignerGroup": "maintainer",
+          "decision": "approve"
+        }
+      },
+      {
+        "description": "Deleting a branch requires one maintainer approval.",
+        "match": {
+          "conditions": [
+            {
+              "source": "executionPayload",
+              "path": "/name",
+              "op": "eq",
+              "value": "delete_branch"
+            }
+          ]
+        },
+        "requirements": {
+          "type": "threshold",
+          "threshold": 1,
+          "eligibleSignerGroup": "maintainer",
+          "decision": "approve"
+        }
+      }
+    ]
+  },
+  "trustedSigners": [
+    {
+      "did": "did:key:z6MkpPanM5XyyGcp6HAwJSm7SmWmmb4MpfmBfgRSq4t7GokV",
+      "roles": [
+        "proposer"
+      ],
+      "label": "Proposer Agent",
+      "publicJwk": {
+        "crv": "Ed25519",
+        "x": "k6O7ciQkmphuEEt1i3yAimJJWeGKmOq3t_fsNkzza6o",
+        "kty": "OKP",
+        "alg": "EdDSA",
+        "use": "sig",
+        "kid": "did:key:z6MkpPanM5XyyGcp6HAwJSm7SmWmmb4MpfmBfgRSq4t7GokV#z6MkpPanM5XyyGcp6HAwJSm7SmWmmb4MpfmBfgRSq4t7GokV"
+      }
+    },
+    {
+      "did": "did:key:z6MkvnsFe1agZ33u5c9JuDkRxKRqupn3qbmPd2cjZ5rmerJi",
+      "roles": [
+        "maintainer"
+      ],
+      "label": "Maintainer A",
+      "publicJwk": {
+        "crv": "Ed25519",
+        "x": "8sDV76b8iF76PImAw5I9Wvejs_8bS8N12WvHzPa5Vw8",
+        "kty": "OKP",
+        "alg": "EdDSA",
+        "use": "sig",
+        "kid": "did:key:z6MkvnsFe1agZ33u5c9JuDkRxKRqupn3qbmPd2cjZ5rmerJi#z6MkvnsFe1agZ33u5c9JuDkRxKRqupn3qbmPd2cjZ5rmerJi"
+      }
+    },
+    {
+      "did": "did:key:z6MkujMqQsmtUpjtAAJQw6z8CDMh9GDdh6gmWogYwYqxAFV8",
+      "roles": [
+        "maintainer"
+      ],
+      "label": "Maintainer B",
+      "publicJwk": {
+        "crv": "Ed25519",
+        "x": "4v8kxXJiFpCHpVxWxHRQLLq0bjIlUF-sE1UINoy50-8",
+        "kty": "OKP",
+        "alg": "EdDSA",
+        "use": "sig",
+        "kid": "did:key:z6MkujMqQsmtUpjtAAJQw6z8CDMh9GDdh6gmWogYwYqxAFV8#z6MkujMqQsmtUpjtAAJQw6z8CDMh9GDdh6gmWogYwYqxAFV8"
+      }
+    }
+  ]
+}

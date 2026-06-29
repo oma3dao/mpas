@@ -1,0 +1,9 @@
+{
+  "version": "1",
+  "type": "MpasHttpError",
+  "error": {
+    "code": "artifact_malformed",
+    "message": "Action Package could not be parsed.",
+    "retryable": false
+  }
+}

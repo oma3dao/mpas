@@ -1,0 +1,39 @@
+{
+  "version": "1",
+  "type": "ActionResponse",
+  "verifier": {
+    "did": "did:key:z6MkjNteHVrscbEvtZ11x56uSdCNjAGL1rWpTrcXAPRky6vm"
+  },
+  "actionEnvelopeHash": {
+    "alg": "sha-256",
+    "value": "S-jITTJ-H0Kb8JOOctloSCCuOWVXXAuZimnDrmBKfm0"
+  },
+  "result": "additionalApprovalsRequired",
+  "authorizationRequirements": {
+    "version": "1",
+    "type": "AuthorizationRequirements",
+    "actionEnvelopeHash": {
+      "alg": "sha-256",
+      "value": "S-jITTJ-H0Kb8JOOctloSCCuOWVXXAuZimnDrmBKfm0"
+    },
+    "result": "additionalApprovalsRequired",
+    "verifier": {
+      "did": "did:key:z6MkjNteHVrscbEvtZ11x56uSdCNjAGL1rWpTrcXAPRky6vm"
+    },
+    "approvalRequirements": {
+      "anyOf": [
+        {
+          "type": "threshold",
+          "threshold": 1,
+          "eligibleSigners": [
+            "did:key:z6MkvnsFe1agZ33u5c9JuDkRxKRqupn3qbmPd2cjZ5rmerJi"
+          ],
+          "decision": "approve",
+          "description": "Maintainer approval required."
+        }
+      ]
+    },
+    "createdAt": "2026-06-05T18:15:00Z",
+    "expiresAt": "2026-06-05T19:15:00Z"
+  }
+}

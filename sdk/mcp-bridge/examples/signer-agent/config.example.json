@@ -1,0 +1,10 @@
+{
+  "mode": "maintainer",
+  "coordination": {
+    "url": "http://localhost:7654"
+  },
+  "agent": {
+    "did": "did:key:z6Mk...",
+    "keyFile": "../../tests/fixtures/keys/maintainer-a.json"
+  }
+}

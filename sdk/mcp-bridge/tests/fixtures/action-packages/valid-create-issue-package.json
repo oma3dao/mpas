@@ -1,0 +1,64 @@
+{
+  "version": "1",
+  "type": "ActionPackage",
+  "executionPayload": {
+    "name": "create_issue",
+    "arguments": {
+      "owner": "oma3dao",
+      "repo": "app-registry",
+      "title": "Add MPAS fixture coverage",
+      "body": "Created by the MPAS Credential Adapter fixture set."
+    }
+  },
+  "actionEnvelope": {
+    "version": "1",
+    "type": "ActionEnvelope",
+    "proposer": {
+      "did": "did:key:z6MkpPanM5XyyGcp6HAwJSm7SmWmmb4MpfmBfgRSq4t7GokV"
+    },
+    "target": {
+      "applicationDid": "did:web:github.example",
+      "resource": "repo:oma3dao/app-registry"
+    },
+    "executionProfile": {
+      "id": "did:web:profiles.oma3.org:mcp",
+      "format": "mcp.toolsCall"
+    },
+    "executionPayloadHash": {
+      "alg": "sha-256",
+      "value": "Enmde5-GTyRlw5BZJ97vNMj4ck1r3MLuGZsr4QcRTAs"
+    },
+    "actionId": {
+      "value": "urn:uuid:11111111-1111-4111-8111-111111111111"
+    },
+    "createdAt": "2026-06-05T18:00:00Z",
+    "expiresAt": "2030-01-01T00:00:00Z"
+  },
+  "approvalBundle": {
+    "version": "1",
+    "type": "ApprovalBundle",
+    "actionEnvelopeHash": {
+      "alg": "sha-256",
+      "value": "S-jITTJ-H0Kb8JOOctloSCCuOWVXXAuZimnDrmBKfm0"
+    },
+    "approvals": [
+      {
+        "version": "1",
+        "type": "Approval",
+        "actionEnvelopeHash": {
+          "alg": "sha-256",
+          "value": "S-jITTJ-H0Kb8JOOctloSCCuOWVXXAuZimnDrmBKfm0"
+        },
+        "decision": "propose",
+        "signature": {
+          "format": "jws",
+          "value": "eyJhbGciOiJFZERTQSIsImtpZCI6ImRpZDprZXk6ejZNa3BQYW5NNVh5eUdjcDZIQXdKU203U21XbW1iNE1wZm1CZmdSU3E0dDdHb2tWI3o2TWtwUGFuTTVYeXlHY3A2SEF3SlNtN1NtV21tYjRNcGZtQmZnUlNxNHQ3R29rViJ9.eyJhY3Rpb25FbnZlbG9wZUhhc2giOnsiYWxnIjoic2hhLTI1NiIsInZhbHVlIjoiUy1qSVRUSi1IMEtiOEpPT2N0bG9TQ0N1T1dWWFhBdVppbW5Ecm1CS2ZtMCJ9LCJjcmVhdGVkQXQiOiIyMDI2LTA2LTA1VDE4OjAxOjAwWiIsImRlY2lzaW9uIjoicHJvcG9zZSIsInNpZ25lckRpZCI6ImRpZDprZXk6ejZNa3BQYW5NNVh5eUdjcDZIQXdKU203U21XbW1iNE1wZm1CZmdSU3E0dDdHb2tWIiwidHlwZSI6IkFwcHJvdmFsUGF5bG9hZCJ9.FMaiVjcr5GrU20CIG0zNMTeORMYGXYed65cgpkS_8tD0Ba9QhNPRwsC9ylfndiO7MPr2fpBuVCi6fpzRM-b_Dw"
+        },
+        "createdAt": "2026-06-05T18:01:00Z"
+      }
+    ],
+    "assembledBy": "did:key:z6MkpPanM5XyyGcp6HAwJSm7SmWmmb4MpfmBfgRSq4t7GokV",
+    "createdAt": "2026-06-05T18:10:00Z"
+  },
+  "createdAt": "2026-06-05T18:10:00Z"
+}

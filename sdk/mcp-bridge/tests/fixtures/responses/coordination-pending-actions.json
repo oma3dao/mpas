@@ -1,0 +1,88 @@
+{
+  "version": "1",
+  "type": "CoordinationPollResponse",
+  "approvalRequests": [
+    {
+      "version": "1",
+      "type": "ApprovalRequest",
+      "actionRef": {
+        "version": "1",
+        "type": "ActionRef",
+        "actionId": {
+          "value": "urn:uuid:11111111-1111-4111-8111-111111111111"
+        },
+        "actionEnvelopeHash": {
+          "alg": "sha-256",
+          "value": "S-jITTJ-H0Kb8JOOctloSCCuOWVXXAuZimnDrmBKfm0"
+        }
+      },
+      "signerReviewSet": {
+        "version": "1",
+        "type": "SignerReviewSet",
+        "actionEnvelope": {
+          "version": "1",
+          "type": "ActionEnvelope",
+          "proposer": {
+            "did": "did:key:z6MkpPanM5XyyGcp6HAwJSm7SmWmmb4MpfmBfgRSq4t7GokV"
+          },
+          "target": {
+            "applicationDid": "did:web:github.example",
+            "resource": "repo:oma3dao/app-registry"
+          },
+          "executionProfile": {
+            "id": "did:web:profiles.oma3.org:mcp",
+            "format": "mcp.toolsCall"
+          },
+          "executionPayloadHash": {
+            "alg": "sha-256",
+            "value": "Enmde5-GTyRlw5BZJ97vNMj4ck1r3MLuGZsr4QcRTAs"
+          },
+          "actionId": {
+            "value": "urn:uuid:11111111-1111-4111-8111-111111111111"
+          },
+          "createdAt": "2026-06-05T18:00:00Z",
+          "expiresAt": "2030-01-01T00:00:00Z"
+        },
+        "executionPayload": {
+          "name": "create_issue",
+          "arguments": {
+            "owner": "oma3dao",
+            "repo": "app-registry",
+            "title": "Add MPAS fixture coverage",
+            "body": "Created by the MPAS Credential Adapter fixture set."
+          }
+        },
+        "authorizationRequirements": {
+          "version": "1",
+          "type": "AuthorizationRequirements",
+          "actionEnvelopeHash": {
+            "alg": "sha-256",
+            "value": "S-jITTJ-H0Kb8JOOctloSCCuOWVXXAuZimnDrmBKfm0"
+          },
+          "result": "additionalApprovalsRequired",
+          "verifier": {
+            "did": "did:key:z6MkjNteHVrscbEvtZ11x56uSdCNjAGL1rWpTrcXAPRky6vm"
+          },
+          "approvalRequirements": {
+            "anyOf": [
+              {
+                "type": "threshold",
+                "threshold": 1,
+                "eligibleSigners": [
+                  "did:key:z6MkvnsFe1agZ33u5c9JuDkRxKRqupn3qbmPd2cjZ5rmerJi"
+                ],
+                "decision": "approve"
+              }
+            ]
+          },
+          "createdAt": "2026-06-05T18:15:00Z",
+          "expiresAt": "2026-06-05T19:15:00Z"
+        },
+        "createdAt": "2026-06-05T18:15:00Z",
+        "expiresAt": "2026-06-05T19:15:00Z"
+      },
+      "requestedDecision": "approve"
+    }
+  ],
+  "actionUpdates": []
+}

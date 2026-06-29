@@ -1,0 +1,11 @@
+{
+  "mode": "proposer",
+  "plugin": "../plugins/github-repo.json",
+  "agent": {
+    "did": "did:key:z6MkpPanM5XyyGcp6HAwJSm7SmWmmb4MpfmBfgRSq4t7GokV",
+    "keyFile": "../keys/proposer.json"
+  },
+  "target": {
+    "applicationDid": "did:web:github.example"
+  }
+}

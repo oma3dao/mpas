@@ -1,0 +1,35 @@
+{
+  "name": "mpas-local",
+  "version": "0.0.0",
+  "description": "MPAS local services — Credential Adapter daemon and Coordination Service",
+  "type": "module",
+  "private": true,
+  "license": "Apache-2.0",
+  "bin": {
+    "mpas": "./dist/cli/index.js",
+    "mpas-local": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node scripts/run-tests.mjs",
+    "test:e2e:mcp-bridge": "node scripts/run-mcp-bridge-e2e.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.13.0",
+    "ajv": "^8.17.1",
+    "fastify": "^5.3.3",
+    "jose": "^6.0.11",
+    "json-canonicalize": "^2.0.0",
+    "multiformats": "^14.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.29",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.2"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

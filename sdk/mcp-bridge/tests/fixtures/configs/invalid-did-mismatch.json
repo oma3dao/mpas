@@ -1,0 +1,14 @@
+{
+  "mode": "proposer",
+  "plugin": "../plugins/github-repo.json",
+  "adapter": {
+    "url": "http://127.0.0.1:1"
+  },
+  "agent": {
+    "did": "did:key:z6Mkmismatch",
+    "keyFile": "../keys/proposer.json"
+  },
+  "target": {
+    "applicationDid": "did:web:github.example"
+  }
+}

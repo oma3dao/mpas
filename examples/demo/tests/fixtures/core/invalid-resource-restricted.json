@@ -1,0 +1,64 @@
+{
+  "version": "1",
+  "type": "ActionPackage",
+  "executionPayload": {
+    "name": "create_issue",
+    "arguments": {
+      "owner": "outside-org",
+      "repo": "restricted-repo",
+      "title": "Restricted resource fixture",
+      "body": "This package names a repository outside allowedRepositories."
+    }
+  },
+  "actionEnvelope": {
+    "version": "1",
+    "type": "ActionEnvelope",
+    "proposer": {
+      "did": "did:key:z6MkpPanM5XyyGcp6HAwJSm7SmWmmb4MpfmBfgRSq4t7GokV"
+    },
+    "target": {
+      "applicationDid": "did:web:github.example",
+      "resource": "repo:outside-org/restricted-repo"
+    },
+    "executionProfile": {
+      "id": "did:web:profiles.oma3.org:mcp",
+      "format": "mcp.toolsCall"
+    },
+    "executionPayloadHash": {
+      "alg": "sha-256",
+      "value": "3TvQJdLQbgki8_cVxQTEFMluCA1grShcBa6U7TqN5Qw"
+    },
+    "actionId": {
+      "value": "urn:uuid:77777777-7777-4777-8777-777777777777"
+    },
+    "createdAt": "2026-06-05T18:00:00.000Z",
+    "expiresAt": "2030-01-01T00:00:00.000Z"
+  },
+  "approvalBundle": {
+    "version": "1",
+    "type": "ApprovalBundle",
+    "actionEnvelopeHash": {
+      "alg": "sha-256",
+      "value": "1RXWNq-tw7T4ZmcfoEJXoCGicGSw2o0akEHWMHljGqE"
+    },
+    "approvals": [
+      {
+        "version": "1",
+        "type": "Approval",
+        "actionEnvelopeHash": {
+          "alg": "sha-256",
+          "value": "1RXWNq-tw7T4ZmcfoEJXoCGicGSw2o0akEHWMHljGqE"
+        },
+        "decision": "propose",
+        "signature": {
+          "format": "jws",
+          "value": "eyJhbGciOiJFZERTQSIsImtpZCI6ImRpZDprZXk6ejZNa3BQYW5NNVh5eUdjcDZIQXdKU203U21XbW1iNE1wZm1CZmdSU3E0dDdHb2tWI3o2TWtwUGFuTTVYeXlHY3A2SEF3SlNtN1NtV21tYjRNcGZtQmZnUlNxNHQ3R29rViJ9.eyJhY3Rpb25FbnZlbG9wZUhhc2giOnsiYWxnIjoic2hhLTI1NiIsInZhbHVlIjoiMVJYV05xLXR3N1Q0Wm1jZm9FSlhvQ0dpY0dTdzJvMGFrRUhXTUhsakdxRSJ9LCJjcmVhdGVkQXQiOiIyMDI2LTA2LTA1VDE4OjAxOjAwLjAwMFoiLCJkZWNpc2lvbiI6InByb3Bvc2UiLCJzaWduZXJEaWQiOiJkaWQ6a2V5Ono2TWtwUGFuTTVYeXlHY3A2SEF3SlNtN1NtV21tYjRNcGZtQmZnUlNxNHQ3R29rViIsInR5cGUiOiJBcHByb3ZhbFBheWxvYWQifQ.EbSUb06MviRD4DnWbshyEDlT5NpCH4SOcd6XR_uKJvhfXdxvzzgqMlaMJq4qQSj029iQ2W0IwEPl4kjPmF-bAQ"
+        },
+        "createdAt": "2026-06-05T18:01:00.000Z"
+      }
+    ],
+    "assembledBy": "did:key:z6MkpPanM5XyyGcp6HAwJSm7SmWmmb4MpfmBfgRSq4t7GokV",
+    "createdAt": "2026-06-05T18:10:00.000Z"
+  },
+  "createdAt": "2026-06-05T18:10:00.000Z"
+}

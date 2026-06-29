@@ -1,0 +1,23 @@
+{
+  "version": "1",
+  "type": "CoordinationPollResponse",
+  "approvalRequests": [
+    {
+      "version": "1",
+      "type": "ApprovalRequest",
+      "actionRef": {
+        "version": "1",
+        "type": "ActionReference",
+        "actionId": {
+          "value": "urn:uuid:44444444-4444-4444-8444-444444444444"
+        },
+        "actionEnvelopeHash": {
+          "alg": "sha-256",
+          "value": "dAqdEw0WPBMVWtIGL084GKz3GVJb25XHHtVNuTYyloQ"
+        }
+      },
+      "requestedDecision": "approve"
+    }
+  ],
+  "actionUpdates": []
+}

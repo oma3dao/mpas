@@ -1,0 +1,8 @@
+{
+  "version": "1",
+  "type": "CoordinationCancelRequest",
+  "actionId": {
+    "value": "urn:uuid:44444444-4444-4444-8444-444444444444"
+  },
+  "proposerDid": "did:key:z6MkpPanM5XyyGcp6HAwJSm7SmWmmb4MpfmBfgRSq4t7GokV"
+}

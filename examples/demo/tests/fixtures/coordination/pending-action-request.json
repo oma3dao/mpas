@@ -1,0 +1,31 @@
+{
+  "version": "1",
+  "type": "CoordinationActionRequest",
+  "actionPackageFixture": "../core/insufficient-approvals.json",
+  "authorizationRequirements": {
+    "version": "1",
+    "type": "AuthorizationRequirements",
+    "actionEnvelopeHash": {
+      "alg": "sha-256",
+      "value": "dAqdEw0WPBMVWtIGL084GKz3GVJb25XHHtVNuTYyloQ"
+    },
+    "result": "additionalApprovalsRequired",
+    "verifier": {
+      "did": "did:key:z6MkjNteHVrscbEvtZ11x56uSdCNjAGL1rWpTrcXAPRky6vm"
+    },
+    "approvalRequirements": {
+      "anyOf": [
+        {
+          "type": "threshold",
+          "threshold": 2,
+          "eligibleSigners": [
+            "did:key:z6MkvnsFe1agZ33u5c9JuDkRxKRqupn3qbmPd2cjZ5rmerJi",
+            "did:key:z6MkujMqQsmtUpjtAAJQw6z8CDMh9GDdh6gmWogYwYqxAFV8"
+          ],
+          "decision": "approve",
+          "description": "Merging into main requires two maintainer approvals."
+        }
+      ]
+    }
+  }
+}

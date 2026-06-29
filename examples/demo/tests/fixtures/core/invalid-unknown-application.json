@@ -1,0 +1,64 @@
+{
+  "version": "1",
+  "type": "ActionPackage",
+  "executionPayload": {
+    "name": "create_issue",
+    "arguments": {
+      "owner": "example-org",
+      "repo": "mpas-demo-repository",
+      "title": "Unknown application fixture",
+      "body": "This package targets an application DID with no deployment config."
+    }
+  },
+  "actionEnvelope": {
+    "version": "1",
+    "type": "ActionEnvelope",
+    "proposer": {
+      "did": "did:key:z6MkpPanM5XyyGcp6HAwJSm7SmWmmb4MpfmBfgRSq4t7GokV"
+    },
+    "target": {
+      "applicationDid": "did:web:unknown-github.example",
+      "resource": "repo:example-org/mpas-demo-repository"
+    },
+    "executionProfile": {
+      "id": "did:web:profiles.oma3.org:mcp",
+      "format": "mcp.toolsCall"
+    },
+    "executionPayloadHash": {
+      "alg": "sha-256",
+      "value": "ZLfycCivy4hlPWGe_vmuBVmFUt4V5zbS7XLIh5CP6Cc"
+    },
+    "actionId": {
+      "value": "urn:uuid:55555555-5555-4555-8555-555555555555"
+    },
+    "createdAt": "2026-06-05T18:00:00.000Z",
+    "expiresAt": "2030-01-01T00:00:00.000Z"
+  },
+  "approvalBundle": {
+    "version": "1",
+    "type": "ApprovalBundle",
+    "actionEnvelopeHash": {
+      "alg": "sha-256",
+      "value": "2jDHqjhVsvckhlgGKuIidGJoFb280_67r4cFHSi9PKE"
+    },
+    "approvals": [
+      {
+        "version": "1",
+        "type": "Approval",
+        "actionEnvelopeHash": {
+          "alg": "sha-256",
+          "value": "2jDHqjhVsvckhlgGKuIidGJoFb280_67r4cFHSi9PKE"
+        },
+        "decision": "propose",
+        "signature": {
+          "format": "jws",
+          "value": "eyJhbGciOiJFZERTQSIsImtpZCI6ImRpZDprZXk6ejZNa3BQYW5NNVh5eUdjcDZIQXdKU203U21XbW1iNE1wZm1CZmdSU3E0dDdHb2tWI3o2TWtwUGFuTTVYeXlHY3A2SEF3SlNtN1NtV21tYjRNcGZtQmZnUlNxNHQ3R29rViJ9.eyJhY3Rpb25FbnZlbG9wZUhhc2giOnsiYWxnIjoic2hhLTI1NiIsInZhbHVlIjoiMmpESHFqaFZzdmNraGxnR0t1SWlkR0pvRmIyODBfNjdyNGNGSFNpOVBLRSJ9LCJjcmVhdGVkQXQiOiIyMDI2LTA2LTA1VDE4OjAxOjAwLjAwMFoiLCJkZWNpc2lvbiI6InByb3Bvc2UiLCJzaWduZXJEaWQiOiJkaWQ6a2V5Ono2TWtwUGFuTTVYeXlHY3A2SEF3SlNtN1NtV21tYjRNcGZtQmZnUlNxNHQ3R29rViIsInR5cGUiOiJBcHByb3ZhbFBheWxvYWQifQ.vpeDcnuTE-_9_89vNENkTsIZV4Akn5_EIR7GqBC4KzcrGUxLBmAyFXOokFS_cn0Q3a--YLTf2aR991CzcBBVAA"
+        },
+        "createdAt": "2026-06-05T18:01:00.000Z"
+      }
+    ],
+    "assembledBy": "did:key:z6MkpPanM5XyyGcp6HAwJSm7SmWmmb4MpfmBfgRSq4t7GokV",
+    "createdAt": "2026-06-05T18:10:00.000Z"
+  },
+  "createdAt": "2026-06-05T18:10:00.000Z"
+}

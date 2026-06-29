@@ -1,0 +1,22 @@
+{
+  "label": "maintainer-b",
+  "did": "did:key:z6MkujMqQsmtUpjtAAJQw6z8CDMh9GDdh6gmWogYwYqxAFV8",
+  "kid": "did:key:z6MkujMqQsmtUpjtAAJQw6z8CDMh9GDdh6gmWogYwYqxAFV8#z6MkujMqQsmtUpjtAAJQw6z8CDMh9GDdh6gmWogYwYqxAFV8",
+  "privateJwk": {
+    "crv": "Ed25519",
+    "d": "NKLetLnK0SqzMfy0m3EftV1H6SOgYdo2AJEnW170Hbk",
+    "x": "4v8kxXJiFpCHpVxWxHRQLLq0bjIlUF-sE1UINoy50-8",
+    "kty": "OKP",
+    "alg": "EdDSA",
+    "use": "sig",
+    "kid": "did:key:z6MkujMqQsmtUpjtAAJQw6z8CDMh9GDdh6gmWogYwYqxAFV8#z6MkujMqQsmtUpjtAAJQw6z8CDMh9GDdh6gmWogYwYqxAFV8"
+  },
+  "publicJwk": {
+    "crv": "Ed25519",
+    "x": "4v8kxXJiFpCHpVxWxHRQLLq0bjIlUF-sE1UINoy50-8",
+    "kty": "OKP",
+    "alg": "EdDSA",
+    "use": "sig",
+    "kid": "did:key:z6MkujMqQsmtUpjtAAJQw6z8CDMh9GDdh6gmWogYwYqxAFV8#z6MkujMqQsmtUpjtAAJQw6z8CDMh9GDdh6gmWogYwYqxAFV8"
+  }
+}

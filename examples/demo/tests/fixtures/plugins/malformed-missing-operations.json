@@ -1,0 +1,12 @@
+{
+  "version": "1",
+  "type": "MpasApplicationPlugin",
+  "pluginDid": "did:web:plugins.example.com:malformed",
+  "pluginVersion": "1.0.0",
+  "publisherDid": "did:web:wivity.example",
+  "applicationDid": "did:web:github.example",
+  "executionProfile": {
+    "id": "did:web:profiles.oma3.org:mcp",
+    "format": "mcp.toolsCall"
+  }
+}

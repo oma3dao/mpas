@@ -1,0 +1,22 @@
+{
+  "label": "maintainer-a",
+  "did": "did:key:z6MkvnsFe1agZ33u5c9JuDkRxKRqupn3qbmPd2cjZ5rmerJi",
+  "kid": "did:key:z6MkvnsFe1agZ33u5c9JuDkRxKRqupn3qbmPd2cjZ5rmerJi#z6MkvnsFe1agZ33u5c9JuDkRxKRqupn3qbmPd2cjZ5rmerJi",
+  "privateJwk": {
+    "crv": "Ed25519",
+    "d": "kSRUeh59TL7vVxo6oeJL0SvujeYlqP_ICEu6urlNrs0",
+    "x": "8sDV76b8iF76PImAw5I9Wvejs_8bS8N12WvHzPa5Vw8",
+    "kty": "OKP",
+    "alg": "EdDSA",
+    "use": "sig",
+    "kid": "did:key:z6MkvnsFe1agZ33u5c9JuDkRxKRqupn3qbmPd2cjZ5rmerJi#z6MkvnsFe1agZ33u5c9JuDkRxKRqupn3qbmPd2cjZ5rmerJi"
+  },
+  "publicJwk": {
+    "crv": "Ed25519",
+    "x": "8sDV76b8iF76PImAw5I9Wvejs_8bS8N12WvHzPa5Vw8",
+    "kty": "OKP",
+    "alg": "EdDSA",
+    "use": "sig",
+    "kid": "did:key:z6MkvnsFe1agZ33u5c9JuDkRxKRqupn3qbmPd2cjZ5rmerJi#z6MkvnsFe1agZ33u5c9JuDkRxKRqupn3qbmPd2cjZ5rmerJi"
+  }
+}

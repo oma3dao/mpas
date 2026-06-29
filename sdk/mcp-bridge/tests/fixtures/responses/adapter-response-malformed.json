@@ -1,0 +1,13 @@
+{
+  "version": "1",
+  "type": "ActionResponse",
+  "verifier": {
+    "did": "did:key:z6MkjNteHVrscbEvtZ11x56uSdCNjAGL1rWpTrcXAPRky6vm"
+  },
+  "result": "malformed",
+  "error": {
+    "code": "INVALID_ACTION_PACKAGE",
+    "message": "Approval object is structurally invalid."
+  },
+  "createdAt": "2026-06-05T18:15:00.000Z"
+}
