@@ -1,0 +1,27 @@
+{
+  "version": "1",
+  "application": {
+    "name": "GitHub Demo",
+    "description": "MPAS demo using limited GitHub repository management via MPAS-protected operations.",
+    "applicationDid": "did:web:github.com",
+    "website": "https://github.com"
+  },
+  "native": false,
+  "protocol": "mcp",
+  "upstream": {
+    "name": "Official GitHub MCP Server",
+    "repository": "https://github.com/github/github-mcp-server",
+    "package": "@modelcontextprotocol/server-github"
+  },
+  "plugin": {
+    "repository": "https://github.com/oma3dao/mpas/tree/main/examples/demo/plugins/github.plugin.json",
+    "pluginDid": "did:web:plugins.oma3.org:github-demo"
+  },
+  "publisher": {
+    "name": "OMA3",
+    "githubOrg": "oma3dao",
+    "publisherDid": "did:web:oma3.org",
+    "repository": "https://github.com/oma3dao/mpas"
+  },
+  "status": "beta"
+}
