@@ -20,23 +20,23 @@
 
 **This guide assumes ~/Projects is the folder you use for Git repositories.  You can substitute with your own path if that is not the case.**
 
-**All commands assume you are on the `main` branch of both `mpas-local` and `mpas-sdk`.** If you've checked out a feature branch for development, switch back to `main` before following this guide — the fixtures, configs, and CLI all need to be consistent with what `main` produces.
+**All commands assume you are on the `main` branch of `mpas`.** If you've checked out a feature branch for development, switch back to `main` before following this guide — the fixtures, configs, and CLI all need to be consistent with what `main` produces.
 
 | Part       | What it covers                                    | Who needs it                                                     |
 | ---------- | ------------------------------------------------- | ---------------------------------------------------------------- |
-| **Part 1** | Machine prerequisites, repos, build, agent harness| Every account (operator + agents)                                |
+| **Part 1** | Machine prerequisites, repo, build, agent harness | Every account (operator + agents)                                |
 | **Part 2** | Single-user demo setup: keys, configs, daemon     | Single-user flow (one account does everything)                   |
 | **Part 3** | Harness-specific MCP bridge configuration         | Depends on your agent (Codex CLI, OpenClaw, Claude Desktop)      |
 | **Part 4** | Demo scenarios + live GitHub dispatch             | Everyone running the demo                                        |
 | **Part 5** | Multi-user hardening (workspace separation)       | Optional — for true key isolation across accounts                |
 
-If you already have Node 22 (or later) and your agent harness installed, skip to Part 1 Step 6 (Clone the repositories).  
+If you already have Node 22 (or later) and your agent harness installed, skip to Part 1 Step 6 (Clone the repository).  
 If you already have MPAS built and tests passing, skip to Part 2 (single-user) or Part 5 (multi-user agent account).
 
 > **Which account should you use?**  
 > For the single-user demo (Parts 1–4), use the macOS account you plan to keep as the **operator** (Credential Adapter + Coordination Service) if you later split into multiple users. This could be your existing development account or a new dedicated account. If you add workspace separation (Part 5), this account keeps the adapter and credential — the agent responsibilities move to new accounts.  
 >  
-> If you already have an account with Node, git, and your repos cloned — use that. If you're starting from scratch and plan to do the hardened three-user flow eventually, create the operator account first and set up here.
+> If you already have an account with Node, git, and the repo cloned — use that. If you're starting from scratch and plan to do the hardened three-user flow eventually, create the operator account first and set up here.
 
 > **Agent naming — "proposer" and "maintainer":**  
 > Throughout this guide we use the role names **proposer** (the agent that calls GitHub tools) and **maintainer** (the agent that approves/rejects actions), because they describe what each agent does. Your harness, however, creates a default agent with a generic name:
@@ -54,9 +54,9 @@ If you already have MPAS built and tests passing, skip to Part 2 (single-user) o
 
 # Part 1 — Environment Setup
 
-This part gets your Mac ready: runtime, repositories, build, and agent harness. Every account (operator and agent) completes Part 1.
+This part gets your Mac ready: runtime, repository, build, and agent harness. Every account (operator and agent) completes Part 1.
 
-> **Note:** If you later set up workspace separation (Part 5), each agent account will need its own Part 1 setup — Node (22+, LTS recommended), agent harness, GitHub access, and a built copy of both repos. Global tools installed via Homebrew (`jq`, `gh`) are shared across macOS users, but Node (via nvm) and npm global packages (like OpenClaw or Codex CLI) are per-user. Plan accordingly.
+> **Note:** If you later set up workspace separation (Part 5), each agent account will need its own Part 1 setup — Node (22+, LTS recommended), agent harness, GitHub access, and a built copy of the repo. Global tools installed via Homebrew (`jq`, `gh`) are shared across macOS users, but Node (via nvm) and npm global packages (like OpenClaw or Codex CLI) are per-user. Plan accordingly.
 
 ## 1.1 Prerequisites
 
@@ -124,9 +124,9 @@ brew install jq gh
 - `jq` — pretty-prints JSON (useful for reading adapter responses).
 - `gh` — GitHub CLI (simplifies cloning private repos).
 
-### Step 6: Clone the repositories
+### Step 6: Clone the repository
 
-Clone the source repositories. You'll need them for the build step next.
+Clone the source repository. You'll need it for the build step next.
 
 **SSH key setup (if you haven't already):**
 
@@ -145,22 +145,20 @@ Expected: `Hi <username>! You've successfully authenticated...`
 ```sh
 mkdir -p ~/Projects/mpas
 cd ~/Projects/mpas
-git clone git@github.com:alftom/mpas-local.git mpas-local
-git clone git@github.com:oma3dao/mpas-sdk.git mpas-sdk
+git clone git@github.com:oma3dao/mpas.git mpas
 ```
 
 Ensure you're on `main`:
 
 ```sh
-cd ~/Projects/mpas/mpas-local && git checkout main
-cd ~/Projects/mpas/mpas-sdk && git checkout main
+cd ~/Projects/mpas/mpas && git checkout main
 ```
 
-If you prefer HTTPS (e.g., behind a corporate firewall that blocks SSH), use `https://github.com/alftom/mpas-local.git` and `https://github.com/oma3dao/mpas-sdk.git` instead. You'll need a PAT or credential helper configured.
+If you prefer HTTPS (e.g., behind a corporate firewall that blocks SSH), use `https://github.com/oma3dao/mpas.git` instead. You'll need a PAT or credential helper configured.
 
 **GitHub credential guidance for agent accounts:**
 
-The SSH key (or PAT) used here gives this account read access to the MPAS source repos — that's fine for cloning and pulling. The security boundary that matters is **write access to the target repository** (the one the agent proposes actions against). To maintain that boundary:
+The SSH key (or PAT) used here gives this account read access to the MPAS source repo — that's fine for cloning and pulling. The security boundary that matters is **write access to the target repository** (the one the agent proposes actions against). To maintain that boundary:
 
 - **Do not give the agent account write access** to the demo/target repository via SSH key, PAT, or git credential helper. If the agent can write to GitHub directly, it can bypass MPAS entirely.
 - For agent accounts that need read-only access to additional repos, use a fine-grained PAT scoped to read-only: https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens#creating-a-fine-grained-personal-access-token
@@ -169,10 +167,10 @@ The only path to write operations should be through the MPAS bridge → Credenti
 
 ### Step 7: Build MPAS
 
-Install dependencies and build both packages:
+Install dependencies and build the demo package and MCP bridge:
 
 ```sh
-cd ~/Projects/mpas/mpas-local
+cd ~/Projects/mpas/mpas/examples/demo
 npm install
 npx tsx scripts/generate-fixtures.ts
 npm run build
@@ -182,21 +180,21 @@ npm test
 Then the MCP bridge package:
 
 ```sh
-cd ~/Projects/mpas/mpas-sdk/packages/mcp-bridge
+cd ~/Projects/mpas/mpas/sdk/mcp-bridge
 npm install
 npm run build
 npm test
 ```
 
-Expected: `mpas-local` passes 170 tests; `mcp-bridge` passes 48 tests.
+Expected: `examples/demo` passes 170 tests; `mcp-bridge` passes 48 tests.
 
-### Step 8: Run the Cross-Repo E2E Test
+### Step 8: Run the E2E Test
 
 This verifies the full stack end-to-end (proposer → coordination → maintainer → adapter → dispatch):
 
 ```sh
-cd ~/Projects/mpas/mpas-local
-npm run test:e2e:mcp-bridge -- --mcp-bridge-dir ~/Projects/mpas/mpas-sdk/packages/mcp-bridge
+cd ~/Projects/mpas/mpas/examples/demo
+npm run test:e2e:mcp-bridge -- --mcp-bridge-dir ~/Projects/mpas/mpas/sdk/mcp-bridge
 ```
 
 Expected: 2 tests pass (approval flow + replay detection).
@@ -265,7 +263,7 @@ After installation it reads MCP config from `~/Library/Application Support/Claud
 
 # Part 2 — Single-User Demo Setup
 
-This part sets up the entire MPAS demo on a single account: all signing keys, deployment config, bridge configs, credentials, and the daemon. It assumes you completed Part 1 (both repos are cloned, built, and tests pass).
+This part sets up the entire MPAS demo on a single account: all signing keys, deployment config, bridge configs, credentials, and the daemon. It assumes you completed Part 1 (the repo is cloned, built, and tests pass).
 
 > **Single-user vs. multi-user:** In this flow, one account generates all keys (adapter + proposer + maintainer), creates all bridge configs, holds the credential, runs the daemon, AND runs the agents. For workspace separation across multiple macOS accounts (recommended for security), go through this flow first to understand the process and then see Part 5.
 
@@ -281,7 +279,7 @@ mkdir -p "$MPAS_HOME/config" "$MPAS_HOME/plugins" "$MPAS_HOME/credentials" "$MPA
 The plugin and config give you a template you can customize for your MPAS implementation.
 
 ```sh
-cd ~/Projects/mpas/mpas-local
+cd ~/Projects/mpas/mpas/examples/demo
 cp tests/fixtures/plugins/github-repo.json "$MPAS_HOME/plugins/github-repo.json"
 cp tests/fixtures/configs/github-strict.json "$MPAS_HOME/config/github-strict.json"
 ```
@@ -290,7 +288,7 @@ cp tests/fixtures/configs/github-strict.json "$MPAS_HOME/config/github-strict.js
 
 The test suite uses hardcoded private keys so that fixtures (signed action packages, JWS signatures) are reproducible across runs. Those keys are committed to the repository and are not secret. For the demo, you generate your own keys — each participant gets a fresh Ed25519 key pair that derives a unique `did:key` identity.
 
-You need four keys:
+You need three keys:
 
 | Key file                | Role       | Purpose                               |
 | ----------------------- | ---------- | ------------------------------------- |
@@ -301,7 +299,7 @@ You need four keys:
 Generate them directly into `$MPAS_HOME/keys`:
 
 ```sh
-cd ~/Projects/mpas/mpas-local
+cd ~/Projects/mpas/mpas/examples/demo
 node dist/cli/index.js key generate adapter-key --key-dir "$MPAS_HOME/keys"
 node dist/cli/index.js key generate proposer-key --key-dir "$MPAS_HOME/keys"
 node dist/cli/index.js key generate maintainer-a-key --key-dir "$MPAS_HOME/keys"
@@ -309,6 +307,15 @@ chmod 600 "$MPAS_HOME"/keys/*.json
 ```
 
 Each command prints the `did` and `publicJwk` needed for the next step (registering them in the deployment config).
+
+> **Expected output format:** Each `key generate` command prints something like:
+> ```
+> Generated key: adapter-key
+>   did: did:key:z6MkhaXg...
+>   publicJwk: {"kty":"OKP","crv":"Ed25519","x":"abc123..."}
+>   Saved to: /Users/you/.mpas/keys/adapter-key.json
+> ```
+> The `did` is the full `did:key:z6Mk...` string. The `publicJwk` is the JSON object on that line (including the braces). You can also extract both values from the saved key file itself if you missed the terminal output.
 
 ### Register keys in the deployment config and bridge configs
 
@@ -400,7 +407,7 @@ To create fine-grained PATs, see: https://docs.github.com/en/authentication/keep
 After editing the configs and storing the credential, run validate to check for paste errors:
 
 ```sh
-cd ~/Projects/mpas/mpas-local
+cd ~/Projects/mpas/mpas/examples/demo
 node dist/cli/index.js config validate github-strict \
   --config-dir "$MPAS_HOME/config" --credential-dir "$MPAS_HOME/credentials" \
   --bridge-dir "$MPAS_HOME/bridge-configs"
@@ -416,7 +423,7 @@ In a dedicated terminal:
 
 ```sh
 export MPAS_HOME="$HOME/.mpas"
-cd ~/Projects/mpas/mpas-local
+cd ~/Projects/mpas/mpas/examples/demo
 node dist/cli/index.js daemon start \
   --config-dir "$MPAS_HOME/config" \
   --credential-dir "$MPAS_HOME/credentials" \
@@ -473,7 +480,7 @@ Create `~/.codex-proposer/config.toml`:
 [mcp_servers.github-mpas]
 command = "node"
 args = [
-  "/Users/YOU/Projects/mpas/mpas-sdk/packages/mcp-bridge/dist/cli.js",
+  "/Users/YOU/Projects/mpas/mpas/sdk/mcp-bridge/dist/cli.js",
   "--config",
   "/Users/YOU/.mpas/bridge-configs/proposer-bridge.json"
 ]
@@ -490,7 +497,7 @@ Create `~/.codex-maintainer/config.toml`:
 [mcp_servers.mpas-coordination]
 command = "node"
 args = [
-  "/Users/YOU/Projects/mpas/mpas-sdk/packages/mcp-bridge/dist/cli.js",
+  "/Users/YOU/Projects/mpas/mpas/sdk/mcp-bridge/dist/cli.js",
   "--config",
   "/Users/YOU/.mpas/bridge-configs/maintainer-a-bridge.json"
 ]
@@ -667,7 +674,7 @@ openclaw config set mcp.servers "$(cat <<'JSON'
   "github-mpas": {
     "command": "/ABSOLUTE/PATH/TO/node",
     "args": [
-      "/Users/YOU/Projects/mpas/mpas-sdk/packages/mcp-bridge/dist/cli.js",
+      "/Users/YOU/Projects/mpas/mpas/sdk/mcp-bridge/dist/cli.js",
       "--config",
       "/Users/YOU/.mpas/bridge-configs/proposer-bridge.json"
     ]
@@ -675,7 +682,7 @@ openclaw config set mcp.servers "$(cat <<'JSON'
   "mpas-coordination": {
     "command": "/ABSOLUTE/PATH/TO/node",
     "args": [
-      "/Users/YOU/Projects/mpas/mpas-sdk/packages/mcp-bridge/dist/cli.js",
+      "/Users/YOU/Projects/mpas/mpas/sdk/mcp-bridge/dist/cli.js",
       "--config",
       "/Users/YOU/.mpas/bridge-configs/maintainer-a-bridge.json"
     ]
@@ -794,7 +801,7 @@ Edit `~/Library/Application Support/Claude/claude_desktop_config.json`:
     "github-mpas": {
       "command": "node",
       "args": [
-        "/Users/YOU/Projects/mpas/mpas-sdk/packages/mcp-bridge/dist/cli.js",
+        "/Users/YOU/Projects/mpas/mpas/sdk/mcp-bridge/dist/cli.js",
         "--config",
         "/Users/YOU/.mpas/bridge-configs/proposer-bridge.json"
       ]
@@ -802,7 +809,7 @@ Edit `~/Library/Application Support/Claude/claude_desktop_config.json`:
     "mpas-coordination": {
       "command": "node",
       "args": [
-        "/Users/YOU/Projects/mpas/mpas-sdk/packages/mcp-bridge/dist/cli.js",
+        "/Users/YOU/Projects/mpas/mpas/sdk/mcp-bridge/dist/cli.js",
         "--config",
         "/Users/YOU/.mpas/bridge-configs/maintainer-a-bridge.json"
       ]
@@ -936,7 +943,7 @@ Edit `$MPAS_HOME/config/github-strict.json`:
 "executionTarget": {
   "type": "mcp.stdio",
   "command": "<absolute-path-to-node>",
-  "args": ["<absolute-path-to>/mpas-local/tests/fixtures/adapter/github-mcp-server.mjs"],
+  "args": ["<absolute-path-to>/mpas/examples/demo/tests/fixtures/adapter/github-mcp-server.mjs"],
   "env": {
     "GITHUB_PERSONAL_ACCESS_TOKEN": "{{credential:github-test-token}}"
   }
@@ -945,7 +952,7 @@ Edit `$MPAS_HOME/config/github-strict.json`:
 
 Replace `<absolute-path-to-node>` with the output of `which node` (e.g., `/Users/you/.nvm/versions/node/v24.1.0/bin/node`). The `command` field must be an absolute path because the adapter spawns child processes without a shell, so nvm's PATH is not available.
 
-Replace `<absolute-path-to>` with the full path to your `mpas-local` clone (e.g., `/Users/you/Projects/mpas/mpas-local/tests/fixtures/adapter/github-mcp-server.mjs`).
+Replace `<absolute-path-to>` with the full path to `examples/demo` in your `mpas` clone (e.g., `/Users/you/Projects/mpas/mpas/examples/demo/tests/fixtures/adapter/github-mcp-server.mjs`).
 
 **2. Update `resourceRestrictions`** to match your demo repository:
 
@@ -1027,7 +1034,7 @@ Before creating accounts, understand what each role needs on disk:
 | Maintainer signing key                     | —        | —                    | Yes                  |
 | Running daemon (adapter + coordination).   | Yes      | —                    | —                    |
 | Agent harness (OpenClaw/Codex)             | —        | Yes                  | Yes                  |
-| Node 22+, repos cloned + built             | Yes      | Yes                  | Yes                  |
+| Node 22+, repo cloned + built              | Yes      | Yes                  | Yes                  |
 
 The operator holds the credential and runs the daemon. Each agent holds only its own signing key and bridge config — it cannot access the other agent's key or the operator's credential. All three accounts communicate over `127.0.0.1` (loopback is shared across macOS users on the same host).
 
@@ -1090,11 +1097,11 @@ brew --version
 3. **nvm** (§1.1 Step 3) — install, close and reopen terminal
 4. **Node 22+** (§1.1 Step 4) — `nvm install --lts`
 5. **SSH key** (§1.1 Step 6) — each macOS user has its own `~/.ssh`. Generate a key and add it to GitHub for this account.
-6. **Clone repos** (§1.1 Step 6):
+6. **Clone repo** (§1.1 Step 6):
 
-6. **Build and test** (§1.1 Step 7 and 8):
+7. **Build and test** (§1.1 Step 7 and 8):
 
-7. **Install agent harness** (§1.2) — install OpenClaw, Codex CLI, or your preferred harness. Do NOT configure MPAS bridges yet — that happens in §5.5.
+8. **Install agent harness** (§1.2) — install OpenClaw, Codex CLI, or your preferred harness. Do NOT configure MPAS bridges yet — that happens in §5.5.
 
 ### OpenClaw only- Configure a unique gateway port
 
@@ -1150,7 +1157,7 @@ Do NOT copy keys from the operator. Each account generates its own key so only t
 **On `agent-a`:**
 
 ```sh
-cd ~/Projects/mpas/mpas-local
+cd ~/Projects/mpas/mpas/examples/demo
 node dist/cli/index.js key generate proposer-key --key-dir ~/.mpas/keys
 chmod 600 ~/.mpas/keys/*.json
 ```
@@ -1158,7 +1165,7 @@ chmod 600 ~/.mpas/keys/*.json
 **On `agent-b`:**
 
 ```sh
-cd ~/Projects/mpas/mpas-local
+cd ~/Projects/mpas/mpas/examples/demo
 node dist/cli/index.js key generate maintainer-a-key --key-dir ~/.mpas/keys
 chmod 600 ~/.mpas/keys/*.json
 ```
@@ -1172,7 +1179,7 @@ Each command prints the `did` and `publicJwk`. Save these — you'll need them i
 Copy the application plugin (the proposer bridge needs it to build action packages):
 
 ```sh
-cp ~/Projects/mpas/mpas-local/tests/fixtures/plugins/github-repo.json ~/.mpas/plugins/github-repo.json
+cp ~/Projects/mpas/mpas/examples/demo/tests/fixtures/plugins/github-repo.json ~/.mpas/plugins/github-repo.json
 ```
 
 Create the bridge config:
@@ -1412,7 +1419,7 @@ openclaw config set mcp.servers "$(cat <<'JSON'
   "github-mpas": {
     "command": "/ABSOLUTE/PATH/TO/node",
     "args": [
-      "/Users/YOU/Projects/mpas/mpas-sdk/packages/mcp-bridge/dist/cli.js",
+      "/Users/YOU/Projects/mpas/mpas/sdk/mcp-bridge/dist/cli.js",
       "--config",
       "/Users/YOU/.mpas/bridge-configs/proposer-bridge.json"
     ]
@@ -1420,7 +1427,7 @@ openclaw config set mcp.servers "$(cat <<'JSON'
   "mpas-coordination": {
     "command": "/ABSOLUTE/PATH/TO/node",
     "args": [
-      "/Users/YOU/Projects/mpas/mpas-sdk/packages/mcp-bridge/dist/cli.js",
+      "/Users/YOU/Projects/mpas/mpas/sdk/mcp-bridge/dist/cli.js",
       "--config",
       "/Users/YOU/.mpas/bridge-configs/maintainer-a-bridge.json"
     ]
@@ -1436,7 +1443,7 @@ JSON
 [mcp_servers.github-mpas]
 command = "node"
 args = [
-  "/Users/YOU/Projects/mpas/mpas-sdk/packages/mcp-bridge/dist/cli.js",
+  "/Users/YOU/Projects/mpas/mpas/sdk/mcp-bridge/dist/cli.js",
   "--config",
   "/Users/YOU/.mpas/bridge-configs/proposer-bridge.json"
 ]
@@ -1445,7 +1452,7 @@ enabled = true
 [mcp_servers.mpas-coordination]
 command = "node"
 args = [
-  "/Users/YOU/Projects/mpas/mpas-sdk/packages/mcp-bridge/dist/cli.js",
+  "/Users/YOU/Projects/mpas/mpas/sdk/mcp-bridge/dist/cli.js",
   "--config",
   "/Users/YOU/.mpas/bridge-configs/maintainer-a-bridge.json"
 ]
@@ -1488,7 +1495,7 @@ This means symmetric signers require at least two agents to function. A single s
 | ------------------------------------------------------ | ----------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
 | `node --version` shows less than `v22.x`               | Shell is using another Node                           | Run `nvm install --lts`; check `which node`; reopen the terminal.                                |
 | Node install says your macOS is too old                | Newer Node versions may not support your OS           | Install Node 22 with `nvm install 22`; if macOS is older than 11, upgrade macOS or use another machine. |
-| `npm install` fails immediately                        | Wrong directory or missing package.json               | Run it inside `mpas-local` or `mpas-sdk/packages/mcp-bridge`.                                    |
+| `npm install` fails immediately                        | Wrong directory or missing package.json               | Run it inside `mpas/examples/demo` or `mpas/sdk/mcp-bridge`.                                    |
 | `npm run build` fails with modern JS/TS syntax errors  | Wrong Node version                                    | Verify `node --version` is `v22.x` or later.                                                    |
 | `generate-fixtures.ts` fails                           | Missing dependencies                                  | Run `npm install` first.                                                                         |
 | `EACCES` on keys or credentials                        | File permissions or wrong path                        | Run `chmod 600 "$MPAS_HOME"/keys/*.json "$MPAS_HOME"/credentials/*.json`.                        |
@@ -1514,9 +1521,9 @@ This means symmetric signers require at least two agents to function. A single s
 
 - [ ] macOS 11+
 - [ ] `node --version` → `v22.x` or later
-- [ ] `mpas-local`: install + generate fixtures + build + test pass
+- [ ] `mpas/examples/demo`: install + generate fixtures + build + test pass
 - [ ] `mcp-bridge`: install + build + test pass
-- [ ] Cross-repo E2E: 2 tests pass
+- [ ] E2E test: 2 tests pass
 - [ ] Agent harness installed and responding
 
 **Part 2 — Single-User Demo Setup:**

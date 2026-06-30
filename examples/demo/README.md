@@ -1,4 +1,4 @@
-# mpas-local
+# mpas-demo
 
 Local MPAS (Multi-Party Action Security) services — Credential Adapter daemon and Coordination Service.
 
@@ -14,12 +14,12 @@ For the full protocol design, start with the base specification:
 - [mpas-profile-application-plugin.md](https://github.com/oma3dao/mpas-docs/blob/main/specification/mpas-profile-application-plugin.md) — Application Plugin Profile: plugin schema and operation defs
 - [mpas-profile-policy-json.md](https://github.com/oma3dao/mpas-docs/blob/main/specification/mpas-profile-policy-json.md) — JSON Verifier Policy Profile: policy matching and evaluation
 
-## Related Repositories
+## Related Packages
 
-| Repository                                                               | Description                                           |
+| Location                                                                 | Description                                           |
 | ------------------------------------------------------------------------ | ----------------------------------------------------- |
 | [mpas-docs](https://github.com/oma3dao/mpas-docs)                        | MPAS specification documents                          |
-| [mpas-sdk](https://github.com/oma3dao/mpas-sdk)                          | SDK packages including the MCP Bridge                 |
+| [`sdk/mcp-bridge`](../../sdk/mcp-bridge)                                 | MCP Bridge package (in this repo)                     |
 | [mpas-demo-repository](https://github.com/alftom/mpas-demo-repository)   | Demo GitHub repo with expendable branches for testing |
 
 ## Architecture
@@ -253,7 +253,7 @@ Useful commands:
 ```sh
 mpas daemon start
 mpas coordination start --port 7545
-npm run test:e2e:mcp-bridge -- --mcp-bridge-dir ../oma3/mpas-sdk/packages/mcp-bridge
+npm run test:e2e:mcp-bridge -- --mcp-bridge-dir ../../sdk/mcp-bridge
 ```
 
 Coordination endpoints:

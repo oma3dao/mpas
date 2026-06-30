@@ -1,18 +1,18 @@
-# mpas-local Test Guide
+# MPAS Demo Test Guide
 
-This repo uses Vitest for unit, integration, and local E2E coverage. Most tests run with no external services. The MCP
-bridge E2E is opt-in because it depends on a second checkout of `oma3/mpas-sdk/packages/mcp-bridge`.
+This package uses Vitest for unit, integration, and local E2E coverage. Most tests run with no external services. The MCP
+bridge E2E is opt-in because it depends on the sibling `sdk/mcp-bridge` package in the same repository.
 
 ## Quick Start
 
-From the `mpas-local` package root:
+From the `examples/demo` package root:
 
 ```sh
 npm run build
 npm test
 ```
 
-`npm test` runs the normal suite. The cross-repo MCP bridge E2E is discovered but skipped unless `MPAS_MCP_BRIDGE_DIR`
+`npm test` runs the normal suite. The MCP bridge E2E is discovered but skipped unless `MPAS_MCP_BRIDGE_DIR`
 is set by the dedicated E2E runner.
 
 ## Test Layout
@@ -24,11 +24,11 @@ is set by the dedicated E2E runner.
 | `tests/coordination/` | Local Coordination Service fixtures, store state machine, HTTP endpoints, daemon startup, approvals, cancellation, and completed Action Package assembly. |
 | `tests/cli/` | CLI daemon, validation, plugin, credential, and config management commands. |
 | `tests/fixtures/` | Fixture contract tests plus reusable keys, plugins, configs, Action Packages, and mock MCP servers. |
-| `tests/e2e/` | Cross-repo local stack tests that run the Credential Adapter, Coordination Service, and MCP bridge together. |
+| `tests/e2e/` | Local stack tests that run the Credential Adapter, Coordination Service, and MCP bridge together. |
 
 ## Normal Test Commands
 
-Run everything that does not require another repo:
+Run everything that does not require the bridge package:
 
 ```sh
 npm test
@@ -71,7 +71,7 @@ The MCP bridge E2E verifies the complete local approval path:
 
 1. Start the Credential Adapter on a random local port.
 2. Start the Coordination Service on a random local port.
-3. Load `ProposerBridge` and `MaintainerBridge` from the SDK bridge checkout.
+3. Load `ProposerBridge` and `MaintainerBridge` from the SDK bridge package.
 4. Submit a protected `delete_branch` call through the proposer.
 5. Receive `additionalApprovalsRequired` from the adapter.
 6. Store the pending action in coordination.
@@ -82,22 +82,16 @@ The MCP bridge E2E verifies the complete local approval path:
 Run it with an explicit bridge package path:
 
 ```sh
-npm run test:e2e:mcp-bridge -- --mcp-bridge-dir /Users/atom/Projects/oma3/mpas-sdk/packages/mcp-bridge
+npm run test:e2e:mcp-bridge -- --mcp-bridge-dir ../../sdk/mcp-bridge
 ```
 
 Or set the environment variable:
 
 ```sh
-MPAS_MCP_BRIDGE_DIR=/Users/atom/Projects/oma3/mpas-sdk/packages/mcp-bridge npm run test:e2e:mcp-bridge
+MPAS_MCP_BRIDGE_DIR=../../sdk/mcp-bridge npm run test:e2e:mcp-bridge
 ```
 
-If neither is provided, the runner defaults to:
-
-```text
-../oma3/mpas-sdk/packages/mcp-bridge
-```
-
-relative to the `mpas-local` package root.
+If neither is provided, the runner defaults to `../../sdk/mcp-bridge` relative to the `examples/demo` package root.
 
 The E2E runner builds the bridge package first:
 
@@ -105,7 +99,7 @@ The E2E runner builds the bridge package first:
 npm run build
 ```
 
-inside the bridge checkout, then runs only:
+inside the bridge package, then runs only:
 
 ```sh
 tests/e2e/mcp-bridge-stack.test.ts
@@ -134,10 +128,10 @@ npm run build
 npm test
 ```
 
-For changes that touch bridge coordination, adapter replay behavior, approval collection, or cross-repo contracts:
+For changes that touch bridge coordination, adapter replay behavior, approval collection, or cross-package contracts:
 
 ```sh
 npm run build
 npm test
-npm run test:e2e:mcp-bridge -- --mcp-bridge-dir /path/to/oma3/mpas-sdk/packages/mcp-bridge
+npm run test:e2e:mcp-bridge -- --mcp-bridge-dir ../../sdk/mcp-bridge
 ```

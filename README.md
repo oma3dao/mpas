@@ -4,6 +4,13 @@ Canonical repository for the MPAS (Multi-Party Action Security) standard and ref
 
 MPAS is a protocol for multi-party approval of AI agent actions. Instead of giving agents direct access to privileged APIs, MPAS routes actions through a Credential Adapter that enforces policy-based approval workflows before execution. No single agent can both propose and approve the same action.
 
+## License and Participation
+
+- Code is licensed under [MIT](./LICENSE)
+- Contributor terms are defined in [CONTRIBUTING.md](./CONTRIBUTING.md)
+
+This initial version is MIT-licensed to maximize transparency and adoption. OMA3 standards and schemas remain governed by [OMA3's IPR Policy](https://www.oma3.org/intellectual-property-rights-policy).
+
 ## What This Repository Contains
 
 This repository is the OMA3-owned home of the MPAS standard:
