@@ -522,7 +522,7 @@ function trustedSigners() {
   ];
 }
 
-function baseDeploymentConfig(name: string, enabledOperations: string[], policy: Record<string, unknown>) {
+function baseDeploymentConfig(name: string, policy: Record<string, unknown>) {
   return {
     version: "1",
     type: "MpasAdapterDeploymentConfig",
@@ -536,7 +536,6 @@ function baseDeploymentConfig(name: string, enabledOperations: string[], policy:
       artifactDid: pluginArtifactDid,
       path: "../plugins/github-repo.json",
     },
-    enabledOperations,
     credentialBindings: [
       {
         credentialHandle: "github-test-token",
@@ -563,7 +562,6 @@ function baseDeploymentConfig(name: string, enabledOperations: string[], policy:
 const configs = {
   "github-auto-approve.json": baseDeploymentConfig(
     "github-auto-approve",
-    ["create_issue", "merge_pull_request"],
     {
       defaultPolicy: "allow",
       rules: [],
@@ -571,7 +569,6 @@ const configs = {
   ),
   "github-strict.json": baseDeploymentConfig(
     "github-strict",
-    ["create_issue", "merge_pull_request", "delete_branch"],
     {
       defaultPolicy: "allow",
       rules: [

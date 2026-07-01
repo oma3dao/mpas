@@ -209,24 +209,37 @@ export async function dryRunActionFile(path: string, options: Pick<ParsedOptions
   }
 
   const payloadValidation = validatePayloadAgainstPlugin(actionPackage.executionPayload, loadedConfig.plugin);
-  if (!payloadValidation.ok) {
+  const isGovernedOperation = payloadValidation.ok || payloadValidation.error.code !== "UNKNOWN_OPERATION";
+
+  if (isGovernedOperation) {
+    // Governed path: validate schema and evaluate policy.
+    if (!payloadValidation.ok) {
+      return {
+        result: "rejected",
+        error: payloadValidation.error,
+      };
+    }
+
+    const policyResult = evaluatePolicy(actionPackage, verification.verifiedApprovals, policyFromLoadedConfig(loadedConfig));
+    if (policyResult.status === "satisfied") {
+      return {
+        result: "satisfied",
+        operationName: payloadValidation.match.operation.name,
+      };
+    }
+
     return {
-      result: "rejected",
-      error: payloadValidation.error,
+      result: policyResult.status,
+      policyResult,
     };
   }
 
-  const policyResult = evaluatePolicy(actionPackage, verification.verifiedApprovals, policyFromLoadedConfig(loadedConfig));
-  if (policyResult.status === "satisfied") {
-    return {
-      result: "satisfied",
-      operationName: payloadValidation.match.operation.name,
-    };
-  }
-
+  // Pass-through path: operation is not in the plugin, would be forwarded without policy.
+  const operationName = (actionPackage.executionPayload as Record<string, unknown>)?.name;
   return {
-    result: policyResult.status,
-    policyResult,
+    result: "satisfied",
+    operationName: typeof operationName === "string" ? operationName : "<unknown>",
+    path: "pass-through",
   };
 }
 

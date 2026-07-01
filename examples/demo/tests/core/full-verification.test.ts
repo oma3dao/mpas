@@ -31,9 +31,9 @@ async function trustedSigners(): Promise<TrustedSigner[]> {
   const maintainerB = await readJson<KeyFixture>(join(fixturesDir, "test-keys", "maintainer-b.json"));
 
   return [
-    { did: proposer.did, role: "proposer", publicJwk: proposer.publicJwk },
-    { did: maintainerA.did, role: "maintainer", publicJwk: maintainerA.publicJwk },
-    { did: maintainerB.did, role: "maintainer", publicJwk: maintainerB.publicJwk },
+    { did: proposer.did, roles: ["proposer"], publicJwk: proposer.publicJwk },
+    { did: maintainerA.did, roles: ["maintainer"], publicJwk: maintainerA.publicJwk },
+    { did: maintainerB.did, roles: ["maintainer"], publicJwk: maintainerB.publicJwk },
   ];
 }
 

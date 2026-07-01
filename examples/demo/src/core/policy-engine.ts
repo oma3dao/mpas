@@ -4,7 +4,6 @@ import type { VerifiedApprovals } from "./verification.js";
 export interface PolicyConfig {
   defaultPolicy: "allow" | "deny";
   rules: PolicyRule[];
-  enabledOperations?: string[];
   resourceRestrictions?: ResourceRestrictions;
   eligibleSignersByRole?: Record<string, Did[]>;
 }
@@ -55,7 +54,7 @@ export type PolicyResult =
     }
   | {
       status: "denied";
-      code: "OPERATION_DISABLED" | "RESOURCE_RESTRICTED" | "DEFAULT_DENY";
+      code: "RESOURCE_RESTRICTED" | "DEFAULT_DENY";
       message: string;
     };
 
@@ -64,15 +63,6 @@ export function evaluatePolicy(
   verifiedApprovals: VerifiedApprovals,
   policy: PolicyConfig,
 ): PolicyResult {
-  const operationName = getOperationName(actionPackage);
-  if (policy.enabledOperations && (!operationName || !policy.enabledOperations.includes(operationName))) {
-    return {
-      status: "denied",
-      code: "OPERATION_DISABLED",
-      message: `Operation is not enabled: ${operationName ?? "<unknown>"}`,
-    };
-  }
-
   if (policy.resourceRestrictions && !checkResourceRestrictions(actionPackage.executionPayload, policy.resourceRestrictions)) {
     return {
       status: "denied",
@@ -164,11 +154,6 @@ export function checkResourceRestrictions(payload: ExecutionPayload, restriction
   }
 
   return true;
-}
-
-function getOperationName(actionPackage: ActionPackage): string | undefined {
-  const value = getJsonPointerValue(actionPackage.executionPayload, "/name");
-  return typeof value === "string" ? value : undefined;
 }
 
 function getJsonPointerValue(value: unknown, pointer: string): unknown {

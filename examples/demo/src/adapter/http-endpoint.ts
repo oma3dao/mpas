@@ -1,7 +1,7 @@
 import Fastify, { type FastifyInstance, type FastifyReply } from "fastify";
 import type { JWK } from "jose";
 import { buildAuthorizationRequirements } from "../core/auth-requirements-builder.js";
-import { evaluatePolicy, type PolicyConfig } from "../core/policy-engine.js";
+import { evaluatePolicy, checkResourceRestrictions, type PolicyConfig } from "../core/policy-engine.js";
 import { validatePayloadAgainstPlugin } from "../core/plugin-loader.js";
 import { buildAndSignReceipt } from "../core/receipt-builder.js";
 import type { ActionPackage, Did, ExecutionReceipt, Hash, ReceiptResult } from "../core/types.js";
@@ -135,26 +135,46 @@ export function createHttpEndpoint(options: HttpEndpointOptions): FastifyInstanc
     }
 
     const payloadValidation = validatePayloadAgainstPlugin(pkg.executionPayload, loadedConfig.plugin);
-    if (!payloadValidation.ok) {
-      trace.emit("verification_step", { actionId, step: "plugin_validation", passed: false, code: payloadValidation.error.code });
-      return rejection(pkg, options, envelopeHash, "rejected", payloadValidation.error.code, payloadValidation.error.message);
-    }
-    trace.emit("verification_step", { actionId, step: "plugin_validation", passed: true });
+    const isGovernedOperation = payloadValidation.ok || payloadValidation.error.code !== "UNKNOWN_OPERATION";
 
-    const policyResult = evaluatePolicy(pkg, verification.verifiedApprovals, policyFromLoadedConfig(loadedConfig));
-    if (policyResult.status === "denied") {
-      trace.emit("verification_step", { actionId, step: "policy_evaluation", passed: false, code: policyResult.code });
-      return rejection(pkg, options, envelopeHash, "rejected", policyResult.code, policyResult.message);
+    // --- Routing decision: governed vs. pass-through ---
+    // If the operation IS in the plugin → full governance (schema validation + policy).
+    // If the operation is NOT in the plugin → pass-through (skip schema + policy, just proxy credential).
+    if (isGovernedOperation) {
+      // Governed path: validate schema and evaluate policy.
+      if (!payloadValidation.ok) {
+        trace.emit("verification_step", { actionId, step: "plugin_validation", passed: false, code: payloadValidation.error.code });
+        return rejection(pkg, options, envelopeHash, "rejected", payloadValidation.error.code, payloadValidation.error.message);
+      }
+      trace.emit("verification_step", { actionId, step: "plugin_validation", passed: true });
+
+      const policyResult = evaluatePolicy(pkg, verification.verifiedApprovals, policyFromLoadedConfig(loadedConfig));
+      if (policyResult.status === "denied") {
+        trace.emit("verification_step", { actionId, step: "policy_evaluation", passed: false, code: policyResult.code });
+        return rejection(pkg, options, envelopeHash, "rejected", policyResult.code, policyResult.message);
+      }
+      if (policyResult.status === "additionalApprovalsRequired") {
+        trace.emit("dispatch", { actionId, result: "additionalApprovalsRequired" });
+        return actionResponse(options, {
+          result: "additionalApprovalsRequired",
+          actionEnvelopeHash: envelopeHash,
+          authorizationRequirements: buildAuthorizationRequirements(pkg.actionEnvelope, policyResult.unsatisfiedRules, options.adapterDid),
+        });
+      }
+      trace.emit("verification_step", { actionId, step: "policy_evaluation", passed: true, policyStatus: policyResult.status });
+    } else {
+      // Pass-through path: operation is not in the plugin, skip schema validation
+      // and policy evaluation. Still check resource restrictions below.
+      trace.emit("verification_step", { actionId, step: "routing_decision", passed: true, path: "pass-through", operation: operationName(pkg) });
+
+      // Resource restrictions apply to pass-through operations too.
+      if (loadedConfig.config.resourceRestrictions) {
+        if (!checkResourceRestrictions(pkg.executionPayload, loadedConfig.config.resourceRestrictions)) {
+          trace.emit("verification_step", { actionId, step: "resource_restrictions", passed: false });
+          return rejection(pkg, options, envelopeHash, "rejected", "RESOURCE_RESTRICTED", "Execution Payload references a restricted resource.");
+        }
+      }
     }
-    if (policyResult.status === "additionalApprovalsRequired") {
-      trace.emit("dispatch", { actionId, result: "additionalApprovalsRequired" });
-      return actionResponse(options, {
-        result: "additionalApprovalsRequired",
-        actionEnvelopeHash: envelopeHash,
-        authorizationRequirements: buildAuthorizationRequirements(pkg.actionEnvelope, policyResult.unsatisfiedRules, options.adapterDid),
-      });
-    }
-    trace.emit("verification_step", { actionId, step: "policy_evaluation", passed: true, policyStatus: policyResult.status });
 
     // Authorized. Fallible, side-effect-free preparation happens BEFORE the ledger
     // write (Action Lifecycle addition A): credential resolution then target launch.
@@ -280,7 +300,6 @@ export function policyFromLoadedConfig(loadedConfig: LoadedDeploymentConfig): Po
 
   return {
     ...loadedConfig.config.policy,
-    enabledOperations: loadedConfig.config.enabledOperations,
     resourceRestrictions: loadedConfig.config.resourceRestrictions,
     eligibleSignersByRole,
   };

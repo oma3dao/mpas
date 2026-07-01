@@ -40,7 +40,6 @@ interface DeploymentConfig {
     artifactDid: string;
     path: string;
   };
-  enabledOperations: string[];
   trustedSigners: Array<{
     did: string;
     role: string;
@@ -194,7 +193,6 @@ describe("plugin, config, and key fixtures", () => {
       expect(config.plugin.pluginVersion).toBe(plugin.pluginVersion);
       expect(config.plugin.artifactDid).toBe(expectedArtifactDid);
       expect(config.plugin.path).toBe("../plugins/github-repo.json");
-      expect(config.enabledOperations.every((name) => plugin.operations.some((op) => op.name === name))).toBe(true);
     }
   });
 

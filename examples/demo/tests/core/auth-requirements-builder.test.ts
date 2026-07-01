@@ -15,7 +15,6 @@ interface KeyFixture {
 }
 
 interface DeploymentConfig {
-  enabledOperations: string[];
   resourceRestrictions: PolicyConfig["resourceRestrictions"];
   policy: Pick<PolicyConfig, "defaultPolicy" | "rules">;
   trustedSigners: Array<{ did: Did; roles: string[] }>;
@@ -49,7 +48,6 @@ async function policyFromConfig(file: string): Promise<PolicyConfig> {
 
   return {
     ...config.policy,
-    enabledOperations: config.enabledOperations,
     resourceRestrictions: config.resourceRestrictions,
     eligibleSignersByRole,
   };

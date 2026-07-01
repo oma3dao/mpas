@@ -14,7 +14,6 @@ interface KeyFixture {
 }
 
 interface DeploymentConfig {
-  enabledOperations: string[];
   resourceRestrictions: PolicyConfig["resourceRestrictions"];
   policy: Pick<PolicyConfig, "defaultPolicy" | "rules">;
   trustedSigners: Array<{ did: Did; roles: string[] }>;
@@ -65,7 +64,6 @@ async function policyFromConfig(file: string): Promise<PolicyConfig> {
 
   return {
     ...config.policy,
-    enabledOperations: config.enabledOperations,
     resourceRestrictions: config.resourceRestrictions,
     eligibleSignersByRole,
   };
@@ -105,12 +103,14 @@ describe("evaluatePolicy", () => {
     });
   });
 
-  it("denies disabled operations", async () => {
+  it("satisfies operations that were previously gated by enabledOperations (now removed)", async () => {
     const { actionPackage, verifiedApprovals } = await verifiedFixture("invalid-disabled-operation.json");
 
+    // With enabledOperations removed, the policy engine no longer rejects operations
+    // not in an allowlist. The auto-approve config has defaultPolicy: "allow" and no
+    // rules, so any operation passes through policy evaluation.
     expect(evaluatePolicy(actionPackage, verifiedApprovals, await policyFromConfig("github-auto-approve.json"))).toMatchObject({
-      status: "denied",
-      code: "OPERATION_DISABLED",
+      status: "satisfied",
     });
   });
 

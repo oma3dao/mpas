@@ -26,7 +26,6 @@ export interface DeploymentConfig {
     artifactDid: string;
     path: string;
   };
-  enabledOperations: string[];
   credentialBindings: Array<{
     credentialHandle: string;
     provider: "file" | "macos-keychain";
@@ -76,7 +75,6 @@ const deploymentConfigSchema = {
     "name",
     "target",
     "plugin",
-    "enabledOperations",
     "credentialBindings",
     "executionTarget",
     "policy",
@@ -105,7 +103,6 @@ const deploymentConfigSchema = {
       },
       additionalProperties: false,
     },
-    enabledOperations: { type: "array", items: { type: "string" }, minItems: 1 },
     credentialBindings: {
       type: "array",
       items: {

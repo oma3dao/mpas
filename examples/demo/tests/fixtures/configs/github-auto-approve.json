@@ -11,10 +11,6 @@
     "artifactDid": "did:artifact:bafkreibnoteoczwrweh75o3tkk2kiuxrdd3xfh7truizydelxtytun3x5i",
     "path": "../plugins/github-repo.json"
   },
-  "enabledOperations": [
-    "create_issue",
-    "merge_pull_request"
-  ],
   "credentialBindings": [
     {
       "credentialHandle": "github-test-token",

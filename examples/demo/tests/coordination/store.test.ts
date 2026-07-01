@@ -95,7 +95,7 @@ describe("CoordinationStore", () => {
     const proposer = await fixtureKey("proposer");
 
     // Make the proposer eligible as a signer for this test
-    request.authorizationRequirements.approvalRequirements.anyOf[0].eligibleSigners.push(proposer.did);
+    request.authorizationRequirements.approvalRequirements.anyOf![0].eligibleSigners.push(proposer.did);
 
     store.submitAction(request);
 
