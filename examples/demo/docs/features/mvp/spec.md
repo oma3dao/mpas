@@ -42,7 +42,6 @@ The daemon holds credentials in macOS Keychain or local files and never exposes 
 - Building the Coordination Service itself (separate repository and spec).
 - Defining how signers learn about pending reviews (out of scope for the adapter).
 - Direct agent communication (agents interact through the MCP Bridge, not the adapter).
-- Operation-level allowlists for pass-through filtering (`enabledOperations`) — future feature for operators who want to restrict which non-governed operations can pass through.
 
 ---
 
@@ -61,17 +60,17 @@ The adapter does not care who submitted the Action Package — whether it's an M
 
 ### 4.2 Governed vs. Pass-Through Operations
 
-The adapter routes incoming operations along two paths based on whether the operation is declared in the Application Plugin:
+The adapter routes incoming operations along two paths based on whether the operation appears in the Application Plugin's `operations` object OR as a key in the deployment policy's `policies` object:
 
-1. **Governed operations** (operation IS in the plugin's `operations` array) — Full MPAS governance: verify Action Envelope, validate Execution Payload against the plugin's schema, evaluate policy rules, require approvals if configured, dispatch on success.
+1. **Governed operations** (operation IS in the plugin's `operations` OR in `policy.policies`) — Full MPAS governance: verify proposer is in `signerGroups.proposers` (or `signerGroups.all` if no `proposers` group), validate Execution Payload against the plugin's schema (if available), evaluate policy, require approvals if the matched policy or `defaultRequirement` demands them, dispatch on success.
 
-2. **Pass-through operations** (operation is NOT in the plugin) — The adapter acts as a credential proxy. It still verifies the Action Envelope signature (confirms the caller is a trusted proposer), still checks resource restrictions, but skips schema validation (there's no schema) and policy evaluation (there's no policy). It then forwards the tool call to the upstream MCP server with the credential. A dispatch ledger entry and receipt are still produced for auditability.
+2. **Pass-through operations** (operation is in NEITHER the plugin NOR the policy) — The adapter acts as a credential proxy. It still verifies proposer identity (the proposer DID must be in `signerGroups.proposers` or `signerGroups.all`), still checks resource restrictions, but skips schema validation (there's no schema) and policy evaluation (there's no policy entry). It then forwards the tool call to the upstream MCP server with the credential. A dispatch ledger entry and receipt are still produced for auditability.
 
-This distinction exists because MPAS MCP Bridges expose *all* upstream tools (e.g., 51 for GitHub), but plugins only declare the subset that the application developer considers high-impact and worthy of governance (e.g., 20 out of 51). The remaining tools are low-impact read operations or informational queries that should flow through without friction — the adapter's role for those is purely credential proxy, not policy gate.
+This distinction exists because MPAS MCP Bridges expose *all* upstream tools (e.g., 51 for GitHub), but plugins only declare the subset that the application developer considers high-impact and worthy of schema validation (e.g., 20 out of 51). The remaining tools are low-impact read operations or informational queries that should flow through without friction — the adapter's role for those is purely credential proxy, not policy gate.
 
-**Design consequence:** The operator does not need to enumerate all possible tool names. They install a plugin, which declares the high-impact operations and their payload schemas. The operator then writes policy for those operations — specifying trusted signer DIDs, approval thresholds, role-based requirements (human review, agent co-sign, veto rights), and any resource restrictions. This is where standards like the MPAS JSON Verifier Policy Profile and corporate authentication policies are leveraged. Everything not in the plugin passes through without policy.
+**Design consequence:** The operator does not need to enumerate all possible tool names. They install a plugin, which declares the operations with payload schemas worth validating. They then author an `MpasApplicationPolicy` defining signer groups, approval thresholds, and match conditions for the operations they want to govern. An operation can be governed by policy even if the plugin doesn't include a schema for it — in that case, policy is evaluated but schema validation is skipped. Everything in neither the plugin nor the policy passes through with only proposer gating.
 
-Operators can also define additional governed operations beyond what the plugin author suggested, by extending the plugin's `operations` array in a local overlay. This takes more work (the operator must author the payload schema themselves), but allows site-specific governance without waiting for plugin updates. In practice, a marketplace of plugins with community-contributed policy configurations will emerge — operators can start from a shared plugin and tailor the policy to their organization.
+Operators can also add policy entries for operations beyond what the plugin declares. This allows site-specific governance without waiting for plugin updates. The operator defines which operations they consider high-risk for their deployment by adding keys to the `policies` object.
 
 ### 4.3 System Topology
 
@@ -144,7 +143,7 @@ The adapter does not participate in approval collection. It only answers the que
 - **MCP Bridges are untrusted.** Their Action Packages are validated from scratch.
 - **Agents never communicate with the adapter directly.** They go through bridges.
 - **The Coordination Service is untrusted.** It's a message relay. The adapter verifies independently.
-- **Signers are verified.** Their Approvals are cryptographically verified against configured trusted signer DIDs.
+- **Signers are verified.** Their Approvals are cryptographically verified against signer keys configured in the deployment config, with eligibility determined by the policy's `signerGroups`.
 - **The Adapter is the trust anchor** for execution decisions and credential custody.
 - **Credential storage (Keychain or file) is trusted** within the operator's security model.
 
@@ -234,7 +233,7 @@ The adapter also accepts `application/json` for compatibility (HTTP Profile MAY)
   "executionReceipt": { "version": "1", "type": "ExecutionReceipt", "format": "jws", "signature": "..." },
   "error": {
     "code": "POLICY_NOT_SATISFIED",
-    "message": "Requires 2 approvals from role 'maintainer', found 0."
+    "message": "Requires 2 approvals from signer group 'maintainers', found 0."
   },
   "createdAt": "2026-06-05T18:15:00.000Z"
 }
@@ -320,8 +319,8 @@ The adapter uses a three-layer model to separate concerns:
 
 | Layer | Object | Mutability | Owner | Purpose |
 |---|---|---|---|---|
-| **Application Plugin** | `MpasApplicationPlugin` | Immutable | Plugin publisher | Describes what operations an application exposes, their payload schemas, and credential classes needed. Published by the app vendor or community. Never modified by the operator. |
-| **Deployment Config** | `MpasAdapterDeploymentConfig` | Operator-editable | Deployment operator | Binds a plugin to local decisions: which credentials are bound, what policy applies to governed operations, which signers are trusted, and what resource restrictions apply. |
+| **Application Plugin** | `MpasApplicationPlugin` | Immutable | Plugin publisher | Describes what operations an application exposes, their payload schemas, credential classes needed, and optional impact metadata. Published by the app vendor or community. Never modified by the operator. |
+| **Deployment Config** | `MpasAdapterDeploymentConfig` | Operator-editable | Deployment operator | Binds a plugin to local decisions: which credentials are bound, what policy governs operations (as a full `MpasApplicationPolicy`), which signer keys are trusted, and what resource restrictions apply. |
 | **Credentials** | Stored in Keychain or file | Operator-managed | Deployment operator | The actual secrets (tokens, keys). Referenced by handle in the deployment config. Never in plugins or Action Packages. |
 
 **Relationship:** A deployment config references exactly one plugin. Multiple deployment configs can reference the same plugin (e.g., one for production repos, one for sandbox repos). The plugin defines what's *possible*; the config defines what's *permitted* in this deployment.
@@ -335,9 +334,10 @@ The adapter uses a three-layer model to separate concerns:
 Application plugins follow the [MPAS Application Plugin Profile v0.2](../../specification/mpas-profile-application-plugin.md):
 - Stored as immutable JSON files in `~/.mpas/plugins/`.
 - Validated on install against the Application Plugin Profile JSON Schema.
-- Never modified by the operator. If customization is needed, it goes in the deployment config.
+- Never modified by the operator. If customization is needed, it goes in the deployment config's policy.
 - Referenced by `pluginDid` and `pluginVersion` in deployment configs.
 - Integrity verified by artifact hash on every load.
+- The `operations` object is keyed by operation name; each entry provides a payload schema and optional impact metadata.
 
 ### 7.3 Deployment Configuration
 
@@ -372,46 +372,82 @@ Each deployment config binds a plugin to operator decisions:
     }
   },
   "policy": {
-    "defaultPolicy": "deny",
-    "rules": [
-      {
-        "description": "All merges into main require two maintainer approvals.",
-        "match": {
-          "conditions": [
-            { "source": "executionPayload", "path": "/name", "op": "eq", "value": "merge_pull_request" },
-            { "source": "executionPayload", "path": "/arguments/baseRef", "op": "eq", "value": "main" }
-          ]
-        },
-        "requirements": {
-          "type": "threshold",
-          "threshold": 2,
-          "eligibleSignerGroup": "maintainers",
-          "decision": "approve"
+    "version": "1",
+    "type": "MpasApplicationPolicy",
+    "policyProfileUrl": "https://oma3.org/specs/mpas/policy-json/v1",
+    "applicationDid": "did:web:github.com",
+    "executionProfile": {
+      "id": "did:web:profiles.oma3.org:mcp",
+      "format": "mcp.toolsCall"
+    },
+    "defaultRequirement": {
+      "type": "threshold",
+      "threshold": 1,
+      "eligibleSignerGroup": "maintainers",
+      "decision": "approve"
+    },
+    "signerGroups": {
+      "all": [
+        "did:web:alice.example",
+        "did:web:bob.example",
+        "did:web:agent.example"
+      ],
+      "proposers": [
+        "did:web:agent.example"
+      ],
+      "maintainers": [
+        "did:web:alice.example",
+        "did:web:bob.example"
+      ]
+    },
+    "policies": {
+      "merge_pull_request": [
+        {
+          "description": "All merges into main require two maintainer approvals.",
+          "match": {
+            "conditions": [
+              { "source": "executionPayload", "path": "/arguments/baseRef", "op": "eq", "value": "main" }
+            ]
+          },
+          "requirements": {
+            "type": "threshold",
+            "threshold": 2,
+            "eligibleSignerGroup": "maintainers",
+            "decision": "approve"
+          }
         }
-      }
-    ]
+      ]
+    }
   },
-  "trustedSigners": [
+  "signerKeys": [
     {
-      "did": "did:key:z6Mkf5rG...",
-      "role": "maintainer",
-      "label": "Alice"
+      "did": "did:web:alice.example",
+      "label": "Alice",
+      "publicJwk": { "kty": "OKP", "crv": "Ed25519", "x": "..." }
     },
     {
-      "did": "did:key:z6Mkq9Bv...",
-      "role": "maintainer",
-      "label": "Bob"
+      "did": "did:web:bob.example",
+      "label": "Bob",
+      "publicJwk": { "kty": "OKP", "crv": "Ed25519", "x": "..." }
     },
     {
-      "did": "did:key:z6Mkw3Tp...",
-      "role": "proposer",
-      "label": "Agent Bridge"
+      "did": "did:web:agent.example",
+      "label": "Agent Bridge",
+      "publicJwk": { "kty": "OKP", "crv": "Ed25519", "x": "..." }
     }
   ]
 }
 ```
 
-The `policy` section only applies to operations declared in the plugin. Operations not in the plugin bypass policy entirely and are forwarded as pass-through (see Section 4.2).
+The `policy` field is a complete `MpasApplicationPolicy` object per the MPAS JSON Verifier Policy Profile. It contains:
+
+- **`signerGroups`** — defines who can interact with the system. `signerGroups.all` lists every recognized DID. `signerGroups.proposers` lists who can submit Action Packages. Custom groups (e.g., `maintainers`) are referenced by policy requirements.
+- **`policies`** — keyed by operation name. Each key maps to an array of policy entries with optional match conditions and requirements. Operations here are governed regardless of whether they appear in the plugin.
+- **`defaultRequirement`** — applies to governed operations (those in the plugin or in `policies`) when no policy entry matches.
+
+The `signerKeys` array provides the key material needed for signature verification. It maps DIDs to public keys. This is the adapter's key registry — separate from the policy's `signerGroups` which define authorization rules. A DID must appear in both `signerKeys` (for verification) and `signerGroups.all` (for authorization) to be recognized.
+
+The `policy` section determines which operations are governed and what approvals are needed. Operations in the plugin but NOT in `policy.policies` are still governed — the `defaultRequirement` applies. Operations in neither the plugin nor `policy.policies` are pass-through.
 
 ### 7.4 Credential Storage
 
@@ -467,12 +503,12 @@ Stored at `~/.mpas/adapter.json`.
 
 ### 9.1 Routing: Governed vs. Pass-Through
 
-After parsing the Action Package and performing common verification steps (structural validation, ledger check, config lookup, expiry, signature verification), the adapter checks whether the operation name from the Execution Payload exists in the plugin's `operations` array:
+After parsing the Action Package and performing common verification steps (structural validation, ledger check, config lookup, expiry, signature verification, proposer gating), the adapter determines whether the operation is governed:
 
-- **If the operation IS in the plugin** → **Governed path** (Section 9.2): full schema validation, policy evaluation, approval requirements.
-- **If the operation is NOT in the plugin** → **Pass-through path** (Section 9.3): skip schema validation and policy, forward directly with credential.
+- **If the operation IS in the plugin's `operations` object OR as a key in `policy.policies`** → **Governed path** (Section 9.2): schema validation (if plugin has it), policy evaluation, approval requirements.
+- **If the operation is in NEITHER the plugin NOR `policy.policies`** → **Pass-through path** (Section 9.3): skip schema validation and policy, forward directly with credential.
 
-Both paths share the same common verification prefix and produce receipts for auditability.
+Both paths share the same common verification prefix (including proposer gating via `signerGroups`) and produce receipts for auditability.
 
 ### 9.2 Governed Execution (Happy Path)
 
@@ -483,11 +519,11 @@ Both paths share the same common verification prefix and produce receipts for au
 5. Adapter verifies Action Envelope (fields, expiration, Action Lifecycle check per MPAS Core Section 6.2.2 Step 2a and Section 6.9).
 6. Adapter verifies Execution Payload hash matches `actionEnvelope.executionPayloadHash`.
 7. Adapter looks up deployment config by `actionEnvelope.target.applicationDid`.
-8. Adapter verifies Action Envelope signature (proposer is a trusted signer).
-9. **Routing decision:** operation `merge_pull_request` IS in the plugin → governed path.
-10. Adapter validates Execution Payload against the plugin's `executionPayloadSchema` for the matched operation.
+8. Adapter verifies proposer DID is in `policy.signerGroups.proposers` (or `signerGroups.all` if no `proposers` group). Verifies Action Envelope signature against the proposer's key from `signerKeys`.
+9. **Routing decision:** operation `merge_pull_request` IS in the plugin's `operations` or in `policy.policies` → governed path.
+10. If the plugin has an `executionPayloadSchema` for this operation, adapter validates Execution Payload against it.
 11. Adapter checks resource restrictions.
-12. Adapter evaluates policy (per MPAS JSON Verifier Policy Profile) against the Action Package.
+12. Adapter evaluates policy (per MPAS JSON Verifier Policy Profile) — looks up the operation in `policy.policies`, evaluates matching conditions, determines requirements.
 13. Policy is satisfied → adapter resolves credential handle, retrieves credential.
 14. Adapter dispatches a MCP `tools/call` to the configured execution target MCP server.
 15. Adapter constructs and signs an Execution Receipt (per MPAS Core Section 5.9).
@@ -499,15 +535,15 @@ Both paths share the same common verification prefix and produce receipts for au
 1. Agent calls a tool (e.g., `get_file_contents`) on the MPAS MCP Bridge.
 2. Bridge constructs an Action Package as normal and POSTs it to the adapter.
 3. Adapter parses, validates structure, checks ledger, looks up config, checks expiry.
-4. Adapter verifies Action Envelope signature (proposer is a trusted signer).
-5. **Routing decision:** operation `get_file_contents` is NOT in the plugin → pass-through path.
+4. Adapter verifies proposer DID is in `policy.signerGroups.proposers` (or `signerGroups.all`). Verifies Action Envelope signature against the proposer's key from `signerKeys`.
+5. **Routing decision:** operation `get_file_contents` is NOT in the plugin's `operations` and NOT in `policy.policies` → pass-through path.
 6. Adapter checks resource restrictions (still enforced for pass-through).
 7. Adapter resolves credential handle, retrieves credential.
 8. Adapter dispatches the MCP `tools/call` to the configured execution target MCP server.
 9. Adapter writes a dispatch ledger entry and constructs an Execution Receipt.
 10. Adapter returns the receipt and execution result to the bridge.
 
-Pass-through operations do NOT require additional approvals beyond the proposer's own signature. The proposer's identity is verified (they must be a trusted signer), but no policy rules are evaluated.
+Pass-through operations do NOT require additional approvals beyond the proposer's valid signature. The proposer's identity is verified (they must be in `signerGroups.proposers` or `signerGroups.all`), but no policy rules are evaluated.
 
 ### 9.4 Insufficient Approvals (Iterative Flow — Governed Only)
 
@@ -728,9 +764,11 @@ All responses use the HTTP profile's `result` field (not a separate `outcome` fi
 | actionId not in ledger (incl. resubmission with more approvals) | 200 | (full stateless verification) | — | No pinning; re-verify the submitted package |
 | Resubmission while actionId is `executing` (same hash) | 200 | `pending` | — | No second dispatch; dedup |
 | No matching deployment config | 200 | `rejected` | `rejected` | Unknown application |
-| Operation in plugin, payload schema validation failed | 200 | `rejected` | `rejected` | Governed path; stateless deterministic rejection |
-| Operation in plugin, policy not satisfied (can be remedied) | 200 | `additionalApprovalsRequired` | — | Governed path; stateless; nothing recorded |
-| Operation NOT in plugin | — | (pass-through) | `executed` / `failed` / `indeterminate` | Pass-through path; no schema validation or policy evaluation |
+| Governed operation, payload schema validation failed | 200 | `rejected` | `rejected` | Governed path; stateless deterministic rejection |
+| Governed operation, policy not satisfied (can be remedied) | 200 | `additionalApprovalsRequired` | — | Governed path; stateless; nothing recorded |
+| Governed operation, no schema in plugin | — | (evaluate policy only) | varies | Policy evaluated; schema validation skipped |
+| Pass-through operation (not in plugin or policy) | — | (pass-through) | `executed` / `failed` / `indeterminate` | Pass-through path; no schema validation or policy evaluation |
+| Proposer DID not in signerGroups | 200 | `rejected` | `rejected` | Proposer gating; applies to both paths |
 | Resource restriction violated | 200 | `rejected` | `rejected` | Stateless deterministic rejection; applies to both paths |
 | Credential handle not found | 200 | `rejected` | — | Pre-ledger preparation failure (Core 6.9.2 A): no receipt, no ledger entry |
 | Target launch / connection failed | 200 | `rejected` | — | Pre-ledger preparation failure: no receipt, no ledger entry |
@@ -792,8 +830,8 @@ An MCP Bridge can also act as a Signer, allowing agents to review and approve ot
 
 ### 16.4 Trust Assumptions
 
-- The bridge's DID must be configured in the deployment config's `trustedSigners` with an appropriate role (e.g., `proposer`).
-- The bridge's Proposer Approval alone may or may not be sufficient — that depends on the deployment config's policy rules.
+- The bridge's DID must be configured in the deployment config's `signerKeys` (for signature verification) and in `policy.signerGroups.proposers` or `policy.signerGroups.all` (for proposer authorization).
+- The bridge's Proposer Approval alone may or may not be sufficient — that depends on the policy's `defaultRequirement` and any matching policy entries.
 - The adapter verifies all bridge-submitted packages identically to any other caller.
 
 ---
@@ -830,13 +868,13 @@ This enables:
 
 ### 17.5 Pass-Through Operation Filtering (`enabledOperations`)
 
-For operators who want tighter control over which non-governed operations can pass through, a future version could add an optional `enabledOperations` allowlist to the deployment config. If present, only operations explicitly listed (either in the plugin for governance, or in `enabledOperations` for pass-through) would be forwarded — all others would be rejected. This is useful in scenarios where:
+For operators who want tighter control over which non-governed operations can pass through, a future version could add an optional `enabledOperations` allowlist to the deployment config. If present, only operations explicitly listed (either in the plugin, in the policy's `policies` keys, or in `enabledOperations`) would be forwarded — all others would be rejected. This is useful in scenarios where:
 
 - The MCP bridge gets updated with new tools that the operator hasn't reviewed yet.
 - The operator wants to lock down the adapter to a known set of operations regardless of governance level.
 - Compliance requires explicit enumeration of all permitted actions.
 
-For the MVP, this is unnecessary complexity. The plugin already defines the security boundary: if an operation is important enough to gate, it goes in the plugin.
+For the MVP, this is unnecessary complexity. The plugin + policy already define the security boundary: if an operation is important enough to gate, the operator adds a key to `policy.policies`.
 
 ---
 
@@ -848,6 +886,6 @@ For the MVP, this is unnecessary complexity. The plugin already defines the secu
 
 3. **MCP server lifecycle:** For `mcp.stdio` execution targets, does the adapter manage the MCP server process lifecycle (start/stop with the daemon), or expect it to be running independently?
 
-4. **Signer key resolution:** For the MVP, is it sufficient to configure eligible signer public keys directly in the deployment config (`trustedSigners` with `did:key`), or do we need DID document resolution?
+4. **Signer key resolution:** For the MVP, is it sufficient to configure signer public keys directly in the deployment config's `signerKeys` array (using `did:key`), or do we need DID document resolution?
 
 5. **Authorization Requirements vs. Receipt for policy failure:** When policy is not satisfied but *could* be satisfied with more approvals, we return auth requirements. When policy is definitively unsatisfiable (e.g., resource restricted), we return a rejection receipt. Is this the right distinction?

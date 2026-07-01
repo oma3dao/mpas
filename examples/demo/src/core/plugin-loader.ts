@@ -18,13 +18,12 @@ export interface MpasApplicationPlugin {
     requiredCapabilities?: string[];
     description?: string;
   }>;
-  operations: MpasApplicationOperation[];
-  policySuggestions?: unknown[];
+  operations: Record<string, MpasOperationDescriptor>;
 }
 
-export interface MpasApplicationOperation {
-  name: string;
+export interface MpasOperationDescriptor {
   description?: string;
+  impact?: string;
   executionPayloadSchema: Record<string, unknown>;
 }
 
@@ -47,7 +46,8 @@ export type LoadPluginResult =
     };
 
 export interface OperationMatch {
-  operation: MpasApplicationOperation;
+  operationName: string;
+  operation: MpasOperationDescriptor;
 }
 
 export interface PayloadValidationError {
@@ -111,39 +111,15 @@ const applicationPluginSchema = {
       },
     },
     operations: {
-      type: "array",
-      minItems: 1,
-      items: {
+      type: "object",
+      minProperties: 1,
+      additionalProperties: {
         type: "object",
-        required: ["name", "executionPayloadSchema"],
-        properties: {
-          name: { type: "string", minLength: 1 },
-          description: { type: "string" },
-          executionPayloadSchema: { type: "object" },
-        },
-        additionalProperties: false,
-      },
-    },
-    policySuggestions: {
-      type: "array",
-      items: {
-        type: "object",
-        required: ["match"],
+        required: ["executionPayloadSchema"],
         properties: {
           description: { type: "string" },
           impact: { type: "string" },
-          match: { type: "object" },
-          suggestedRequirement: {
-            type: "object",
-            required: ["kind"],
-            properties: {
-              kind: { type: "string" },
-              eligibleSignerRole: { type: "string" },
-              minimumThreshold: { type: "integer", minimum: 1 },
-              decision: { type: "string" },
-            },
-            additionalProperties: false,
-          },
+          executionPayloadSchema: { type: "object" },
         },
         additionalProperties: false,
       },
@@ -197,16 +173,17 @@ export function validatePayloadAgainstPlugin(
     );
   }
 
-  const operation = plugin.operations.find((candidate) => candidate.name === payload.name);
+  const operationName = payload.name as string;
+  const operation = plugin.operations[operationName];
   if (!operation) {
-    return payloadValidationError("UNKNOWN_OPERATION", `Unknown operation: ${payload.name}`, "$.executionPayload.name");
+    return payloadValidationError("UNKNOWN_OPERATION", `Unknown operation: ${operationName}`, "$.executionPayload.name");
   }
 
   const validate = ajv.compile(operation.executionPayloadSchema);
   if (!validate(payload)) {
     return payloadValidationError(
       "PAYLOAD_SCHEMA_INVALID",
-      `Execution Payload failed schema validation for operation: ${operation.name}`,
+      `Execution Payload failed schema validation for operation: ${operationName}`,
       "$.executionPayload",
       validate.errors,
     );
@@ -215,6 +192,7 @@ export function validatePayloadAgainstPlugin(
   return {
     ok: true,
     match: {
+      operationName,
       operation,
     },
   };

@@ -198,7 +198,7 @@ export async function dryRunActionFile(path: string, options: Pick<ParsedOptions
   }
 
   const verification = await verifyActionPackage(actionPackage, {
-    trustedSigners: loadedConfig.config.trustedSigners,
+    trustedSigners: loadedConfig.config.signerKeys,
     trustedApplicationDids: [loadedConfig.config.target.applicationDid],
   });
   if (verification.status !== "verified") {
@@ -209,7 +209,9 @@ export async function dryRunActionFile(path: string, options: Pick<ParsedOptions
   }
 
   const payloadValidation = validatePayloadAgainstPlugin(actionPackage.executionPayload, loadedConfig.plugin);
-  const isGovernedOperation = payloadValidation.ok || payloadValidation.error.code !== "UNKNOWN_OPERATION";
+  const cliOpName = (actionPackage.executionPayload as Record<string, unknown>)?.name as string | undefined;
+  const inPolicies = cliOpName !== undefined && loadedConfig.config.policy.policies?.[cliOpName] !== undefined;
+  const isGovernedOperation = payloadValidation.ok || payloadValidation.error.code !== "UNKNOWN_OPERATION" || inPolicies;
 
   if (isGovernedOperation) {
     // Governed path: validate schema and evaluate policy.
@@ -224,7 +226,7 @@ export async function dryRunActionFile(path: string, options: Pick<ParsedOptions
     if (policyResult.status === "satisfied") {
       return {
         result: "satisfied",
-        operationName: payloadValidation.match.operation.name,
+        operationName: payloadValidation.match.operationName,
       };
     }
 
@@ -363,10 +365,10 @@ export async function validateConfig(name: string, options: Pick<ParsedOptions, 
   }
 
   const signerChecks = [];
-  for (const signer of config.config.trustedSigners) {
-    const check: { did: string; roles: string[]; ok: boolean; error?: string } = {
+  for (const signer of config.config.signerKeys) {
+    const check: { did: string; label?: string; ok: boolean; error?: string } = {
       did: signer.did,
-      roles: signer.roles,
+      label: signer.label,
       ok: true,
     };
 
@@ -396,7 +398,7 @@ export async function validateConfig(name: string, options: Pick<ParsedOptions, 
       // bridge dir doesn't exist or isn't readable — skip
     }
 
-    const trustedDids = new Set(config.config.trustedSigners.map((s) => s.did));
+    const trustedDids = new Set(config.config.signerKeys.map((s) => s.did));
     const bridgeDids = new Map<string, string[]>(); // did → [file, file, ...]
     for (const file of bridgeFiles) {
       const filePath = join(bridgeDir, file);
@@ -414,7 +416,7 @@ export async function validateConfig(name: string, options: Pick<ParsedOptions, 
           check.error = "Bridge config missing agent.did";
         } else if (!trustedDids.has(agentDid as Did)) {
           check.ok = false;
-          check.error = `agent.did ${agentDid} is not in trustedSigners`;
+          check.error = `agent.did ${agentDid} is not in signerKeys`;
         } else {
           const files = bridgeDids.get(agentDid) ?? [];
           files.push(file);
@@ -459,7 +461,7 @@ export async function validateConfig(name: string, options: Pick<ParsedOptions, 
     applicationDid: config.config.target.applicationDid,
     pluginDid: config.plugin.pluginDid,
     credentials: credentialChecks,
-    trustedSigners: signerChecks,
+    signerKeys: signerChecks,
     ...(bridgeChecks.length > 0 ? { bridgeConfigs: bridgeChecks } : {}),
   };
 }
@@ -483,7 +485,7 @@ interface ValidationResult {
   applicationDid: string;
   pluginDid: string;
   credentials: Array<{ handle: string; provider: string; ok: boolean; error?: string }>;
-  trustedSigners: Array<{ did: string; roles: string[]; ok: boolean; error?: string }>;
+  signerKeys: Array<{ did: string; label?: string; ok: boolean; error?: string }>;
   bridgeConfigs?: Array<{ file: string; did?: string; ok: boolean; error?: string }>;
 }
 
@@ -502,11 +504,11 @@ function formatValidationResult(result: ValidationResult): string {
   }
   lines.push("");
 
-  lines.push("Trusted Signers:");
-  for (const s of result.trustedSigners) {
+  lines.push("Signer Keys:");
+  for (const s of result.signerKeys) {
     const shortDid = s.did.length > 30 ? `${s.did.slice(0, 20)}...${s.did.slice(-8)}` : s.did;
-    const rolesLabel = s.roles.join(", ");
-    lines.push(s.ok ? ok(`${rolesLabel} — ${shortDid}`) : fail(`${rolesLabel} — ${shortDid} — ${s.error}`));
+    const labelStr = s.label ?? "(no label)";
+    lines.push(s.ok ? ok(`${labelStr} — ${shortDid}`) : fail(`${labelStr} — ${shortDid} — ${s.error}`));
   }
 
   if (result.bridgeConfigs && result.bridgeConfigs.length > 0) {
@@ -530,7 +532,7 @@ function formatValidationResult(result: ValidationResult): string {
   } else {
     const errors = [
       ...result.credentials.filter((c) => !c.ok),
-      ...result.trustedSigners.filter((s) => !s.ok),
+      ...result.signerKeys.filter((s) => !s.ok),
       ...(result.bridgeConfigs ?? []).filter((b) => !b.ok),
     ];
     lines.push(`Validation failed: ${errors.length} error${errors.length === 1 ? "" : "s"}.`);

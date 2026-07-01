@@ -122,7 +122,7 @@ export function createHttpEndpoint(options: HttpEndpointOptions): FastifyInstanc
     trace.emit("verification_step", { actionId, step: "max_validity_check", passed: true });
 
     const verification = await verifyActionPackage(pkg, {
-      trustedSigners: loadedConfig.config.trustedSigners,
+      trustedSigners: loadedConfig.config.signerKeys,
       trustedApplicationDids: [loadedConfig.config.target.applicationDid],
       onStep: (step, passed, details) => {
         trace.emit("verification_step", { actionId, step, passed, ...details });
@@ -135,7 +135,9 @@ export function createHttpEndpoint(options: HttpEndpointOptions): FastifyInstanc
     }
 
     const payloadValidation = validatePayloadAgainstPlugin(pkg.executionPayload, loadedConfig.plugin);
-    const isGovernedOperation = payloadValidation.ok || payloadValidation.error.code !== "UNKNOWN_OPERATION";
+    const opName = operationName(pkg);
+    const inPolicy = opName !== undefined && loadedConfig.config.policy.policies?.[opName] !== undefined;
+    const isGovernedOperation = payloadValidation.ok || payloadValidation.error.code !== "UNKNOWN_OPERATION" || inPolicy;
 
     // --- Routing decision: governed vs. pass-through ---
     // If the operation IS in the plugin → full governance (schema validation + policy).
@@ -290,18 +292,11 @@ async function prepareTarget(loadedConfig: LoadedDeploymentConfig, credential: s
 }
 
 export function policyFromLoadedConfig(loadedConfig: LoadedDeploymentConfig): PolicyConfig {
-  const eligibleSignersByRole: Record<string, Did[]> = {};
-  for (const signer of loadedConfig.config.trustedSigners) {
-    for (const role of signer.roles) {
-      eligibleSignersByRole[role] ??= [];
-      eligibleSignersByRole[role].push(signer.did);
-    }
-  }
-
   return {
-    ...loadedConfig.config.policy,
+    defaultRequirement: loadedConfig.config.policy.defaultRequirement,
+    policies: loadedConfig.config.policy.policies as PolicyConfig["policies"],
     resourceRestrictions: loadedConfig.config.resourceRestrictions,
-    eligibleSignersByRole,
+    signerGroups: loadedConfig.config.policy.signerGroups,
   };
 }
 

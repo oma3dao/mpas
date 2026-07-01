@@ -1,10 +1,10 @@
-import type { UnsatisfiedRule } from "./policy-engine.js";
+import type { UnsatisfiedThreshold } from "./policy-engine.js";
 import type { ActionEnvelope, AuthorizationRequirements, Decision, Did } from "./types.js";
 import { computeJsonHash } from "./verification.js";
 
 export function buildAuthorizationRequirements(
   envelope: ActionEnvelope,
-  unsatisfiedRules: UnsatisfiedRule[],
+  unsatisfiedRules: UnsatisfiedThreshold[],
   adapterDid: Did,
 ): AuthorizationRequirements {
   return {
@@ -16,14 +16,14 @@ export function buildAuthorizationRequirements(
       did: adapterDid,
     },
     approvalRequirements: {
-      anyOf: unsatisfiedRules.map((unsatisfiedRule) => ({
+      anyOf: unsatisfiedRules.map((unsatisfied) => ({
         type: "threshold",
-        threshold: unsatisfiedRule.threshold,
-        eligibleSigners: unsatisfiedRule.eligibleSigners,
-        decision: unsatisfiedRule.requiredDecision as Decision,
+        threshold: unsatisfied.threshold,
+        eligibleSigners: unsatisfied.eligibleSigners,
+        decision: unsatisfied.requiredDecision as Decision,
         description:
-          unsatisfiedRule.rule.description ??
-          `Requires ${unsatisfiedRule.threshold} ${unsatisfiedRule.requiredRole} approval(s).`,
+          unsatisfied.requirement.description ??
+          `Requires ${unsatisfied.threshold} ${unsatisfied.requiredRole} approval(s).`,
       })),
     },
     createdAt: new Date().toISOString(),

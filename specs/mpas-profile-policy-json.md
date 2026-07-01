@@ -13,7 +13,9 @@ This profile is application-scoped and execution-profile-scoped. The normative p
 
 This profile does not define a universal action taxonomy or universal Execution Payload field names. Policy conditions are evaluated against the profile-native Execution Payload and the Action Envelope. A policy document is therefore tied to the execution profile and payload format it assumes. For the MCP execution profile, conditions commonly reference `/name` and `/arguments/...` paths. Other execution profiles define their own payload paths and policy-addressable fields.
 
-The default model is that this profile describes when additional approvals are required. If the Verifier determines that the payload is supported and valid under the declared execution profile, and no JSON policy matches that action, the default requirement is the Proposer's valid Approval only. This default MUST NOT be interpreted as permission to execute arbitrary unsupported or malformed operations.
+**Policy applicability:** Policy evaluation applies only to actions that appear either in the associated application plugin's `operations` array or as a key in the `policies` object. Actions that appear in neither are subject only to proposer gating and pass through without additional approval requirements. This rule is stated once here and applies throughout this document.
+
+The default model is that this profile describes when additional approvals are required. If the Verifier determines that the payload is supported and valid under the declared execution profile, and no JSON policy matches that action, the `defaultRequirement` determines what approvals are needed. This MUST NOT be interpreted as permission to execute arbitrary unsupported or malformed operations.
 
 ## 2. Scope and Non-Goals
 
@@ -81,16 +83,14 @@ This profile does not define a global list of operation names or assume universa
 
 Policies match specific operations by including a condition on the relevant payload field (e.g., `{"source": "executionPayload", "path": "/name", "op": "eq", "value": "payments.send_token"}`). If a policy omits such a condition, it applies to all supported actions when its other conditions match.
 
-### 4.3 Policies as Reusable Objects
+### 4.3 Policies as Action-Scoped Objects
 
-The `policies` object contains reusable policy definitions keyed by policy ID. Each policy may include:
+The `policies` object contains policy entries keyed by action name (the operation name as defined by the execution profile, e.g., the MCP tool name). Each key maps to an array of policy entries that may include:
 
-- match criteria;
-- conditions;
-- positive approval requirements;
-- non-authoritative descriptions for operator understanding.
+- match criteria (parameter-level conditions within the action);
+- positive approval requirements.
 
-All matching policies apply. A Verifier MUST NOT use first-match-wins semantics unless a future profile explicitly defines such behavior.
+All matching entries within an action's array apply. The Verifier evaluates all entries, and any whose conditions match contribute their requirements (combined with logical AND).
 
 ### 4.4 Signer Groups as Reusable Objects
 
@@ -106,17 +106,26 @@ The policy-level `defaultRequirement` applies when all of the following are true
 2. the Execution Payload is valid under trusted application or adapter configuration;
 3. no policy in this `MpasApplicationPolicy` matches the action.
 
-If `defaultRequirement` is omitted, it defaults to:
+If `defaultRequirement` is omitted, the Verifier MUST reject the policy as invalid. There is no implicit default. Operators MUST explicitly declare the baseline approval requirement for safety.
+
+Production deployments SHOULD require at least one non-proposer approval as the default. A `proposerOnly` default is appropriate only for development environments or when every governed operation has an explicit policy entry. Example:
 
 ```json
 {
-  "type": "proposerOnly"
+  "type": "threshold",
+  "threshold": 1,
+  "eligibleSignerGroup": "maintainers",
+  "decision": "approve"
 }
 ```
 
-This means the Proposer's valid Approval is sufficient and no additional Signer Approvals are required.
-
 The default requirement MUST NOT be used to execute an unknown, unsupported, or malformed action. Operation support and payload validation are determined by the Verifier under the declared execution profile, not by the absence of a matching policy.
+
+### 4.6 Proposer Gating
+
+The Verifier MUST reject any Action Package whose `actionEnvelope.proposer.did` is not recognized. Proposer gating always occurs before policy evaluation.
+
+If `signerGroups` contains a `"proposers"` group, only DIDs in that group may submit Action Packages. If `"proposers"` is absent, the Verifier uses `signerGroups.all` as the allowed proposer set. A proposer DID not found in the applicable group MUST be rejected immediately.
 
 ## 5. JSON Policy Object Model
 
@@ -130,54 +139,60 @@ Example shape:
 {
   "version": "1",
   "type": "MpasApplicationPolicy",
+  "policyProfileUrl": "https://oma3.org/specs/mpas/policy-json/v1",
   "applicationDid": "did:web:payments.example",
   "executionProfile": {
     "id": "did:web:profiles.oma3.org:mcp",
     "format": "mcp.toolsCall"
   },
   "defaultRequirement": {
-    "type": "proposerOnly"
+    "type": "threshold",
+    "threshold": 1,
+    "eligibleSignerGroup": "treasuryOperators",
+    "decision": "approve"
   },
   "signerGroups": {
-    "treasuryOperators": {
-      "members": [
-        "did:web:alice.example",
-        "did:web:bob.example"
-      ]
-    }
+    "all": [
+      "did:web:alice.example",
+      "did:web:bob.example",
+      "did:web:agent.example"
+    ],
+    "proposers": [
+      "did:web:agent.example"
+    ],
+    "treasuryOperators": [
+      "did:web:alice.example",
+      "did:web:bob.example"
+    ]
   },
   "policies": {
-    "large-usdc-transfer": {
-      "description": "USDC transfers above 100 require two treasury approvals.",
-      "match": {
-        "conditions": [
-          {
-            "source": "executionPayload",
-            "path": "/name",
-            "op": "eq",
-            "value": "payments.send_token"
-          },
-          {
-            "source": "executionPayload",
-            "path": "/arguments/asset",
-            "op": "eq",
-            "value": "USDC"
-          },
-          {
-            "source": "executionPayload",
-            "path": "/arguments/amount",
-            "op": "gt",
-            "value": "100"
-          }
-        ]
-      },
-      "requirements": {
-        "type": "threshold",
-        "threshold": 2,
-        "eligibleSignerGroup": "treasuryOperators",
-        "decision": "approve"
+    "payments.send_token": [
+      {
+        "description": "USDC transfers above 100 require two treasury approvals.",
+        "match": {
+          "conditions": [
+            {
+              "source": "executionPayload",
+              "path": "/arguments/asset",
+              "op": "eq",
+              "value": "USDC"
+            },
+            {
+              "source": "executionPayload",
+              "path": "/arguments/amount",
+              "op": "gt",
+              "value": "100"
+            }
+          ]
+        },
+        "requirements": {
+          "type": "threshold",
+          "threshold": 2,
+          "eligibleSignerGroup": "treasuryOperators",
+          "decision": "approve"
+        }
       }
-    }
+    ]
   }
 }
 ```
@@ -188,33 +203,25 @@ Field definitions:
 | :--- | :---: | :--- |
 | `version` | Yes | Policy schema version. For this profile, MUST be `"1"`. |
 | `type` | Yes | MUST be `"MpasApplicationPolicy"`. |
+| `policyProfileUrl` | Yes | URL identifying the policy profile this document conforms to. For this profile, MUST be `"https://oma3.org/specs/mpas/policy-json/v1"`. |
 | `applicationDid` | Yes | DID of the Application governed by this policy. |
 | `executionProfile.id` | Yes | DID of the execution profile this policy assumes. Conditions referencing `executionPayload` paths are only meaningful under this profile. |
 | `executionProfile.format` | Optional | Specific payload format under the execution profile for narrower matching. |
-| `defaultRequirement` | Optional | Requirement used for supported, valid actions with no matching policy. Defaults to `proposerOnly`. |
-| `signerGroups` | Optional | Reusable signer groups keyed by group ID. |
-| `policies` | Optional | Reusable policy objects keyed by policy ID. Omitted means an empty policy set. |
+| `defaultRequirement` | Yes | Requirement used for supported, valid actions with no matching policy. There is no implicit default — operators MUST explicitly declare the baseline requirement. |
+| `signerGroups` | Yes | Signer groups keyed by group name. Values are arrays of Signer DIDs. At minimum, the `"all"` group MUST be present. |
+| `policies` | Optional | Policy objects keyed by action name (the operation name as defined by the execution profile, e.g., the MCP tool name). Values are arrays of policy entries for that action. Operators may add keys for actions beyond those declared in the plugin. Omitted means an empty policy set. |
 | `context` | Optional | Non-authoritative descriptive metadata about the policy document. MUST NOT affect evaluation. |
 
 ### 5.2 Policy Objects
 
 A policy object defines when additional approvals apply.
 
-Example:
+Example (one entry in the array for action `"github.delete_repository"`):
 
 ```json
 {
   "description": "Deleting repositories requires two admin approvals.",
-  "match": {
-    "conditions": [
-      {
-        "source": "executionPayload",
-        "path": "/name",
-        "op": "eq",
-        "value": "github.delete_repository"
-      }
-    ]
-  },
+  "match": {},
   "requirements": {
     "type": "threshold",
     "threshold": 2,
@@ -224,12 +231,14 @@ Example:
 }
 ```
 
+Since the action name is already the key in the `policies` object, conditions within `match` only need to express additional constraints (e.g., parameter-level conditions). An empty `match` or omitted `match` means the policy applies to all invocations of that action.
+
 Field definitions:
 
 | Field | Required | Description |
 | :--- | :---: | :--- |
 | `description` | Optional | Human-readable explanation. Non-authoritative. |
-| `match` | Optional | Criteria determining when the policy applies. Omitted means the policy applies to all supported, valid actions governed by this policy document. |
+| `match` | Optional | Additional conditions determining when this entry applies within the action. Since the action name is already matched by the policy key, conditions here express parameter-level constraints (e.g., target branch, amount thresholds). Omitted or empty means the entry applies to all invocations of the action. |
 | `requirements` | Yes | Positive requirement expression required when the policy matches. |
 | `context` | Optional | Non-authoritative metadata. MUST NOT affect evaluation. |
 
@@ -422,29 +431,27 @@ Exactly one of `eligibleSignerGroup` or `eligibleSigners` SHOULD be present. If 
 
 ### 5.6 Signer Groups
 
-Signer groups define reusable sets of eligible Signers.
+Signer groups define named sets of eligible Signers. Each group is a JSON object property whose value is an array of Signer DIDs.
 
 Example:
 
 ```json
 {
-  "treasuryOperators": {
-    "members": [
-      "did:web:alice.example",
-      "did:web:bob.example",
-      "did:web:carol.example"
-    ]
-  }
+  "all": ["did:web:alice.example", "did:web:bob.example", "did:web:carol.example", "did:web:agent.example"],
+  "proposers": ["did:web:agent.example"],
+  "maintainers": ["did:web:alice.example", "did:web:bob.example", "did:web:carol.example"]
 }
 ```
 
-Field definitions:
+#### Reserved Group Names
 
-| Field | Required | Description |
+| Group Name | Required | Description |
 | :--- | :---: | :--- |
-| `members` | Yes | Array of Signer DIDs. |
-| `description` | Optional | Human-readable explanation. Non-authoritative. |
-| `context` | Optional | Non-authoritative metadata. MUST NOT affect evaluation. |
+| `all` | Yes | Every DID that may interact with the system (proposers and approvers). A DID MUST appear in `all` to be recognized by the Verifier. |
+| `proposers` | Optional | DIDs allowed to submit Action Packages. If absent, all DIDs in `all` may propose. |
+| `maintainers` | Optional | Default eligible approvers. If a threshold requirement does not specify `eligibleSignerGroup` or `eligibleSigners`, the Verifier MAY fall back to `maintainers`. If absent, no implicit fallback group exists. |
+
+All other group names are custom and defined by the operator for use in policy rules.
 
 Signer groups MUST be treated as trusted Verifier configuration. A Proposer MUST NOT be able to create, modify, select, or weaken signer group membership through Execution Payload parameters, Action Envelope context, or coordination metadata.
 
@@ -467,13 +474,14 @@ This profile does not define how payload validity is determined. The Verifier MU
 
 ### 6.2 Candidate Policy Selection
 
-A Verifier evaluates every policy in the `policies` object unless it uses an internal optimization that is equivalent to evaluating every policy.
+The Verifier looks up the action name in the `policies` object. Since policies are keyed by action name, the Verifier selects the policy entry matching the operation being requested. If a matching entry exists, all conditions in its `match.conditions` (if present) are evaluated.
 
-A policy matches if:
+A policy entry matches if:
 
-1. every condition in `match.conditions`, if present, evaluates true.
+1. the action name matches the policy key; AND
+2. every condition in `match.conditions`, if present, evaluates true.
 
-If a policy has no `match` object, it matches every supported, valid action governed by the `MpasApplicationPolicy`.
+If a policy entry has no `match` object or its `match.conditions` is empty, the policy matches whenever the action name matches the key.
 
 ### 6.3 Condition Evaluation
 
@@ -485,20 +493,11 @@ The Verifier MUST evaluate conditions deterministically. A Verifier MUST NOT use
 
 ### 6.4 Requirement Combination
 
-All matching policies apply.
+If no policy entry matches (no key for the action name, or conditions evaluate false), the Verifier uses `defaultRequirement`.
 
-If no policies match, the Verifier uses `defaultRequirement`, or `proposerOnly` if `defaultRequirement` is omitted.
+If a policy entry matches and its conditions pass, the Verifier uses that entry's requirements. If multiple entries within the same action's array match, all contribute their requirements (combined with logical AND).
 
-If one or more policies match, the Verifier combines the positive requirements from all matching policies using logical AND. In other words, the combined requirement is equivalent to:
-
-```json
-{
-  "type": "allOf",
-  "requirements": [
-    "requirements from every matching policy"
-  ]
-}
-```
+Since policies are keyed by action name, there is at most one key per action. Multiple conditional requirements for the same action are expressed as multiple entries in the array. Cross-action policies are not supported; use `defaultRequirement` for baseline behavior across all governed operations.
 
 ### 6.5 Approval Counting
 
@@ -551,15 +550,15 @@ If the action is unsupported, the Verifier returns `notSupported`. If the payloa
 
 ### 7.3 Evaluate Policies
 
-The Verifier evaluates every policy in `policies` as described in Section 6.
+The Verifier looks up the action name in the `policies` object as described in Section 6.
 
-If no policy matches, the Verifier uses `defaultRequirement`, or `proposerOnly` if omitted.
+If no policy entry matches the action, the Verifier uses `defaultRequirement`.
 
-If one or more policies match, all matching policies apply.
+If a policy entry matches and its conditions evaluate true, the Verifier uses that entry's `requirements`.
 
 ### 7.4 Build Combined Requirements
 
-The Verifier combines positive requirements from matching policies using logical AND.
+The Verifier uses the matched policy entry's requirements directly. Since policies are keyed by action name, there is at most one entry per action.
 
 ### 7.5 Verify and Count Approvals
 
@@ -602,18 +601,25 @@ A later Action Package may be rejected because:
 
 ## 8. Examples
 
-### 8.1 Proposer-Only Low-Impact Operation
+### 8.1 Development Environment with Proposer-Only Default
 
-A policy document with no policies permits supported, valid operations to proceed with the Proposer's valid Approval only.
+A development or testing environment where the operator accepts self-approval risk.
 
 ```json
 {
   "version": "1",
   "type": "MpasApplicationPolicy",
+  "policyProfileUrl": "https://oma3.org/specs/mpas/policy-json/v1",
   "applicationDid": "did:web:dev-tools.example",
   "executionProfile": {
     "id": "did:web:profiles.oma3.org:mcp",
     "format": "mcp.toolsCall"
+  },
+  "defaultRequirement": {
+    "type": "proposerOnly"
+  },
+  "signerGroups": {
+    "all": ["did:web:agent.example"]
   }
 }
 ```
@@ -626,94 +632,98 @@ This does not mean arbitrary actions are supported. The Verifier or Application 
 {
   "version": "1",
   "type": "MpasApplicationPolicy",
+  "policyProfileUrl": "https://oma3.org/specs/mpas/policy-json/v1",
   "applicationDid": "did:web:treasury.example",
   "executionProfile": {
     "id": "did:web:profiles.oma3.org:mcp",
     "format": "mcp.toolsCall"
   },
   "signerGroups": {
-    "treasuryOperators": {
-      "members": [
-        "did:web:alice.example",
-        "did:web:bob.example",
-        "did:web:carol.example"
-      ]
-    },
-    "treasuryAdmins": {
-      "members": [
-        "did:web:dave.example",
-        "did:web:erin.example"
-      ]
-    }
+    "all": [
+      "did:web:alice.example",
+      "did:web:bob.example",
+      "did:web:carol.example",
+      "did:web:dave.example",
+      "did:web:erin.example",
+      "did:web:agent.example"
+    ],
+    "proposers": [
+      "did:web:agent.example"
+    ],
+    "treasuryOperators": [
+      "did:web:alice.example",
+      "did:web:bob.example",
+      "did:web:carol.example"
+    ],
+    "treasuryAdmins": [
+      "did:web:dave.example",
+      "did:web:erin.example"
+    ]
+  },
+  "defaultRequirement": {
+    "type": "threshold",
+    "threshold": 1,
+    "eligibleSignerGroup": "treasuryOperators",
+    "decision": "approve"
   },
   "policies": {
-    "large-usdc-transfer": {
-      "description": "USDC transfers above 100 require two operator approvals.",
-      "match": {
-        "conditions": [
-          {
-            "source": "executionPayload",
-            "path": "/name",
-            "op": "eq",
-            "value": "payments.send_token"
-          },
-          {
-            "source": "executionPayload",
-            "path": "/arguments/asset",
-            "op": "eq",
-            "value": "USDC"
-          },
-          {
-            "source": "executionPayload",
-            "path": "/arguments/amount",
-            "op": "gt",
-            "value": "100"
-          }
-        ]
+    "payments.send_token": [
+      {
+        "description": "USDC transfers above 100 require two operator approvals.",
+        "match": {
+          "conditions": [
+            {
+              "source": "executionPayload",
+              "path": "/arguments/asset",
+              "op": "eq",
+              "value": "USDC"
+            },
+            {
+              "source": "executionPayload",
+              "path": "/arguments/amount",
+              "op": "gt",
+              "value": "100"
+            }
+          ]
+        },
+        "requirements": {
+          "type": "threshold",
+          "threshold": 2,
+          "eligibleSignerGroup": "treasuryOperators",
+          "decision": "approve"
+        }
       },
-      "requirements": {
-        "type": "threshold",
-        "threshold": 2,
-        "eligibleSignerGroup": "treasuryOperators",
-        "decision": "approve"
+      {
+        "description": "USDC transfers above 10000 also require one admin approval.",
+        "match": {
+          "conditions": [
+            {
+              "source": "executionPayload",
+              "path": "/arguments/asset",
+              "op": "eq",
+              "value": "USDC"
+            },
+            {
+              "source": "executionPayload",
+              "path": "/arguments/amount",
+              "op": "gt",
+              "value": "10000"
+            }
+          ]
+        },
+        "requirements": {
+          "type": "threshold",
+          "threshold": 1,
+          "eligibleSignerGroup": "treasuryAdmins",
+          "decision": "approve"
+        }
       }
-    },
-    "very-large-usdc-transfer": {
-      "description": "USDC transfers above 10000 also require one admin approval.",
-      "match": {
-        "conditions": [
-          {
-            "source": "executionPayload",
-            "path": "/name",
-            "op": "eq",
-            "value": "payments.send_token"
-          },
-          {
-            "source": "executionPayload",
-            "path": "/arguments/asset",
-            "op": "eq",
-            "value": "USDC"
-          },
-          {
-            "source": "executionPayload",
-            "path": "/arguments/amount",
-            "op": "gt",
-            "value": "10000"
-          }
-        ]
-      },
-      "requirements": {
-        "type": "threshold",
-        "threshold": 1,
-        "eligibleSignerGroup": "treasuryAdmins",
-        "decision": "approve"
-      }
-    }
+    ]
   }
 }
 ```
 
-Because all matching policies apply, a transfer of 15000 USDC requires both the large-transfer operator approvals and the very-large-transfer admin approval.
+Because policies are keyed by action name and the value is an array, all matching entries within the array apply. A transfer of 15000 USDC matches both entries, requiring two operator approvals and one admin approval.
 
 ### 8.3 Delete Operation
 
@@ -721,40 +731,43 @@ Because all matching policies apply, a transfer of 15000 USDC requires both the 
 {
   "version": "1",
   "type": "MpasApplicationPolicy",
+  "policyProfileUrl": "https://oma3.org/specs/mpas/policy-json/v1",
   "applicationDid": "did:web:storage.example",
   "executionProfile": {
     "id": "did:web:profiles.oma3.org:mcp",
     "format": "mcp.toolsCall"
   },
   "signerGroups": {
-    "admins": {
-      "members": [
-        "did:web:alice.example",
-        "did:web:bob.example",
-        "did:web:carol.example"
-      ]
-    }
+    "all": [
+      "did:web:alice.example",
+      "did:web:bob.example",
+      "did:web:carol.example"
+    ],
+    "admins": [
+      "did:web:alice.example",
+      "did:web:bob.example",
+      "did:web:carol.example"
+    ]
+  },
+  "defaultRequirement": {
+    "type": "threshold",
+    "threshold": 1,
+    "eligibleSignerGroup": "admins",
+    "decision": "approve"
   },
   "policies": {
-    "delete-object": {
-      "description": "Deleting objects requires two admin approvals.",
-      "match": {
-        "conditions": [
-          {
-            "source": "executionPayload",
-            "path": "/name",
-            "op": "eq",
-            "value": "storage.delete_object"
-          }
-        ]
-      },
-      "requirements": {
-        "type": "threshold",
-        "threshold": 2,
-        "eligibleSignerGroup": "admins",
-        "decision": "approve"
+    "storage.delete_object": [
+      {
+        "description": "Deleting objects requires two admin approvals.",
+        "match": {},
+        "requirements": {
+          "type": "threshold",
+          "threshold": 2,
+          "eligibleSignerGroup": "admins",
+          "decision": "approve"
+        }
       }
-    }
+    ]
   }
 }
 ```
@@ -765,79 +778,84 @@ Because all matching policies apply, a transfer of 15000 USDC requires both the 
 {
   "version": "1",
   "type": "MpasApplicationPolicy",
+  "policyProfileUrl": "https://oma3.org/specs/mpas/policy-json/v1",
   "applicationDid": "did:web:github-adapter.example",
   "executionProfile": {
     "id": "did:web:profiles.oma3.org:mcp",
     "format": "mcp.toolsCall"
   },
   "signerGroups": {
-    "maintainers": {
-      "members": [
-        "did:web:maintainer1.example",
-        "did:web:maintainer2.example",
-        "did:web:maintainer3.example"
-      ]
-    },
-    "securityReviewers": {
-      "members": [
-        "did:web:security1.example"
-      ]
-    }
+    "all": [
+      "did:web:maintainer1.example",
+      "did:web:maintainer2.example",
+      "did:web:maintainer3.example",
+      "did:web:security1.example",
+      "did:web:agent.example"
+    ],
+    "proposers": [
+      "did:web:agent.example"
+    ],
+    "maintainers": [
+      "did:web:maintainer1.example",
+      "did:web:maintainer2.example",
+      "did:web:maintainer3.example"
+    ],
+    "securityReviewers": [
+      "did:web:security1.example"
+    ]
+  },
+  "defaultRequirement": {
+    "type": "threshold",
+    "threshold": 1,
+    "eligibleSignerGroup": "maintainers",
+    "decision": "approve"
   },
   "policies": {
-    "merge-to-main": {
-      "match": {
-        "conditions": [
-          {
-            "source": "executionPayload",
-            "path": "/name",
-            "op": "eq",
-            "value": "merge_pull_request"
-          },
-          {
-            "source": "executionPayload",
-            "path": "/arguments/baseRef",
-            "op": "eq",
-            "value": "main"
-          }
-        ]
+    "merge_pull_request": [
+      {
+        "description": "Merging into main requires two maintainer approvals.",
+        "match": {
+          "conditions": [
+            {
+              "source": "executionPayload",
+              "path": "/arguments/baseRef",
+              "op": "eq",
+              "value": "main"
+            }
+          ]
+        },
+        "requirements": {
+          "type": "threshold",
+          "threshold": 2,
+          "eligibleSignerGroup": "maintainers",
+          "decision": "approve"
+        }
       },
-      "requirements": {
-        "type": "threshold",
-        "threshold": 2,
-        "eligibleSignerGroup": "maintainers",
-        "decision": "approve"
+      {
+        "description": "Security-labeled PRs also require a security reviewer.",
+        "match": {
+          "conditions": [
+            {
+              "source": "executionPayload",
+              "path": "/arguments/labels",
+              "op": "contains",
+              "value": "security"
+            }
+          ]
+        },
+        "requirements": {
+          "type": "threshold",
+          "threshold": 1,
+          "eligibleSignerGroup": "securityReviewers",
+          "decision": "approve"
+        }
       }
-    },
-    "security-labeled-pr": {
-      "match": {
-        "conditions": [
-          {
-            "source": "executionPayload",
-            "path": "/name",
-            "op": "eq",
-            "value": "merge_pull_request"
-          },
-          {
-            "source": "executionPayload",
-            "path": "/arguments/labels",
-            "op": "contains",
-            "value": "security"
-          }
-        ]
-      },
-      "requirements": {
-        "type": "threshold",
-        "threshold": 1,
-        "eligibleSignerGroup": "securityReviewers",
-        "decision": "approve"
-      }
-    }
+    ]
   }
 }
 ```
 
-Note: The `security-labeled-pr` example assumes the Verifier validates `arguments.labels` against trusted application state. A Proposer-supplied label MUST NOT be trusted to weaken policy.
+Note: The security-labeled-pr entry assumes the Verifier validates `arguments.labels` against trusted application state. A Proposer-supplied label MUST NOT be trusted to weaken policy.
 
 ## 9. Security and Conformance Requirements
 
@@ -851,7 +869,7 @@ The Execution Payload contains proposer-supplied executable facts. Policies may 
 
 ### 9.3 Operation Support and Payload Validation
 
-The absence of a matching policy means no additional approvals are required only after payload support and validity are independently established under the declared execution profile. A Verifier MUST NOT execute arbitrary unknown actions because they fail to match a high-risk policy.
+The absence of a matching policy entry means `defaultRequirement` applies — this does not mean the action is unrestricted. A Verifier MUST NOT execute arbitrary unknown actions solely because no policy entry exists for them.
 
 ### 9.4 Missing and Malformed Parameters
 
@@ -874,11 +892,12 @@ A Verifier MUST reevaluate current policy when a completed Action Package is sub
 A Verifier conforming to this profile MUST:
 
 - parse and validate `MpasApplicationPolicy` objects with `version: "1"`;
+- reject policies that omit required fields (`defaultRequirement`, `signerGroups`, `signerGroups.all`);
 - reject or ignore unsupported policy versions according to deployment policy;
 - ensure `applicationDid` matches the Action Envelope target Application DID and `executionProfile.id` matches the Action Envelope execution profile;
-- evaluate all matching policies;
+- evaluate all matching entries within the policy array for the requested action;
 - combine matching positive requirements with logical AND;
-- apply `defaultRequirement` only after operation support and payload validity are established;
+- apply `defaultRequirement` for governed operations with no matching policy entry;
 - support the condition operators defined in Section 5.4;
 - support the requirement types defined in Section 5.5;
 - verify Approvals before counting them;
@@ -1023,7 +1042,7 @@ This appendix defines a JSON Schema for structural validation of `MpasApplicatio
   "$id": "https://specs.mpas.dev/schemas/mpas-application-policy-v1.schema.json",
   "title": "MpasApplicationPolicy",
   "type": "object",
-  "required": ["version", "type", "applicationDid", "executionProfile"],
+  "required": ["version", "type", "policyProfileUrl", "applicationDid", "executionProfile", "defaultRequirement", "signerGroups"],
   "additionalProperties": false,
   "properties": {
     "version": {
@@ -1031,6 +1050,9 @@ This appendix defines a JSON Schema for structural validation of `MpasApplicatio
     },
     "type": {
       "const": "MpasApplicationPolicy"
+    },
+    "policyProfileUrl": {
+      "const": "https://oma3.org/specs/mpas/policy-json/v1"
     },
     "applicationDid": {
       "type": "string",
@@ -1056,14 +1078,23 @@ This appendix defines a JSON Schema for structural validation of `MpasApplicatio
     },
     "signerGroups": {
       "type": "object",
+      "required": ["all"],
       "additionalProperties": {
-        "$ref": "#/$defs/signerGroup"
+        "type": "array",
+        "items": {
+          "type": "string",
+          "minLength": 1
+        },
+        "uniqueItems": true
       }
     },
     "policies": {
       "type": "object",
       "additionalProperties": {
-        "$ref": "#/$defs/policy"
+        "type": "array",
+        "items": {
+          "$ref": "#/$defs/policy"
+        }
       }
     },
     "context": {
@@ -1072,28 +1103,6 @@ This appendix defines a JSON Schema for structural validation of `MpasApplicatio
     }
   },
   "$defs": {
-    "signerGroup": {
-      "type": "object",
-      "required": ["members"],
-      "additionalProperties": false,
-      "properties": {
-        "members": {
-          "type": "array",
-          "items": {
-            "type": "string",
-            "minLength": 1
-          },
-          "uniqueItems": true
-        },
-        "description": {
-          "type": "string"
-        },
-        "context": {
-          "type": "object",
-          "additionalProperties": true
-        }
-      }
-    },
     "policy": {
       "type": "object",
       "required": ["requirements"],

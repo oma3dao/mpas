@@ -15,9 +15,17 @@ interface KeyFixture {
 }
 
 interface DeploymentConfig {
-  resourceRestrictions: PolicyConfig["resourceRestrictions"];
-  policy: Pick<PolicyConfig, "defaultPolicy" | "rules">;
-  trustedSigners: Array<{ did: Did; roles: string[] }>;
+  resourceRestrictions?: PolicyConfig["resourceRestrictions"];
+  policy: {
+    defaultRequirement: PolicyConfig["defaultRequirement"];
+    signerGroups: Record<string, Did[]>;
+    policies?: Record<string, Array<{
+      description?: string;
+      match?: { conditions?: Array<{ source: string; path: string; op: string; value?: unknown }> };
+      requirements: PolicyConfig["defaultRequirement"];
+    }>>;
+  };
+  signerKeys: Array<{ did: Did; label?: string; publicJwk: unknown }>;
 }
 
 async function readJson<T>(path: string): Promise<T> {
@@ -30,26 +38,20 @@ async function trustedSigners(): Promise<TrustedSigner[]> {
   const maintainerB = await readJson<KeyFixture>(join(fixturesDir, "test-keys", "maintainer-b.json"));
 
   return [
-    { did: proposer.did, roles: ["proposer"], publicJwk: proposer.publicJwk },
-    { did: maintainerA.did, roles: ["maintainer"], publicJwk: maintainerA.publicJwk },
-    { did: maintainerB.did, roles: ["maintainer"], publicJwk: maintainerB.publicJwk },
+    { did: proposer.did, publicJwk: proposer.publicJwk },
+    { did: maintainerA.did, publicJwk: maintainerA.publicJwk },
+    { did: maintainerB.did, publicJwk: maintainerB.publicJwk },
   ];
 }
 
 async function policyFromConfig(file: string): Promise<PolicyConfig> {
   const config = await readJson<DeploymentConfig>(join(fixturesDir, "configs", file));
-  const eligibleSignersByRole: Record<string, Did[]> = {};
-  for (const signer of config.trustedSigners) {
-    for (const role of signer.roles) {
-      eligibleSignersByRole[role] ??= [];
-      eligibleSignersByRole[role].push(signer.did);
-    }
-  }
 
   return {
-    ...config.policy,
+    defaultRequirement: config.policy.defaultRequirement,
+    policies: config.policy.policies as PolicyConfig["policies"],
     resourceRestrictions: config.resourceRestrictions,
-    eligibleSignersByRole,
+    signerGroups: config.policy.signerGroups,
   };
 }
 
@@ -88,7 +90,7 @@ describe("buildAuthorizationRequirements", () => {
         anyOf: [
           {
             type: "threshold",
-            threshold: 1,
+            threshold: 2,
             decision: "approve",
           },
         ],

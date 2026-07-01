@@ -26,18 +26,18 @@ async function trustedSigners(): Promise<TrustedSigner[]> {
   const maintainerB = await readJson<KeyFixture>(join(fixturesDir, "test-keys", "maintainer-b.json"));
 
   return [
-    { did: proposer.did, roles: ["proposer"], publicJwk: proposer.publicJwk },
-    { did: maintainerA.did, roles: ["maintainer"], publicJwk: maintainerA.publicJwk },
-    { did: maintainerB.did, roles: ["maintainer"], publicJwk: maintainerB.publicJwk },
+    { did: proposer.did, publicJwk: proposer.publicJwk },
+    { did: maintainerA.did, publicJwk: maintainerA.publicJwk },
+    { did: maintainerB.did, publicJwk: maintainerB.publicJwk },
   ];
 }
 
 describe("verifyApprovalBundle", () => {
   it.each([
-    ["valid-no-approval-required.json", ["proposer"]],
-    ["valid-two-approvals.json", ["proposer", "maintainer", "maintainer"]],
-    ["valid-delete-branch.json", ["proposer", "maintainer"]],
-  ])("verifies %s", async (fixtureFile, expectedRoles) => {
+    ["valid-no-approval-required.json", 1],
+    ["valid-two-approvals.json", 3],
+    ["valid-delete-branch.json", 2],
+  ])("verifies %s", async (fixtureFile, expectedCount) => {
     const actionPackage = await readActionPackage(fixtureFile);
     const result = await verifyApprovalBundle(
       actionPackage.approvalBundle,
@@ -47,7 +47,7 @@ describe("verifyApprovalBundle", () => {
 
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.verifiedApprovals.approvals.flatMap((approval) => approval.roles)).toEqual(expectedRoles);
+      expect(result.verifiedApprovals.approvals).toHaveLength(expectedCount);
     }
   });
 
@@ -106,7 +106,9 @@ describe("verifyApprovalBundle", () => {
 
   it("rejects an approval from an untrusted signer", async () => {
     const actionPackage = await readActionPackage("valid-two-approvals.json");
-    const onlyProposer = (await trustedSigners()).filter((signer) => signer.roles.includes("proposer"));
+    const allSigners = await trustedSigners();
+    // Only keep the proposer key — maintainers are untrusted
+    const onlyProposer = allSigners.slice(0, 1);
     const result = await verifyApprovalBundle(actionPackage.approvalBundle, computeJsonHash(actionPackage.actionEnvelope), onlyProposer);
 
     expect(result).toMatchObject({

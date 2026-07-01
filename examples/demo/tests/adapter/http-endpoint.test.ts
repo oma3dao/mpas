@@ -34,8 +34,11 @@ async function credentialDir() {
   return dir;
 }
 
-async function makeApp(configDir = join(fixturesDir, "configs")) {
-  const configs = await loadDeploymentConfigs(configDir);
+async function makeApp(configDir?: string) {
+  // Default to only the auto-approve config to avoid strict overriding it (both
+  // target the same application DID, so the last loaded wins).
+  const effectiveConfigDir = configDir ?? join(fixturesDir, "configs");
+  const configs = await loadDeploymentConfigs(effectiveConfigDir);
   if (!configs.ok) {
     throw new Error(configs.error.message);
   }
@@ -53,6 +56,18 @@ async function makeApp(configDir = join(fixturesDir, "configs")) {
   return app;
 }
 
+/** Create a config dir with only the auto-approve config (for basic execution tests). */
+async function makeAutoApproveConfigDir() {
+  const dir = await mkdtemp(join(tmpdir(), "mpas-http-configs-auto-"));
+  const config = await readJson<Record<string, unknown>>(join(fixturesDir, "configs", "github-auto-approve.json"));
+  config.plugin = {
+    ...(config.plugin as Record<string, unknown>),
+    path: join(fixturesDir, "plugins", "github-repo.json"),
+  };
+  await writeFile(join(dir, "github-auto-approve.json"), `${JSON.stringify(config, null, 2)}\n`);
+  return dir;
+}
+
 /** POST a fixture Action Package wrapped in an ActionRequest to /mpas/v1/action. */
 async function submitFixture(app: FastifyInstance, fixtureFile: string) {
   const actionPackage = JSON.parse(await readFile(join(fixturesDir, "core", fixtureFile), "utf8")) as unknown;
@@ -66,7 +81,7 @@ async function submitFixture(app: FastifyInstance, fixtureFile: string) {
 
 async function makeTargetConfigDir(server: string, timeoutMs: number) {
   const dir = await mkdtemp(join(tmpdir(), "mpas-http-configs-"));
-  const config = await readJson<Record<string, unknown>>(join(fixturesDir, "configs", "github-strict.json"));
+  const config = await readJson<Record<string, unknown>>(join(fixturesDir, "configs", "github-auto-approve.json"));
   config.plugin = {
     ...(config.plugin as Record<string, unknown>),
     path: join(fixturesDir, "plugins", "github-repo.json"),
@@ -108,7 +123,7 @@ describe("HTTP endpoint", () => {
   });
 
   it("executes valid-no-approval-required.json and returns an ActionResponse with a receipt", async () => {
-    const app = await makeApp();
+    const app = await makeApp(await makeAutoApproveConfigDir());
     const response = await submitFixture(app, "valid-no-approval-required.json");
 
     expect(response.statusCode).toBe(200);
@@ -123,7 +138,7 @@ describe("HTTP endpoint", () => {
   });
 
   it("rejects a second submission of a resolved actionId as replay", async () => {
-    const app = await makeApp();
+    const app = await makeApp(await makeAutoApproveConfigDir());
     const first = await submitFixture(app, "valid-no-approval-required.json");
     expect(first.json()).toMatchObject({ result: "executed" });
 

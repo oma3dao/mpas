@@ -8,7 +8,7 @@
   "plugin": {
     "pluginDid": "did:web:plugins.example.com:github-repo",
     "pluginVersion": "1.0.0",
-    "artifactDid": "did:artifact:bafkreibnoteoczwrweh75o3tkk2kiuxrdd3xfh7truizydelxtytun3x5i",
+    "artifactDid": "did:artifact:bafkreibcvcjsvedldqxe4o5ytb5hcbgf7yels6lszi2imeawo2qxlwd56q",
     "path": "../plugins/github-repo.json"
   },
   "credentialBindings": [
@@ -36,15 +36,36 @@
     }
   },
   "policy": {
-    "defaultPolicy": "allow",
-    "rules": []
+    "version": "1",
+    "type": "MpasApplicationPolicy",
+    "policyProfileUrl": "https://oma3.org/specs/mpas/policy-json/v1",
+    "applicationDid": "did:web:github.example",
+    "executionProfile": {
+      "id": "did:web:profiles.oma3.org:mcp",
+      "format": "mcp.toolsCall"
+    },
+    "defaultRequirement": {
+      "type": "proposerOnly"
+    },
+    "signerGroups": {
+      "all": [
+        "did:key:z6MkpPanM5XyyGcp6HAwJSm7SmWmmb4MpfmBfgRSq4t7GokV",
+        "did:key:z6MkvnsFe1agZ33u5c9JuDkRxKRqupn3qbmPd2cjZ5rmerJi",
+        "did:key:z6MkujMqQsmtUpjtAAJQw6z8CDMh9GDdh6gmWogYwYqxAFV8"
+      ],
+      "proposers": [
+        "did:key:z6MkpPanM5XyyGcp6HAwJSm7SmWmmb4MpfmBfgRSq4t7GokV"
+      ],
+      "maintainers": [
+        "did:key:z6MkvnsFe1agZ33u5c9JuDkRxKRqupn3qbmPd2cjZ5rmerJi",
+        "did:key:z6MkujMqQsmtUpjtAAJQw6z8CDMh9GDdh6gmWogYwYqxAFV8"
+      ]
+    },
+    "policies": {}
   },
-  "trustedSigners": [
+  "signerKeys": [
     {
       "did": "did:key:z6MkpPanM5XyyGcp6HAwJSm7SmWmmb4MpfmBfgRSq4t7GokV",
-      "roles": [
-        "proposer"
-      ],
       "label": "Proposer Agent",
       "publicJwk": {
         "crv": "Ed25519",
@@ -57,9 +78,6 @@
     },
     {
       "did": "did:key:z6MkvnsFe1agZ33u5c9JuDkRxKRqupn3qbmPd2cjZ5rmerJi",
-      "roles": [
-        "maintainer"
-      ],
       "label": "Maintainer A",
       "publicJwk": {
         "crv": "Ed25519",
@@ -72,9 +90,6 @@
     },
     {
       "did": "did:key:z6MkujMqQsmtUpjtAAJQw6z8CDMh9GDdh6gmWogYwYqxAFV8",
-      "roles": [
-        "maintainer"
-      ],
       "label": "Maintainer B",
       "publicJwk": {
         "crv": "Ed25519",

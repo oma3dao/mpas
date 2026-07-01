@@ -388,10 +388,10 @@ const githubPlugin = {
       description: "GitHub OAuth token with repository access for configured repositories.",
     },
   ],
-  operations: [
-    {
-      name: "create_issue",
+  operations: {
+    create_issue: {
       description: "Create a new issue in a repository.",
+      impact: "low",
       executionPayloadSchema: {
         type: "object",
         required: ["name", "arguments"],
@@ -416,9 +416,9 @@ const githubPlugin = {
         additionalProperties: false,
       },
     },
-    {
-      name: "merge_pull_request",
+    merge_pull_request: {
       description: "Merge a pull request into its base branch.",
+      impact: "high",
       executionPayloadSchema: {
         type: "object",
         required: ["name", "arguments"],
@@ -441,9 +441,9 @@ const githubPlugin = {
         additionalProperties: false,
       },
     },
-    {
-      name: "delete_branch",
+    delete_branch: {
       description: "Delete a branch from a repository.",
+      impact: "high",
       executionPayloadSchema: {
         type: "object",
         required: ["name", "arguments"],
@@ -463,66 +463,57 @@ const githubPlugin = {
         additionalProperties: false,
       },
     },
-  ],
-  policySuggestions: [
-    {
-      description: "Merging into main is high impact and should require maintainer approval.",
-      impact: "high",
-      match: {
-        conditions: [
-          { source: "executionPayload", path: "/name", op: "eq", value: "merge_pull_request" },
-          { source: "executionPayload", path: "/arguments/baseRef", op: "eq", value: "main" },
-        ],
-      },
-      suggestedRequirement: {
-        kind: "approvalThreshold",
-        eligibleSignerRole: "maintainer",
-        minimumThreshold: 2,
-        decision: "approve",
-      },
-    },
-    {
-      description: "Deleting any branch is destructive and should require maintainer approval.",
-      impact: "medium",
-      match: {
-        conditions: [{ source: "executionPayload", path: "/name", op: "eq", value: "delete_branch" }],
-      },
-      suggestedRequirement: {
-        kind: "approvalThreshold",
-        eligibleSignerRole: "maintainer",
-        minimumThreshold: 1,
-        decision: "approve",
-      },
-    },
-  ],
+  },
 };
 
 const pluginArtifactDid = await computeArtifactDid(githubPlugin);
 
-function trustedSigners() {
+function signerKeys() {
   return [
     {
       did: keys.proposer.did,
-      roles: ["proposer"],
       label: "Proposer Agent",
       publicJwk: keys.proposer.publicJwk,
     },
     {
       did: keys.maintainerA.did,
-      roles: ["maintainer"],
       label: "Maintainer A",
       publicJwk: keys.maintainerA.publicJwk,
     },
     {
       did: keys.maintainerB.did,
-      roles: ["maintainer"],
       label: "Maintainer B",
       publicJwk: keys.maintainerB.publicJwk,
     },
   ];
 }
 
-function baseDeploymentConfig(name: string, policy: Record<string, unknown>) {
+function makePolicy(overrides: { defaultRequirement?: Record<string, unknown>; policies?: Record<string, unknown[]> } = {}) {
+  return {
+    version: "1",
+    type: "MpasApplicationPolicy",
+    policyProfileUrl: "https://oma3.org/specs/mpas/policy-json/v1",
+    applicationDid: githubPlugin.applicationDid,
+    executionProfile: {
+      id: "did:web:profiles.oma3.org:mcp",
+      format: "mcp.toolsCall",
+    },
+    defaultRequirement: overrides.defaultRequirement ?? {
+      type: "threshold",
+      threshold: 1,
+      eligibleSignerGroup: "maintainers",
+      decision: "approve",
+    },
+    signerGroups: {
+      all: [keys.proposer.did, keys.maintainerA.did, keys.maintainerB.did],
+      proposers: [keys.proposer.did],
+      maintainers: [keys.maintainerA.did, keys.maintainerB.did],
+    },
+    policies: overrides.policies ?? {},
+  };
+}
+
+function baseDeploymentConfig(name: string, policy: ReturnType<typeof makePolicy>) {
   return {
     version: "1",
     type: "MpasAdapterDeploymentConfig",
@@ -555,52 +546,48 @@ function baseDeploymentConfig(name: string, policy: Record<string, unknown>) {
       },
     },
     policy,
-    trustedSigners: trustedSigners(),
+    signerKeys: signerKeys(),
   };
 }
 
 const configs = {
   "github-auto-approve.json": baseDeploymentConfig(
     "github-auto-approve",
-    {
-      defaultPolicy: "allow",
-      rules: [],
-    },
+    makePolicy({ defaultRequirement: { type: "proposerOnly" } }),
   ),
   "github-strict.json": baseDeploymentConfig(
     "github-strict",
-    {
-      defaultPolicy: "allow",
-      rules: [
-        {
-          description: "All merges into main require one maintainer approval.",
-          match: {
-            conditions: [
-              { source: "executionPayload", path: "/name", op: "eq", value: "merge_pull_request" },
-              { source: "executionPayload", path: "/arguments/baseRef", op: "eq", value: "main" },
-            ],
+    makePolicy({
+      policies: {
+        merge_pull_request: [
+          {
+            description: "Merging into main requires two maintainer approvals.",
+            match: {
+              conditions: [
+                { source: "executionPayload", path: "/arguments/baseRef", op: "eq", value: "main" },
+              ],
+            },
+            requirements: {
+              type: "threshold",
+              threshold: 2,
+              eligibleSignerGroup: "maintainers",
+              decision: "approve",
+            },
           },
-          requirements: {
-            type: "threshold",
-            threshold: 1,
-            eligibleSignerGroup: "maintainer",
-            decision: "approve",
+        ],
+        delete_branch: [
+          {
+            description: "Deleting a branch requires one maintainer approval.",
+            requirements: {
+              type: "threshold",
+              threshold: 1,
+              eligibleSignerGroup: "maintainers",
+              decision: "approve",
+            },
           },
-        },
-        {
-          description: "Deleting a branch requires one maintainer approval.",
-          match: {
-            conditions: [{ source: "executionPayload", path: "/name", op: "eq", value: "delete_branch" }],
-          },
-          requirements: {
-            type: "threshold",
-            threshold: 1,
-            eligibleSignerGroup: "maintainer",
-            decision: "approve",
-          },
-        },
-      ],
-    },
+        ],
+      },
+    }),
   ),
 };
 

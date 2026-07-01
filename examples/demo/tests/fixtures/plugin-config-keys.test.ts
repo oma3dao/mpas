@@ -22,11 +22,11 @@ interface MpasApplicationPlugin {
     format?: string;
   };
   credentialRequirements?: unknown[];
-  operations: Array<{
-    name: string;
+  operations: Record<string, {
+    description?: string;
+    impact?: string;
     executionPayloadSchema: Record<string, unknown>;
   }>;
-  policySuggestions?: unknown[];
 }
 
 interface DeploymentConfig {
@@ -40,9 +40,14 @@ interface DeploymentConfig {
     artifactDid: string;
     path: string;
   };
-  trustedSigners: Array<{
+  policy: {
+    signerGroups: Record<string, string[]>;
+    policies?: Record<string, unknown[]>;
+    defaultRequirement: unknown;
+  };
+  signerKeys: Array<{
     did: string;
-    role: string;
+    label?: string;
     publicJwk: JWK;
   }>;
 }
@@ -98,39 +103,15 @@ const applicationPluginSchema = {
       },
     },
     operations: {
-      type: "array",
-      minItems: 1,
-      items: {
+      type: "object",
+      minProperties: 1,
+      additionalProperties: {
         type: "object",
-        required: ["name", "executionPayloadSchema"],
-        properties: {
-          name: { type: "string", minLength: 1 },
-          description: { type: "string" },
-          executionPayloadSchema: { type: "object" },
-        },
-        additionalProperties: false,
-      },
-    },
-    policySuggestions: {
-      type: "array",
-      items: {
-        type: "object",
-        required: ["match"],
+        required: ["executionPayloadSchema"],
         properties: {
           description: { type: "string" },
           impact: { type: "string" },
-          match: { type: "object" },
-          suggestedRequirement: {
-            type: "object",
-            required: ["kind"],
-            properties: {
-              kind: { type: "string" },
-              eligibleSignerRole: { type: "string" },
-              minimumThreshold: { type: "integer", minimum: 1 },
-              decision: { type: "string" },
-            },
-            additionalProperties: false,
-          },
+          executionPayloadSchema: { type: "object" },
         },
         additionalProperties: false,
       },
@@ -150,21 +131,19 @@ describe("plugin, config, and key fixtures", () => {
     const validate = ajv.compile(applicationPluginSchema);
 
     expect(validate(plugin), JSON.stringify(validate.errors, null, 2)).toBe(true);
-    expect(Array.isArray(plugin.operations)).toBe(true);
-    expect(plugin.operations.map((operation) => operation.name)).toEqual([
+    expect(typeof plugin.operations).toBe("object");
+    expect(Object.keys(plugin.operations)).toEqual([
       "create_issue",
       "merge_pull_request",
       "delete_branch",
     ]);
     expect(JSON.stringify(plugin)).not.toContain("nativeBinding");
+    expect(JSON.stringify(plugin)).not.toContain("policySuggestions");
     expect(plugin.credentialRequirements).toBeDefined();
   });
 
   it("valid Action Package payloads validate against plugin operation schemas", async () => {
     const plugin = await readJson<MpasApplicationPlugin>(join(fixturesDir, "plugins", "github-repo.json"));
-    const operationSchemas = new Map(
-      plugin.operations.map((operation) => [operation.name, operation.executionPayloadSchema]),
-    );
     const ajv = new Ajv2020({ strict: false });
 
     for (const file of [
@@ -174,10 +153,10 @@ describe("plugin, config, and key fixtures", () => {
     ]) {
       const actionPackage = await readJson<ActionPackage>(join(fixturesDir, "core", file));
       const payload = actionPackage.executionPayload as { name: string };
-      const schema = operationSchemas.get(payload.name);
+      const operation = plugin.operations[payload.name];
 
-      expect(schema, `missing schema for ${payload.name}`).toBeDefined();
-      expect(ajv.validate(schema!, actionPackage.executionPayload), JSON.stringify(ajv.errors, null, 2)).toBe(true);
+      expect(operation, `missing operation for ${payload.name}`).toBeDefined();
+      expect(ajv.validate(operation.executionPayloadSchema, actionPackage.executionPayload), JSON.stringify(ajv.errors, null, 2)).toBe(true);
     }
   });
 
@@ -193,6 +172,33 @@ describe("plugin, config, and key fixtures", () => {
       expect(config.plugin.pluginVersion).toBe(plugin.pluginVersion);
       expect(config.plugin.artifactDid).toBe(expectedArtifactDid);
       expect(config.plugin.path).toBe("../plugins/github-repo.json");
+    }
+  });
+
+  it("deployment configs have signerKeys with DID and publicJwk (no roles)", async () => {
+    for (const file of ["github-auto-approve.json", "github-strict.json"]) {
+      const config = await readJson<DeploymentConfig>(join(fixturesDir, "configs", file));
+
+      expect(config.signerKeys).toBeDefined();
+      expect(config.signerKeys.length).toBeGreaterThan(0);
+      for (const key of config.signerKeys) {
+        expect(key.did).toMatch(/^did:/);
+        expect(key.publicJwk).toBeDefined();
+        expect((key as Record<string, unknown>).roles).toBeUndefined();
+      }
+    }
+  });
+
+  it("deployment configs embed a full MpasApplicationPolicy in the policy field", async () => {
+    for (const file of ["github-auto-approve.json", "github-strict.json"]) {
+      const config = await readJson<DeploymentConfig>(join(fixturesDir, "configs", file));
+
+      expect(config.policy.signerGroups).toBeDefined();
+      expect(config.policy.signerGroups.all).toBeDefined();
+      expect(config.policy.defaultRequirement).toBeDefined();
+      // No legacy rules array
+      expect((config.policy as Record<string, unknown>).rules).toBeUndefined();
+      expect((config.policy as Record<string, unknown>).defaultPolicy).toBeUndefined();
     }
   });
 

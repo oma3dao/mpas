@@ -9,9 +9,44 @@ import { base32 } from "multiformats/bases/base32";
 import { loadPlugin, type MpasApplicationPlugin } from "../core/plugin-loader.js";
 import type { Did } from "../core/types.js";
 import type { PolicyConfig } from "../core/policy-engine.js";
-import type { TrustedSigner } from "../core/verification.js";
 import type { McpHttpTarget } from "./dispatch/mcp-http.js";
 import type { McpStdioTarget } from "./dispatch/mcp-stdio.js";
+import { canTrust, type TrustContext, type TrustVerdict } from "./trust.js";
+import { promptOperator, displayTrusted, promptNetworkUnavailable } from "./trust-prompt.js";
+
+import type { JWK } from "jose";
+
+export interface SignerKey {
+  did: Did;
+  label?: string;
+  publicJwk: JWK;
+}
+
+export interface MpasApplicationPolicy {
+  version: "1";
+  type: "MpasApplicationPolicy";
+  policyProfileUrl: string;
+  applicationDid: Did;
+  executionProfile: {
+    id: Did;
+    format?: string;
+  };
+  defaultRequirement: PolicyConfig["defaultRequirement"];
+  signerGroups: Record<string, Did[]>;
+  policies?: Record<string, Array<{
+    description?: string;
+    match?: {
+      conditions?: Array<{
+        source: string;
+        path: string;
+        op: string;
+        value?: unknown;
+      }>;
+    };
+    requirements: PolicyConfig["defaultRequirement"];
+  }>>;
+  context?: unknown;
+}
 
 export interface DeploymentConfig {
   version: "1";
@@ -32,8 +67,8 @@ export interface DeploymentConfig {
   }>;
   resourceRestrictions?: PolicyConfig["resourceRestrictions"];
   executionTarget: McpStdioTarget | McpHttpTarget;
-  policy: Pick<PolicyConfig, "defaultPolicy" | "rules">;
-  trustedSigners: TrustedSigner[];
+  policy: MpasApplicationPolicy;
+  signerKeys: SignerKey[];
 }
 
 export interface LoadedDeploymentConfig {
@@ -50,7 +85,8 @@ export interface DeploymentConfigLoadError {
     | "CONFIG_SCHEMA_INVALID"
     | "PLUGIN_LOAD_FAILED"
     | "PLUGIN_REFERENCE_MISMATCH"
-    | "PLUGIN_HASH_MISMATCH";
+    | "PLUGIN_HASH_MISMATCH"
+    | "PLUGIN_TRUST_REJECTED";
   message: string;
   path: string;
   details?: unknown;
@@ -78,7 +114,7 @@ const deploymentConfigSchema = {
     "credentialBindings",
     "executionTarget",
     "policy",
-    "trustedSigners",
+    "signerKeys",
   ],
   properties: {
     version: { const: "1" },
@@ -118,15 +154,32 @@ const deploymentConfigSchema = {
     },
     resourceRestrictions: { type: "object" },
     executionTarget: { type: "object", required: ["type"] },
-    policy: { type: "object", required: ["defaultPolicy", "rules"] },
-    trustedSigners: {
+    policy: {
+      type: "object",
+      required: ["version", "type", "applicationDid", "executionProfile", "defaultRequirement", "signerGroups"],
+      properties: {
+        version: { const: "1" },
+        type: { const: "MpasApplicationPolicy" },
+        policyProfileUrl: { type: "string" },
+        applicationDid: { type: "string", pattern: "^did:[a-z0-9]+:.+" },
+        executionProfile: { type: "object", required: ["id"] },
+        defaultRequirement: { type: "object", required: ["type"] },
+        signerGroups: {
+          type: "object",
+          required: ["all"],
+          additionalProperties: { type: "array", items: { type: "string", pattern: "^did:[a-z0-9]+:.+" } },
+        },
+        policies: { type: "object" },
+        context: {},
+      },
+    },
+    signerKeys: {
       type: "array",
       items: {
         type: "object",
-        required: ["did", "roles", "publicJwk"],
+        required: ["did", "publicJwk"],
         properties: {
           did: { type: "string", pattern: "^did:[a-z0-9]+:.+" },
-          roles: { type: "array", items: { type: "string", minLength: 1 }, minItems: 1 },
           label: { type: "string" },
           publicJwk: { type: "object" },
         },
@@ -141,7 +194,7 @@ const deploymentConfigSchema = {
 const ajv = new Ajv2020({ strict: false });
 const validateDeploymentConfig = ajv.compile(deploymentConfigSchema);
 
-export async function loadDeploymentConfigs(configDir: string): Promise<LoadDeploymentConfigsResult> {
+export async function loadDeploymentConfigs(configDir: string, trustContext?: TrustContext | null): Promise<LoadDeploymentConfigsResult> {
   let entries: string[];
   try {
     entries = await readdir(configDir);
@@ -154,7 +207,7 @@ export async function loadDeploymentConfigs(configDir: string): Promise<LoadDepl
 
   for (const entry of entries.filter((file) => file.endsWith(".json")).sort()) {
     const filePath = join(configDir, entry);
-    const loaded = await loadDeploymentConfigFile(filePath, configDir);
+    const loaded = await loadDeploymentConfigFile(filePath, configDir, trustContext);
     if (!loaded.ok) {
       return loaded;
     }
@@ -173,6 +226,7 @@ export async function loadDeploymentConfigs(configDir: string): Promise<LoadDepl
 async function loadDeploymentConfigFile(
   filePath: string,
   configDir: string,
+  trustContext?: TrustContext | null,
 ): Promise<
   | {
       ok: true;
@@ -229,6 +283,30 @@ async function loadDeploymentConfigFile(
       filePath,
       { expected: config.plugin.artifactDid, actual: actualArtifactDid },
     );
+  }
+
+  // OMATrust: evaluate plugin trustworthiness after integrity is confirmed.
+  if (trustContext) {
+    let verdict: TrustVerdict;
+    try {
+      verdict = await canTrust(pluginResult.plugin, config, trustContext);
+    } catch {
+      // Network failure or SDK error — treat as untrusted, prompt operator.
+      const confirmed = await promptNetworkUnavailable(config);
+      if (!confirmed) {
+        return loadError("PLUGIN_TRUST_REJECTED", "Operator declined to load plugin (trust check unavailable).", filePath);
+      }
+      return { ok: true, config: { filePath, config, plugin: pluginResult.plugin } };
+    }
+
+    if (verdict.trusted) {
+      displayTrusted(config, verdict);
+    } else {
+      const confirmed = await promptOperator(verdict, config);
+      if (!confirmed) {
+        return loadError("PLUGIN_TRUST_REJECTED", "Operator declined to load untrusted plugin.", filePath);
+      }
+    }
   }
 
   return {

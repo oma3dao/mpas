@@ -31,14 +31,13 @@ export interface ValidationError {
 
 export interface TrustedSigner {
   did: Did;
-  roles: string[];
+  label?: string;
   publicJwk: JWK;
 }
 
 export interface VerifiedApproval {
   approval: Approval;
   signerDid: Did;
-  roles: string[];
   decision: Approval["decision"];
   createdAt: string;
 }
@@ -335,7 +334,6 @@ export async function verifyApprovalBundle(
     approvals.push({
       approval,
       signerDid: trustedSigner.did,
-      roles: trustedSigner.roles,
       decision: approval.decision,
       createdAt: approval.createdAt,
     });

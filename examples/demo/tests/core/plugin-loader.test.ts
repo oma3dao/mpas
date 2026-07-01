@@ -14,7 +14,7 @@ describe("loadPlugin", () => {
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.plugin.type).toBe("MpasApplicationPlugin");
-      expect(result.plugin.operations.map((operation) => operation.name)).toEqual([
+      expect(Object.keys(result.plugin.operations)).toEqual([
         "create_issue",
         "merge_pull_request",
         "delete_branch",

@@ -14,9 +14,19 @@ interface KeyFixture {
 }
 
 interface DeploymentConfig {
-  resourceRestrictions: PolicyConfig["resourceRestrictions"];
-  policy: Pick<PolicyConfig, "defaultPolicy" | "rules">;
-  trustedSigners: Array<{ did: Did; roles: string[] }>;
+  resourceRestrictions?: PolicyConfig["resourceRestrictions"];
+  policy: {
+    version: "1";
+    type: "MpasApplicationPolicy";
+    defaultRequirement: PolicyConfig["defaultRequirement"];
+    signerGroups: Record<string, Did[]>;
+    policies?: Record<string, Array<{
+      description?: string;
+      match?: { conditions?: Array<{ source: string; path: string; op: string; value?: unknown }> };
+      requirements: PolicyConfig["defaultRequirement"];
+    }>>;
+  };
+  signerKeys: Array<{ did: Did; label?: string; publicJwk: unknown }>;
 }
 
 async function readJson<T>(path: string): Promise<T> {
@@ -29,9 +39,9 @@ async function trustedSigners(): Promise<TrustedSigner[]> {
   const maintainerB = await readJson<KeyFixture>(join(fixturesDir, "test-keys", "maintainer-b.json"));
 
   return [
-    { did: proposer.did, roles: ["proposer"], publicJwk: proposer.publicJwk },
-    { did: maintainerA.did, roles: ["maintainer"], publicJwk: maintainerA.publicJwk },
-    { did: maintainerB.did, roles: ["maintainer"], publicJwk: maintainerB.publicJwk },
+    { did: proposer.did, publicJwk: proposer.publicJwk },
+    { did: maintainerA.did, publicJwk: maintainerA.publicJwk },
+    { did: maintainerB.did, publicJwk: maintainerB.publicJwk },
   ];
 }
 
@@ -54,18 +64,12 @@ async function verifiedFixture(file: string) {
 
 async function policyFromConfig(file: string): Promise<PolicyConfig> {
   const config = await readJson<DeploymentConfig>(join(fixturesDir, "configs", file));
-  const eligibleSignersByRole: Record<string, Did[]> = {};
-  for (const signer of config.trustedSigners) {
-    for (const role of signer.roles) {
-      eligibleSignersByRole[role] ??= [];
-      eligibleSignersByRole[role].push(signer.did);
-    }
-  }
 
   return {
-    ...config.policy,
+    defaultRequirement: config.policy.defaultRequirement,
+    policies: config.policy.policies as PolicyConfig["policies"],
     resourceRestrictions: config.resourceRestrictions,
-    eligibleSignersByRole,
+    signerGroups: config.policy.signerGroups,
   };
 }
 
@@ -86,9 +90,9 @@ describe("evaluatePolicy", () => {
       status: "additionalApprovalsRequired",
       unsatisfiedRules: [
         {
-          requiredRole: "maintainer",
+          requiredRole: "maintainers",
           requiredDecision: "approve",
-          threshold: 1,
+          threshold: 2,
           found: 0,
         },
       ],
@@ -107,8 +111,8 @@ describe("evaluatePolicy", () => {
     const { actionPackage, verifiedApprovals } = await verifiedFixture("invalid-disabled-operation.json");
 
     // With enabledOperations removed, the policy engine no longer rejects operations
-    // not in an allowlist. The auto-approve config has defaultPolicy: "allow" and no
-    // rules, so any operation passes through policy evaluation.
+    // not in an allowlist. The auto-approve config has proposerOnly default, so any
+    // operation passes through policy evaluation.
     expect(evaluatePolicy(actionPackage, verifiedApprovals, await policyFromConfig("github-auto-approve.json"))).toMatchObject({
       status: "satisfied",
     });
@@ -127,11 +131,10 @@ describe("evaluatePolicy", () => {
     const { actionPackage, verifiedApprovals } = await verifiedFixture("insufficient-approvals.json");
     const proposerDid = actionPackage.actionEnvelope.proposer.did;
 
-    // Inject a fake self-approval from the proposer with role "maintainer"
+    // Inject a fake self-approval from the proposer
     verifiedApprovals.approvals.push({
       approval: {} as never,
       signerDid: proposerDid,
-      roles: ["maintainer"],
       decision: "approve",
       createdAt: "2026-06-05T18:03:00.000Z",
     });
@@ -143,9 +146,9 @@ describe("evaluatePolicy", () => {
       status: "additionalApprovalsRequired",
       unsatisfiedRules: [
         {
-          requiredRole: "maintainer",
+          requiredRole: "maintainers",
           requiredDecision: "approve",
-          threshold: 1,
+          threshold: 2,
           found: 0,
         },
       ],

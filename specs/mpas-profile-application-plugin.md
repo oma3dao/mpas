@@ -4,7 +4,7 @@
 **Companion to:** MPAS Core Specification, MPAS HTTP Profile, and MPAS JSON Verifier Policy Profile  
 **Suggested filename:** `mpas-profile-application-plugin.md`  
 **Primary object:** `MpasApplicationPlugin`  
-**Scope:** A portable JSON descriptor for an application's MPAS-exposed command surface, including profile-native Execution Payload schemas, credential requirement classes, and policy suggestions.
+**Scope:** A portable JSON descriptor for an application's MPAS-exposed command surface, including profile-native Execution Payload schemas and credential requirement classes.
 
 The key words **MUST**, **MUST NOT**, **REQUIRED**, **SHOULD**, **SHOULD NOT**, **RECOMMENDED**, **MAY**, and **OPTIONAL** are to be interpreted as described in RFC 2119 and RFC 8174.
 
@@ -19,7 +19,7 @@ The MPAS Application Plugin Profile defines a portable JSON document that descri
 - a Credential Adapter that needs to validate profile-native Execution Payloads and execute them against a non-MPAS-native application;
 - a native MPAS Application that wants to publish the operations and payload schemas it supports;
 - an MCP gateway that wants to protect high-impact MCP tool calls with MPAS approvals;
-- a policy authoring tool that wants to generate or suggest `MpasApplicationPolicy` objects;
+- a policy authoring tool that wants to generate `MpasApplicationPolicy` objects from operation metadata;
 - an agent or proposer tool that wants to construct valid Execution Payloads;
 - a signer or review tool that wants to understand which payload fields are relevant to an operation.
 
@@ -29,13 +29,12 @@ This profile is intentionally small. It defines the common application-plugin de
 - publisher identity;
 - target Application DID;
 - execution profile binding;
-- operation descriptors;
+- operation descriptors with optional impact metadata;
 - profile-native Execution Payload schemas;
 - credential requirement classes;
-- policy suggestions;
 - a normative rule for inferring native tool identity from the operation name under MCP.
 
-This profile does not define deployment activation, credential bindings, signer groups, rendering templates, receipt mappings, OMATrust attestations, marketplace behavior, or plugin code packaging. Those concerns are left to implementations or future profiles.
+This profile does not define deployment activation, credential bindings, signer groups, approval requirements, approval thresholds, rendering templates, receipt mappings, OMATrust attestations, marketplace behavior, or plugin code packaging. Those concerns are left to implementations, the MPAS JSON Verifier Policy Profile, or future profiles.
 
 ---
 
@@ -48,10 +47,10 @@ This profile defines:
 - the `MpasApplicationPlugin` JSON object;
 - stable plugin identity fields;
 - execution profile binding;
-- an operation catalog;
+- an operation catalog keyed by operation name;
 - operation-level profile-native Execution Payload schemas;
+- optional operation-level impact metadata;
 - credential requirement class descriptors;
-- policy suggestions that can help users create `MpasApplicationPolicy` rules;
 - security requirements for plugin consumers;
 - a JSON Schema appendix for structural validation.
 
@@ -61,7 +60,8 @@ This profile does not define:
 
 - deployment activation state;
 - real credential references, vault handles, API keys, OAuth tokens, private keys, or local secret storage;
-- actual signer groups, signer thresholds, or organization-specific policy decisions;
+- signer groups, signer thresholds, approval requirements, or organization-specific policy decisions;
+- policy match conditions or approval requirement expressions;
 - rendering or clear-signing UI templates;
 - receipt mapping rules;
 - OMATrust attestation schemas;
@@ -93,11 +93,13 @@ An application plugin helps participants interpret and validate profile-native E
 
 ### 3.2 Relationship to the MPAS JSON Verifier Policy Profile
 
-The MPAS JSON Verifier Policy Profile defines `MpasApplicationPolicy`, a deterministic JSON policy object for one Application DID and one execution profile.
+The MPAS JSON Verifier Policy Profile defines `MpasApplicationPolicy`, a deterministic JSON policy object for one Application DID and one execution profile. Policy objects define signer groups, approval requirements, match conditions, and default requirements.
 
-An application plugin may include `policySuggestions`. A policy suggestion is not deployment policy. It identifies payload patterns that the plugin publisher believes are high-impact or otherwise policy-relevant and suggests a non-binding approval pattern.
+An application plugin does not contain policy. It describes the command surface — operations, payload schemas, and credential classes.
 
-A deployment owner may accept, modify, delete, or add policy rules based on these suggestions. Actual policy is stored in a Verifier, native Application, Credential Adapter, MCP gateway, or other trusted deployment configuration, not in the plugin.
+A Credential Adapter or policy authoring tool MAY use the plugin's operation catalog and optional impact metadata to help an operator author policy. The operator is responsible for defining signer groups, approval requirements, and match conditions. The plugin MUST NOT prescribe or suggest specific approval thresholds, signer groups, or requirement types — those are deployment decisions that vary by organization.
+
+Actual policy is stored in a Verifier, native Application, Credential Adapter, MCP gateway, or other trusted deployment configuration, not in the plugin.
 
 ### 3.3 Relationship to the MPAS HTTP Profile
 
@@ -123,7 +125,7 @@ This v0.2 profile is MCP-first. For the MCP execution profile, the Execution Pay
 }
 ```
 
-Under an MCP execution profile, policy conditions commonly reference `/name` and `/arguments/...` paths. The application plugin describes the tool names, argument schemas, credential requirement classes, and suggested policy matches that apply to those MCP payloads.
+Under an MCP execution profile, policy conditions commonly reference `/name` and `/arguments/...` paths. The application plugin describes the tool names, argument schemas, and credential requirement classes that apply to those MCP payloads. Policy conditions and approval requirements are defined separately in `MpasApplicationPolicy` objects.
 
 This profile is designed to be generic enough for future execution profiles such as OpenAPI operation calls, EVM transaction intents, HTTP requests, CLI command objects, browser recipes, desktop recipes, x402 payment payloads, or native application commands.
 
@@ -143,8 +145,7 @@ The plugin describes:
 - these operations use this execution profile and payload format;
 - these payload schemas are expected;
 - these credential classes may be required;
-- these payload patterns are likely high-impact;
-- these policy matches may be useful to policy authors.
+- these operations carry these impact labels (informational).
 
 The consuming system stores:
 
@@ -153,7 +154,7 @@ The consuming system stores:
 - which resources are allowed;
 - which real credentials are bound;
 - which signer groups and approval thresholds apply;
-- which policy suggestions were accepted, modified, or ignored;
+- which policy conditions and requirements govern each operation;
 - which endpoints or local runtimes are used.
 
 ### 4.2 Plugin Identity vs. Artifact Identity
@@ -205,10 +206,10 @@ Example shape:
       "description": "GitHub OAuth token with repository access for the configured organizations."
     }
   ],
-  "operations": [
-    {
-      "name": "merge_pull_request",
+  "operations": {
+    "merge_pull_request": {
       "description": "Merge a pull request into its base branch.",
+      "impact": "high",
       "executionPayloadSchema": {
         "type": "object",
         "required": ["name", "arguments"],
@@ -243,35 +244,7 @@ Example shape:
         "additionalProperties": false
       }
     }
-  ],
-  "policySuggestions": [
-    {
-      "description": "Merging into main is high impact and should require maintainer approval.",
-      "impact": "high",
-      "match": {
-        "conditions": [
-          {
-            "source": "executionPayload",
-            "path": "/name",
-            "op": "eq",
-            "value": "merge_pull_request"
-          },
-          {
-            "source": "executionPayload",
-            "path": "/arguments/baseRef",
-            "op": "eq",
-            "value": "main"
-          }
-        ]
-      },
-      "suggestedRequirement": {
-        "kind": "approvalThreshold",
-        "eligibleSignerRole": "maintainer",
-        "minimumThreshold": 2,
-        "decision": "approve"
-      }
-    }
-  ]
+  }
 }
 ```
 
@@ -288,8 +261,7 @@ Field definitions:
 | `executionProfile.id`      | Yes         | DID of the execution profile this plugin describes.                                                                   |
 | `executionProfile.format`  | Recommended | Specific payload format under the execution profile, such as `mcp.toolsCall`.                                         |
 | `credentialRequirements`   | Optional    | Array of credential requirement class descriptors for the plugin.                                                     |
-| `operations`               | Yes         | Array of operation objects describing operations exposed by this plugin.                                              |
-| `policySuggestions`        | Optional    | Array of non-binding policy suggestions.                                                                              |
+| `operations`               | Yes         | Object of operation descriptors keyed by operation name. Each key is the native operation identifier (e.g., MCP tool name). |
 
 ---
 
@@ -368,40 +340,40 @@ A plugin MUST NOT cause a Credential Adapter to accept an arbitrary execution pr
 
 ## 8. Operations
 
-The `operations` array describes the MPAS-exposed operations supported by this plugin.
+The `operations` object describes the MPAS-exposed operations supported by this plugin. Each property key is the operation name; the value is an operation descriptor object.
 
-Each operation is identified by its `name` field. For the `mcp.toolsCall` execution profile, the operation `name` MUST equal the native MCP tool name exactly as exposed by the target MCP server (e.g., `merge_pull_request`, not `github.merge_pull_request`). Disambiguation across applications is provided by `actionEnvelope.target.applicationDid`; the operation name MUST NOT carry a namespace prefix for that purpose. For other execution profiles, the operation `name` MUST be the native identifier as defined by that profile.
+For the `mcp.toolsCall` execution profile, the operation key MUST equal the native MCP tool name exactly as exposed by the target MCP server (e.g., `merge_pull_request`, not `github.merge_pull_request`). Disambiguation across applications is provided by `actionEnvelope.target.applicationDid`; the operation key MUST NOT carry a namespace prefix for that purpose. For other execution profiles, the operation key MUST be the native identifier as defined by that profile.
 
 Example:
 
 ```json
 {
-  "operations": [
-    {
-      "name": "merge_pull_request",
+  "operations": {
+    "merge_pull_request": {
       "description": "Merge a pull request into its base branch.",
+      "impact": "high",
       "executionPayloadSchema": {}
     },
-    {
-      "name": "create_issue",
+    "create_issue": {
       "description": "Create a new issue in a repository.",
+      "impact": "low",
       "executionPayloadSchema": {}
     }
-  ]
+  }
 }
 ```
 
-Field definitions for an operation object:
+Field definitions for an operation descriptor object:
 
 | Field                    | Required    | Description                                                                        |
 | :----------------------- | :---------: | :--------------------------------------------------------------------------------- |
-| `name`                   | Yes         | Operation identifier. For MCP, this is the MCP tool name.                          |
 | `description`            | Recommended | Human-readable description. Non-authoritative.                                     |
+| `impact`                 | Optional    | Publisher's assessment of the operation's impact level, such as `low`, `medium`, `high`, or `critical`. Informational only — does not define or constrain policy. A Credential Adapter or policy tool MAY use impact metadata to guide an operator during policy authoring. |
 | `executionPayloadSchema` | Yes         | JSON Schema describing valid profile-native Execution Payloads for this operation. |
 
-For the `mcp.toolsCall` format, no separate native binding descriptor is required — the operation `name` is sufficient.
+For the `mcp.toolsCall` format, no separate native binding descriptor is required — the operation key is sufficient.
 
-The operation object does not define deployment policy. It does not enable the operation for any particular deployment. It does not bind real credentials.
+The operation object does not define deployment policy. It does not enable the operation for any particular deployment. It does not bind real credentials. It does not prescribe approval requirements.
 
 ---
 
@@ -449,7 +421,7 @@ Example:
 }
 ```
 
-The `name` constraint in the schema SHOULD match the operation's `name` field. If they conflict, the operation-level `name` field is authoritative.
+The `name` constraint in the schema SHOULD match the operation's key in the `operations` object. If they conflict, the operation key is authoritative.
 
 A consuming Verifier or Credential Adapter MUST validate the Execution Payload under the declared execution profile and trusted configuration before using the payload for policy evaluation or execution.
 
@@ -459,9 +431,9 @@ A plugin's schema is a descriptor, not proof of safety. A consuming system MUST 
 
 ## 10. Native Tool Identity
 
-For the `mcp.toolsCall` execution profile, the naming rule in Section 8 applies: the operation `name` field is the native MCP tool name. No separate native binding descriptor is needed.
+For the `mcp.toolsCall` execution profile, the naming rule in Section 8 applies: the operation key in the `operations` object is the native MCP tool name. No separate native binding descriptor is needed.
 
-A consumer processing an MCP-profile plugin SHOULD treat the operation `name` as the authoritative MCP tool identifier.
+A consumer processing an MCP-profile plugin SHOULD treat the operation key as the authoritative MCP tool identifier.
 
 For future execution profiles where the native dispatch target cannot be derived from the operation name alone (for example, OpenAPI operations that require a path and method, or EVM transactions that require a contract address and function selector), the operation object MAY include a `nativeBinding` property. The structure of `nativeBinding` will be defined by the corresponding execution profile specification. This profile does not define `nativeBinding` properties for any execution profile.
 
@@ -505,92 +477,20 @@ A Credential Adapter MUST NOT let the Execution Payload, plugin document, or Pro
 
 ---
 
-## 12. Policy Suggestions
+## 12. Impact Metadata
 
-`policySuggestions` is an array of non-binding suggestions that help policy authors identify high-impact payload patterns.
+Operations MAY include an `impact` field as informational metadata. A Credential Adapter or policy authoring tool MAY use impact metadata to guide the operator during policy creation — for example, by highlighting high-impact operations that likely need non-trivial approval requirements.
 
-A policy suggestion may include:
+Impact metadata is not policy. It does not constrain, suggest, or prescribe approval requirements, signer groups, or thresholds. The operator is solely responsible for defining policy appropriate to their organization.
 
-- a human-readable description;
-- an impact label;
-- a `match` object compatible with the MPAS JSON Verifier Policy Profile;
-- a suggested requirement shape.
+### 12.1 Separation of Concerns
 
-Example:
+The plugin defines the command surface. The `MpasApplicationPolicy` defines authorization rules. This separation ensures that:
 
-```json
-{
-  "description": "Merging into main is high impact and should require maintainer approval.",
-  "impact": "high",
-  "match": {
-    "conditions": [
-      {
-        "source": "executionPayload",
-        "path": "/name",
-        "op": "eq",
-        "value": "merge_pull_request"
-      },
-      {
-        "source": "executionPayload",
-        "path": "/arguments/baseRef",
-        "op": "eq",
-        "value": "main"
-      }
-    ]
-  },
-  "suggestedRequirement": {
-    "kind": "approvalThreshold",
-    "eligibleSignerRole": "maintainer",
-    "minimumThreshold": 2,
-    "decision": "approve"
-  }
-}
-```
-
-Field definitions:
-
-| Field                  | Required    | Description                                                                                |
-| :--------------------- | :---------: | :----------------------------------------------------------------------------------------- |
-| `description`          | Recommended | Human-readable explanation of the suggested policy.                                        |
-| `impact`               | Optional    | Suggested impact label, such as `low`, `medium`, `high`, or `critical`. Non-authoritative. |
-| `match`                | Yes         | Match object compatible with the MPAS JSON Verifier Policy Profile.                        |
-| `suggestedRequirement` | Optional    | Non-binding suggested approval requirement shape.                                          |
-
-### 12.1 Suggested Requirement Shape
-
-The `suggestedRequirement` object describes a non-binding approval pattern. Its structure aligns with the MPAS JSON Verifier Policy Profile requirement model.
-
-Example:
-
-```json
-{
-  "suggestedRequirement": {
-    "kind": "approvalThreshold",
-    "eligibleSignerRole": "maintainer",
-    "minimumThreshold": 2,
-    "decision": "approve"
-  }
-}
-```
-
-Field definitions for `suggestedRequirement`:
-
-| Field                | Required | Description                                                                                               |
-| :------------------- | :------: | :-------------------------------------------------------------------------------------------------------- |
-| `kind`               | Yes      | Requirement kind, such as `approvalThreshold`, `notification`, or `autoApprove`.                          |
-| `eligibleSignerRole` | Optional | Suggested signer role for approval, such as `maintainer`, `owner`, `securityReviewer`. Non-authoritative. |
-| `minimumThreshold`   | Optional | Suggested minimum number of approvals.                                                                    |
-| `decision`           | Optional | Suggested decision value, such as `approve` or `reject`.                                                  |
-
-These fields are suggestions. A consuming system MUST NOT use them as active policy. Deployment owners decide actual signer roles, thresholds, and requirement kinds.
-
-### 12.2 Policy Suggestion Safety
-
-Policy suggestions are not policy. A consuming system MUST NOT treat a policy suggestion as an active rule unless an operator or trusted policy process instantiates it into actual Verifier policy.
-
-A plugin publisher should use policy suggestions to call out payloads that are likely high-impact. Deployment owners remain responsible for deciding actual approval requirements.
-
-Policy suggestions may be incomplete, outdated, or too permissive for a deployment. Operators remain responsible for actual policy.
+- a plugin publisher cannot prescribe organizational approval patterns;
+- operators retain full authority over their approval requirements;
+- the same plugin can be deployed under vastly different policy regimes (solo developer, team threshold, DAO multisig, enterprise CISO chain);
+- policy authoring remains an explicit operator action, not a passive acceptance of publisher defaults.
 
 ---
 
@@ -613,23 +513,23 @@ When evaluating an Action Package, a consumer using this plugin SHOULD:
 2. verify that `actionEnvelope.target.applicationDid` matches the plugin `applicationDid`;
 3. verify that `actionEnvelope.executionProfile.id` matches the plugin `executionProfile.id`;
 4. if both formats are present, verify that `actionEnvelope.executionProfile.format` matches the plugin `executionProfile.format`;
-5. select an operation whose `executionPayloadSchema` validates the supplied Execution Payload;
+5. look up the operation key in the `operations` object and validate the Execution Payload against its `executionPayloadSchema`;
 6. use local deployment policy to determine whether the operation is enabled and which credentials, if any, may be used.
 
 ### 13.3 Policy Authoring
 
-A policy authoring tool MAY use `policySuggestions` to generate draft `MpasApplicationPolicy` entries.
+A policy authoring tool MAY use the plugin's operation catalog and impact metadata to help an operator generate draft `MpasApplicationPolicy` entries.
 
-The generated policy MUST be reviewed or accepted under deployment policy before it becomes active. Plugin policy suggestions alone MUST NOT authorize or block an Action.
+The generated policy MUST be reviewed and accepted by the operator before it becomes active. The plugin does not contain policy and MUST NOT be used to authorize or block an Action.
 
 ### 13.4 Credential Adapter Use
 
 A Credential Adapter MAY use an application plugin to:
 
 - validate profile-native Execution Payloads;
-- identify the native MCP tool from the operation `name`;
+- identify the native MCP tool from the operation key;
 - inform an administrator which credential classes are needed;
-- help generate policy suggestions;
+- present impact metadata during policy authoring;
 - reject unsupported or malformed payloads.
 
 A Credential Adapter MUST still use trusted local or cloud configuration to decide:
@@ -649,7 +549,7 @@ A Credential Adapter MUST still use trusted local or cloud configuration to deci
 
 A plugin document is a descriptor. It is not deployment policy and is not proof that an action is safe.
 
-Policy suggestions are non-binding. Credential requirements are descriptive. Operation descriptions are non-authoritative. A Verifier or Credential Adapter MUST rely on trusted deployment policy before executing an Action.
+Credential requirements are descriptive. Operation descriptions are non-authoritative. Impact labels are informational. A Verifier or Credential Adapter MUST rely on trusted deployment policy before executing an Action.
 
 ### 14.2 No Secrets in Plugins
 
@@ -700,10 +600,10 @@ This profile does not define the artifact method or distribution record format.
       "description": "GitHub OAuth token with repository access for the configured organizations."
     }
   ],
-  "operations": [
-    {
-      "name": "merge_pull_request",
+  "operations": {
+    "merge_pull_request": {
       "description": "Merge a pull request into its base branch.",
+      "impact": "high",
       "executionPayloadSchema": {
         "type": "object",
         "required": ["name", "arguments"],
@@ -738,9 +638,9 @@ This profile does not define the artifact method or distribution record format.
         "additionalProperties": false
       }
     },
-    {
-      "name": "delete_branch",
+    "delete_branch": {
       "description": "Delete a branch from a repository.",
+      "impact": "high",
       "executionPayloadSchema": {
         "type": "object",
         "required": ["name", "arguments"],
@@ -762,9 +662,9 @@ This profile does not define the artifact method or distribution record format.
         "additionalProperties": false
       }
     },
-    {
-      "name": "create_issue",
+    "create_issue": {
       "description": "Create a new issue in a repository.",
+      "impact": "low",
       "executionPayloadSchema": {
         "type": "object",
         "required": ["name", "arguments"],
@@ -791,91 +691,84 @@ This profile does not define the artifact method or distribution record format.
         "additionalProperties": false
       }
     }
-  ],
-  "policySuggestions": [
-    {
-      "description": "Merging into main is high impact and should require maintainer approval.",
-      "impact": "high",
-      "match": {
-        "conditions": [
-          {
-            "source": "executionPayload",
-            "path": "/name",
-            "op": "eq",
-            "value": "merge_pull_request"
-          },
-          {
-            "source": "executionPayload",
-            "path": "/arguments/baseRef",
-            "op": "eq",
-            "value": "main"
-          }
-        ]
-      },
-      "suggestedRequirement": {
-        "kind": "approvalThreshold",
-        "eligibleSignerRole": "maintainer",
-        "minimumThreshold": 2,
-        "decision": "approve"
-      }
-    },
-    {
-      "description": "Deleting any branch is a destructive operation.",
-      "impact": "medium",
-      "match": {
-        "conditions": [
-          {
-            "source": "executionPayload",
-            "path": "/name",
-            "op": "eq",
-            "value": "delete_branch"
-          }
-        ]
-      },
-      "suggestedRequirement": {
-        "kind": "approvalThreshold",
-        "eligibleSignerRole": "maintainer",
-        "minimumThreshold": 1,
-        "decision": "approve"
-      }
-    }
-  ]
-}
-```
-
-### 15.2 Generated Policy from Suggestion
-
-A policy tool could convert a policy suggestion into an `MpasApplicationPolicy` entry selected by the operator.
-
-```json
-{
-  "description": "Merging into main requires two maintainer approvals.",
-  "match": {
-    "conditions": [
-      {
-        "source": "executionPayload",
-        "path": "/name",
-        "op": "eq",
-        "value": "merge_pull_request"
-      },
-      {
-        "source": "executionPayload",
-        "path": "/arguments/baseRef",
-        "op": "eq",
-        "value": "main"
-      }
-    ]
-  },
-  "requirements": {
-    "type": "threshold",
-    "threshold": 2,
-    "eligibleSignerGroup": "maintainers",
-    "decision": "approve"
   }
 }
 ```
 
-The signer group and threshold are deployment choices. They are not defined by the plugin.
+### 15.2 Operator-Authored Policy for Plugin Operations
+
+An operator uses the plugin's operation catalog and impact metadata to author an `MpasApplicationPolicy`. The plugin does not contain or suggest policy — the operator defines requirements appropriate to their organization.
+
+```json
+{
+  "version": "1",
+  "type": "MpasApplicationPolicy",
+  "policyProfileUrl": "https://oma3.org/specs/mpas/policy-json/v1",
+  "applicationDid": "did:web:github.com",
+  "executionProfile": {
+    "id": "did:web:profiles.oma3.org:mcp",
+    "format": "mcp.toolsCall"
+  },
+  "defaultRequirement": {
+    "type": "threshold",
+    "threshold": 1,
+    "eligibleSignerGroup": "maintainers",
+    "decision": "approve"
+  },
+  "signerGroups": {
+    "all": [
+      "did:web:alice.example",
+      "did:web:bob.example",
+      "did:web:carol.example",
+      "did:web:agent.example"
+    ],
+    "proposers": [
+      "did:web:agent.example"
+    ],
+    "maintainers": [
+      "did:web:alice.example",
+      "did:web:bob.example",
+      "did:web:carol.example"
+    ]
+  },
+  "policies": {
+    "merge_pull_request": [
+      {
+        "description": "Merging into main requires two maintainer approvals.",
+        "match": {
+          "conditions": [
+            {
+              "source": "executionPayload",
+              "path": "/arguments/baseRef",
+              "op": "eq",
+              "value": "main"
+            }
+          ]
+        },
+        "requirements": {
+          "type": "threshold",
+          "threshold": 2,
+          "eligibleSignerGroup": "maintainers",
+          "decision": "approve"
+        }
+      }
+    ],
+    "delete_branch": [
+      {
+        "description": "Deleting any branch requires one maintainer approval.",
+        "requirements": {
+          "type": "threshold",
+          "threshold": 1,
+          "eligibleSignerGroup": "maintainers",
+          "decision": "approve"
+        }
+      }
+    ]
+  }
+}
+```
+
+The signer groups, thresholds, and match conditions are deployment choices. They are not defined by the plugin.
 
 ---
 
@@ -909,7 +802,7 @@ Future documents or versions may define:
 When a future execution profile specification defines `nativeBinding` for the operation object, it SHOULD:
 
 - define the required and optional properties for the binding object;
-- specify how the operation `name` relates to the native dispatch target (whether the name alone is sufficient or additional binding properties are needed);
+- specify how the operation key relates to the native dispatch target (whether the key alone is sufficient or additional binding properties are needed);
 - provide a JSON Schema fragment for validation;
 - identify which binding properties are plugin-level facts versus deployment-specific configuration.
 
@@ -1016,16 +909,10 @@ This appendix provides an initial JSON Schema for structural validation. The sch
       }
     },
     "operations": {
-      "type": "array",
-      "minItems": 1,
-      "items": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
         "$ref": "#/$defs/operation"
-      }
-    },
-    "policySuggestions": {
-      "type": "array",
-      "items": {
-        "$ref": "#/$defs/policySuggestion"
       }
     }
   },
@@ -1033,13 +920,12 @@ This appendix provides an initial JSON Schema for structural validation. The sch
   "$defs": {
     "operation": {
       "type": "object",
-      "required": ["name", "executionPayloadSchema"],
+      "required": ["executionPayloadSchema"],
       "properties": {
-        "name": {
-          "type": "string",
-          "minLength": 1
-        },
         "description": {
+          "type": "string"
+        },
+        "impact": {
           "type": "string"
         },
         "executionPayloadSchema": {
@@ -1062,45 +948,6 @@ This appendix provides an initial JSON Schema for structural validation. The sch
           }
         },
         "description": {
-          "type": "string"
-        }
-      },
-      "additionalProperties": false
-    },
-    "policySuggestion": {
-      "type": "object",
-      "required": ["match"],
-      "properties": {
-        "description": {
-          "type": "string"
-        },
-        "impact": {
-          "type": "string"
-        },
-        "match": {
-          "type": "object"
-        },
-        "suggestedRequirement": {
-          "$ref": "#/$defs/suggestedRequirement"
-        }
-      },
-      "additionalProperties": false
-    },
-    "suggestedRequirement": {
-      "type": "object",
-      "required": ["kind"],
-      "properties": {
-        "kind": {
-          "type": "string"
-        },
-        "eligibleSignerRole": {
-          "type": "string"
-        },
-        "minimumThreshold": {
-          "type": "integer",
-          "minimum": 1
-        },
-        "decision": {
           "type": "string"
         }
       },

@@ -9,6 +9,8 @@ import { createHttpEndpoint } from "./http-endpoint.js";
 import { DispatchLedger, FileDispatchJournal } from "./dispatch-ledger.js";
 import { TraceLogger, TraceWriter } from "../core/trace.js";
 import type { Did } from "../core/types.js";
+import type { OmaTrustConfig } from "./trust.js";
+import { buildTrustContext } from "./trust-backend.js";
 
 export interface AdapterKeyFile {
   did: Did;
@@ -25,6 +27,7 @@ export interface DaemonOptions {
   maxEnvelopeValidityMs?: number;
   journalPath?: string;
   tracePath?: string;
+  omaTrust?: OmaTrustConfig;
 }
 
 export interface StartedDaemon {
@@ -51,7 +54,20 @@ export function defaultJournalPath(): string {
 
 export async function startDaemon(options: DaemonOptions = {}): Promise<StartedDaemon> {
   const configDir = options.configDir ?? defaultConfigDir();
-  const loaded = await loadDeploymentConfigs(configDir);
+
+  // Build OMATrust context if configured (fetches approved issuers from backend).
+  let trustContext = null;
+  if (options.omaTrust && !options.omaTrust.disabled) {
+    try {
+      trustContext = await buildTrustContext(options.omaTrust);
+    } catch {
+      // If the backend is unreachable at startup, proceed without trust context.
+      // Individual plugins will trigger the network-unavailable prompt.
+      process.stdout.write("⚠️  OMATrust backend unreachable. Trust checks will prompt per-plugin.\n");
+    }
+  }
+
+  const loaded = await loadDeploymentConfigs(configDir, trustContext);
   if (!loaded.ok) {
     throw new Error(loaded.error.message);
   }

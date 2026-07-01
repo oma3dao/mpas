@@ -1,0 +1,415 @@
+import { describe, expect, it } from "vitest";
+import { evaluatePolicy, type PolicyConfig, type Requirement } from "../../src/core/policy-engine.js";
+import type { ActionPackage, Decision, Did } from "../../src/core/types.js";
+import type { VerifiedApprovals } from "../../src/core/verification.js";
+
+// Helpers to build minimal test data without requiring fixture files or real signatures.
+
+function makeActionPackage(operationName: string, extraArgs: Record<string, unknown> = {}): ActionPackage {
+  return {
+    version: "1",
+    type: "ActionPackage",
+    executionPayload: {
+      name: operationName,
+      arguments: { owner: "org", repo: "repo", ...extraArgs },
+    },
+    actionEnvelope: {
+      version: "1",
+      type: "ActionEnvelope",
+      proposer: { did: "did:key:z6MkProposer" as Did },
+      target: { applicationDid: "did:web:github.example" as Did },
+      executionProfile: { id: "did:web:profiles.oma3.org:mcp" as Did, format: "mcp.toolsCall" },
+      executionPayloadHash: { alg: "sha-256", value: "fake-hash" },
+      actionId: { value: "test-action-id" },
+      createdAt: "2026-06-01T00:00:00.000Z",
+      expiresAt: "2026-06-02T00:00:00.000Z",
+    },
+    approvalBundle: { actionEnvelopeHash: { alg: "sha-256", value: "fake-hash" }, approvals: [] },
+  } as unknown as ActionPackage;
+}
+
+function makeApprovals(count: number, signerGroupDids: Did[], decision: Decision = "approve"): VerifiedApprovals {
+  const approvals = signerGroupDids.slice(0, count).map((did) => ({
+    approval: {} as never,
+    signerDid: did,
+    decision,
+    createdAt: "2026-06-01T00:00:00.000Z",
+  }));
+  return { actionEnvelopeHash: { alg: "sha-256" as const, value: "fake-hash" }, approvals };
+}
+
+const MAINTAINER_A: Did = "did:key:z6MkMaintainerA";
+const MAINTAINER_B: Did = "did:key:z6MkMaintainerB";
+const SEC_REVIEWER: Did = "did:key:z6MkSecReviewer";
+
+// Policy: default requires 1 maintainer approval. Action-keyed policies override the default.
+const policyWithDefaultRequirement: PolicyConfig = {
+  defaultRequirement: {
+    type: "threshold",
+    threshold: 1,
+    eligibleSignerGroup: "maintainers",
+    decision: "approve",
+  },
+  policies: {
+    create_issue: [
+      {
+        description: "create_issue is exempt (auto-approved).",
+        requirements: { type: "threshold", threshold: 0, eligibleSignerGroup: "maintainers", decision: "approve" },
+      },
+    ],
+    merge_pull_request: [
+      {
+        description: "merge_pull_request into main requires 2 maintainers.",
+        match: {
+          conditions: [
+            { source: "executionPayload", path: "/arguments/baseRef", op: "eq", value: "main" },
+          ],
+        },
+        requirements: { type: "threshold", threshold: 2, eligibleSignerGroup: "maintainers", decision: "approve" },
+      },
+      {
+        description: "merge_pull_request into main also requires 1 security reviewer.",
+        match: {
+          conditions: [
+            { source: "executionPayload", path: "/arguments/baseRef", op: "eq", value: "main" },
+          ],
+        },
+        requirements: { type: "threshold", threshold: 1, eligibleSignerGroup: "security-reviewers", decision: "approve" },
+      },
+    ],
+  },
+  signerGroups: {
+    maintainers: [MAINTAINER_A, MAINTAINER_B],
+    "security-reviewers": [SEC_REVIEWER],
+  },
+};
+
+describe("evaluatePolicy — defaultRequirement", () => {
+  describe("operation with no matching policy entry hits the default", () => {
+    it("requires approvals for delete_branch when none provided", () => {
+      const result = evaluatePolicy(
+        makeActionPackage("delete_branch"),
+        makeApprovals(0, []),
+        policyWithDefaultRequirement,
+      );
+
+      expect(result).toMatchObject({
+        status: "additionalApprovalsRequired",
+        unsatisfiedRules: [
+          {
+            requiredRole: "maintainers",
+            requiredDecision: "approve",
+            threshold: 1,
+            found: 0,
+          },
+        ],
+      });
+    });
+
+    it("satisfies delete_branch when 1 maintainer approves", () => {
+      const result = evaluatePolicy(
+        makeActionPackage("delete_branch"),
+        makeApprovals(1, [MAINTAINER_A]),
+        policyWithDefaultRequirement,
+      );
+
+      expect(result).toEqual({ status: "satisfied" });
+    });
+  });
+
+  describe("operation with a matching policy entry — default does not apply", () => {
+    it("satisfies create_issue with zero approvals (threshold: 0 exemption)", () => {
+      const result = evaluatePolicy(
+        makeActionPackage("create_issue"),
+        makeApprovals(0, []),
+        policyWithDefaultRequirement,
+      );
+
+      expect(result).toEqual({ status: "satisfied" });
+    });
+
+    it("the default requirement does NOT apply to create_issue even with no approvals", () => {
+      const result = evaluatePolicy(
+        makeActionPackage("create_issue"),
+        { actionEnvelopeHash: { alg: "sha-256", value: "fake-hash" }, approvals: [] },
+        policyWithDefaultRequirement,
+      );
+
+      expect(result.status).not.toBe("additionalApprovalsRequired");
+      expect(result).toEqual({ status: "satisfied" });
+    });
+  });
+
+  describe("operation with two matching entries in its policy array — both must be satisfied, default does not apply", () => {
+    it("requires both entries satisfied for merge_pull_request into main", () => {
+      const result = evaluatePolicy(
+        makeActionPackage("merge_pull_request", { baseRef: "main" }),
+        makeApprovals(0, []),
+        policyWithDefaultRequirement,
+      );
+
+      expect(result.status).toBe("additionalApprovalsRequired");
+      if (result.status === "additionalApprovalsRequired") {
+        expect(result.unsatisfiedRules).toHaveLength(2);
+        expect(result.unsatisfiedRules).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ requiredRole: "maintainers", threshold: 2, found: 0 }),
+            expect.objectContaining({ requiredRole: "security-reviewers", threshold: 1, found: 0 }),
+          ]),
+        );
+      }
+    });
+
+    it("partially satisfied — 2 maintainers but no security reviewer", () => {
+      const approvals: VerifiedApprovals = {
+        actionEnvelopeHash: { alg: "sha-256", value: "fake-hash" },
+        approvals: [
+          { approval: {} as never, signerDid: MAINTAINER_A, decision: "approve", createdAt: "2026-06-01T00:00:00.000Z" },
+          { approval: {} as never, signerDid: MAINTAINER_B, decision: "approve", createdAt: "2026-06-01T00:00:00.000Z" },
+        ],
+      };
+
+      const result = evaluatePolicy(
+        makeActionPackage("merge_pull_request", { baseRef: "main" }),
+        approvals,
+        policyWithDefaultRequirement,
+      );
+
+      expect(result.status).toBe("additionalApprovalsRequired");
+      if (result.status === "additionalApprovalsRequired") {
+        expect(result.unsatisfiedRules).toHaveLength(1);
+        expect(result.unsatisfiedRules[0]).toMatchObject({
+          requiredRole: "security-reviewers",
+          threshold: 1,
+          found: 0,
+        });
+      }
+    });
+
+    it("fully satisfied — 2 maintainers and 1 security reviewer", () => {
+      const approvals: VerifiedApprovals = {
+        actionEnvelopeHash: { alg: "sha-256", value: "fake-hash" },
+        approvals: [
+          { approval: {} as never, signerDid: MAINTAINER_A, decision: "approve", createdAt: "2026-06-01T00:00:00.000Z" },
+          { approval: {} as never, signerDid: MAINTAINER_B, decision: "approve", createdAt: "2026-06-01T00:00:00.000Z" },
+          { approval: {} as never, signerDid: SEC_REVIEWER, decision: "approve", createdAt: "2026-06-01T00:00:00.000Z" },
+        ],
+      };
+
+      const result = evaluatePolicy(
+        makeActionPackage("merge_pull_request", { baseRef: "main" }),
+        approvals,
+        policyWithDefaultRequirement,
+      );
+
+      expect(result).toEqual({ status: "satisfied" });
+    });
+
+    it("the default (1 maintainer) does NOT apply since explicit policy entries matched", () => {
+      const approvals: VerifiedApprovals = {
+        actionEnvelopeHash: { alg: "sha-256", value: "fake-hash" },
+        approvals: [
+          { approval: {} as never, signerDid: MAINTAINER_A, decision: "approve", createdAt: "2026-06-01T00:00:00.000Z" },
+          { approval: {} as never, signerDid: SEC_REVIEWER, decision: "approve", createdAt: "2026-06-01T00:00:00.000Z" },
+        ],
+      };
+
+      const result = evaluatePolicy(
+        makeActionPackage("merge_pull_request", { baseRef: "main" }),
+        approvals,
+        policyWithDefaultRequirement,
+      );
+
+      expect(result.status).toBe("additionalApprovalsRequired");
+      if (result.status === "additionalApprovalsRequired") {
+        expect(result.unsatisfiedRules).toHaveLength(1);
+        expect(result.unsatisfiedRules[0]).toMatchObject({
+          requiredRole: "maintainers",
+          threshold: 2,
+          found: 1,
+        });
+      }
+    });
+  });
+});
+
+describe("evaluatePolicy — allOf and anyOf requirements", () => {
+  it("allOf requires all nested requirements satisfied", () => {
+    const policy: PolicyConfig = {
+      defaultRequirement: {
+        type: "allOf",
+        requirements: [
+          { type: "threshold", threshold: 2, eligibleSignerGroup: "agents", decision: "approve" },
+          { type: "threshold", threshold: 1, eligibleSignerGroup: "humans", decision: "approve" },
+        ],
+      },
+      signerGroups: {
+        agents: ["did:key:z6MkAgent0" as Did, "did:key:z6MkAgent1" as Did],
+        humans: ["did:key:z6MkHuman0" as Did],
+      },
+    };
+
+    // No approvals → both unsatisfied
+    const result = evaluatePolicy(makeActionPackage("anything"), makeApprovals(0, []), policy);
+    expect(result.status).toBe("additionalApprovalsRequired");
+    if (result.status === "additionalApprovalsRequired") {
+      expect(result.unsatisfiedRules).toHaveLength(2);
+    }
+  });
+
+  it("anyOf is satisfied if any one nested requirement passes", () => {
+    const policy: PolicyConfig = {
+      defaultRequirement: {
+        type: "anyOf",
+        requirements: [
+          { type: "threshold", threshold: 2, eligibleSignerGroup: "agents", decision: "approve" },
+          { type: "threshold", threshold: 1, eligibleSignerGroup: "humans", decision: "approve" },
+        ],
+      },
+      signerGroups: {
+        agents: ["did:key:z6MkAgent0" as Did, "did:key:z6MkAgent1" as Did],
+        humans: ["did:key:z6MkHuman0" as Did],
+      },
+    };
+
+    // 1 human is enough (satisfies second branch)
+    const approvals: VerifiedApprovals = {
+      actionEnvelopeHash: { alg: "sha-256", value: "fake-hash" },
+      approvals: [
+        { approval: {} as never, signerDid: "did:key:z6MkHuman0" as Did, decision: "approve" as Decision, createdAt: "2026-06-01T00:00:00.000Z" },
+      ],
+    };
+
+    const result = evaluatePolicy(makeActionPackage("anything"), approvals, policy);
+    expect(result).toEqual({ status: "satisfied" });
+  });
+
+  it("anyOf fails when no branch is satisfied", () => {
+    const policy: PolicyConfig = {
+      defaultRequirement: {
+        type: "anyOf",
+        requirements: [
+          { type: "threshold", threshold: 2, eligibleSignerGroup: "agents", decision: "approve" },
+          { type: "threshold", threshold: 1, eligibleSignerGroup: "humans", decision: "approve" },
+        ],
+      },
+      signerGroups: {
+        agents: ["did:key:z6MkAgent0" as Did, "did:key:z6MkAgent1" as Did],
+        humans: ["did:key:z6MkHuman0" as Did],
+      },
+    };
+
+    // 1 agent is not enough for either branch
+    const approvals: VerifiedApprovals = {
+      actionEnvelopeHash: { alg: "sha-256", value: "fake-hash" },
+      approvals: [
+        { approval: {} as never, signerDid: "did:key:z6MkAgent0" as Did, decision: "approve" as Decision, createdAt: "2026-06-01T00:00:00.000Z" },
+      ],
+    };
+    const result = evaluatePolicy(makeActionPackage("anything"), approvals, policy);
+    expect(result.status).toBe("additionalApprovalsRequired");
+  });
+
+  it("proposerOnly always satisfies", () => {
+    const policy: PolicyConfig = {
+      defaultRequirement: { type: "proposerOnly" },
+    };
+
+    const result = evaluatePolicy(
+      makeActionPackage("anything"),
+      { actionEnvelopeHash: { alg: "sha-256", value: "fake-hash" }, approvals: [] },
+      policy,
+    );
+
+    expect(result).toEqual({ status: "satisfied" });
+  });
+});
+
+describe("evaluatePolicy — condition operators", () => {
+  const policy: PolicyConfig = {
+    defaultRequirement: { type: "proposerOnly" },
+    policies: {
+      transfer: [
+        {
+          description: "gt operator test",
+          match: { conditions: [{ source: "executionPayload", path: "/arguments/amount", op: "gt", value: "100" }] },
+          requirements: { type: "threshold", threshold: 1, eligibleSignerGroup: "admins", decision: "approve" },
+        },
+      ],
+    },
+    signerGroups: { admins: ["did:key:z6MkAdmin" as Did] },
+  };
+
+  it("gt operator matches when actual > expected", () => {
+    const result = evaluatePolicy(
+      makeActionPackage("transfer", { amount: 150 }),
+      makeApprovals(0, []),
+      policy,
+    );
+    expect(result.status).toBe("additionalApprovalsRequired");
+  });
+
+  it("gt operator does not match when actual <= expected", () => {
+    const result = evaluatePolicy(
+      makeActionPackage("transfer", { amount: 50 }),
+      makeApprovals(0, []),
+      policy,
+    );
+    // Condition not met → no entry matches → but the action IS in policies so entry didn't match → defaultRequirement
+    // Wait: the action "transfer" IS in policies, but the condition doesn't match,
+    // so no entries match within the array → fallback to defaultRequirement (proposerOnly)
+    expect(result).toEqual({ status: "satisfied" });
+  });
+});
+
+describe("evaluatePolicy — signerGroups", () => {
+  it("resolves eligible signers from signerGroups", () => {
+    const policy: PolicyConfig = {
+      defaultRequirement: {
+        type: "threshold",
+        threshold: 1,
+        eligibleSignerGroup: "treasuryOperators",
+        decision: "approve",
+      },
+      signerGroups: {
+        treasuryOperators: ["did:key:z6MkAlice" as Did, "did:key:z6MkBob" as Did],
+      },
+    };
+
+    // Alice approves
+    const approvals: VerifiedApprovals = {
+      actionEnvelopeHash: { alg: "sha-256", value: "fake-hash" },
+      approvals: [
+        { approval: {} as never, signerDid: "did:key:z6MkAlice" as Did, decision: "approve" as Decision, createdAt: "2026-06-01T00:00:00.000Z" },
+      ],
+    };
+
+    const result = evaluatePolicy(makeActionPackage("anything"), approvals, policy);
+    expect(result).toEqual({ status: "satisfied" });
+  });
+
+  it("rejects approval from non-member of signerGroup", () => {
+    const policy: PolicyConfig = {
+      defaultRequirement: {
+        type: "threshold",
+        threshold: 1,
+        eligibleSignerGroup: "treasuryOperators",
+        decision: "approve",
+      },
+      signerGroups: {
+        treasuryOperators: ["did:key:z6MkAlice" as Did, "did:key:z6MkBob" as Did],
+      },
+    };
+
+    // Eve (not in group) approves
+    const approvals: VerifiedApprovals = {
+      actionEnvelopeHash: { alg: "sha-256", value: "fake-hash" },
+      approvals: [
+        { approval: {} as never, signerDid: "did:key:z6MkEve" as Did, decision: "approve" as Decision, createdAt: "2026-06-01T00:00:00.000Z" },
+      ],
+    };
+
+    const result = evaluatePolicy(makeActionPackage("anything"), approvals, policy);
+    expect(result.status).toBe("additionalApprovalsRequired");
+  });
+});

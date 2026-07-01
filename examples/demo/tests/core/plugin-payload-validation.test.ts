@@ -33,9 +33,7 @@ describe("validatePayloadAgainstPlugin", () => {
     expect(result).toMatchObject({
       ok: true,
       match: {
-        operation: {
-          name: operationName,
-        },
+        operationName,
       },
     });
   });

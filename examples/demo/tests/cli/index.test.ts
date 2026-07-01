@@ -29,9 +29,15 @@ async function credentialDir() {
 }
 
 async function startFixtureDaemon() {
+  // Use only the auto-approve config so that create_issue passes with proposerOnly.
+  const tmpDir = await mkdtemp(join(tmpdir(), "mpas-cli-daemon-cfg-"));
+  const config = JSON.parse(await readFile(join(fixturesDir, "configs", "github-auto-approve.json"), "utf8")) as Record<string, unknown>;
+  (config.plugin as Record<string, unknown>).path = join(fixturesDir, "plugins", "github-repo.json");
+  await writeFile(join(tmpDir, "github-auto-approve.json"), `${JSON.stringify(config, null, 2)}\n`);
+
   const journalDir = await mkdtemp(join(tmpdir(), "mpas-cli-journal-"));
   const daemon = await startDaemon({
-    configDir: join(fixturesDir, "configs"),
+    configDir: tmpDir,
     credentialDir: await credentialDir(),
     adapterKeyPath: join(fixturesDir, "test-keys", "adapter.json"),
     port: 0,
@@ -73,8 +79,14 @@ describe("CLI daemon and testing commands", () => {
   });
 
   it("test dry-run reports satisfied for valid-no-approval-required.json", async () => {
+    // Use a single-config dir with auto-approve so create_issue passes policy
+    const tmpDir = await mkdtemp(join(tmpdir(), "mpas-cli-dryrun-"));
+    const config = JSON.parse(await readFile(join(fixturesDir, "configs", "github-auto-approve.json"), "utf8")) as Record<string, unknown>;
+    (config.plugin as Record<string, unknown>).path = join(fixturesDir, "plugins", "github-repo.json");
+    await writeFile(join(tmpDir, "github-auto-approve.json"), `${JSON.stringify(config, null, 2)}\n`);
+
     const result = await dryRunActionFile(join(fixturesDir, "core", "valid-no-approval-required.json"), {
-      configDir: join(fixturesDir, "configs"),
+      configDir: tmpDir,
     });
 
     expect(result).toMatchObject({

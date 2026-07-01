@@ -81,7 +81,7 @@ describe("CLI management commands", () => {
     await setCredential("github-test-token", "ghp_test", credentialDir);
     const bridgeDir = await tempDir("mpas-cli-bridges-");
 
-    // Create two bridge configs with different DIDs from trustedSigners
+    // Create two bridge configs with different DIDs from signerKeys
     const { writeFile } = await import("node:fs/promises");
     await writeFile(
       join(bridgeDir, "proposer.json"),
@@ -107,7 +107,7 @@ describe("CLI management commands", () => {
     expect(result.bridgeConfigs!.every((b) => b.error?.includes("different DID"))).toBe(true);
   });
 
-  it("bridge config validation fails for DID not in trustedSigners", async () => {
+  it("bridge config validation fails for DID not in signerKeys", async () => {
     const credentialDir = await tempDir("mpas-cli-credentials-");
     await setCredential("github-test-token", "ghp_test", credentialDir);
     const bridgeDir = await tempDir("mpas-cli-bridges-");
@@ -127,7 +127,7 @@ describe("CLI management commands", () => {
     expect(result.valid).toBe(false);
     expect(result.bridgeConfigs![0]).toMatchObject({
       ok: false,
-      error: expect.stringContaining("not in trustedSigners"),
+      error: expect.stringContaining("not in signerKeys"),
     });
   });
 
