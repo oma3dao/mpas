@@ -16,7 +16,7 @@ This initial version is MIT-licensed to maximize transparency and adoption. OMA3
 This repository is the OMA3-owned home of the MPAS standard:
 
 - **Specifications** — the MPAS protocol documents (core, profiles, schemas)
-- **SDK** — packages for building MPAS implementations (MCP Bridge, core utilities)
+- **SDK** — `@oma3/mpas` protocol library (types, verification, policy engine, receipts, proposer primitives, MCP bridge)
 - **Example implementation** — a working implementation demonstrating the full MPAS flow (propose → approve → dispatch)
 - **Application registry** — per-application descriptors referencing known implementations
 - **Conformance tools** — official test tools for validating MPAS implementations
@@ -56,9 +56,9 @@ Production implementations are maintained independently. See the application reg
                                     │
                                     │ HTTP (list/approve/reject)
                                     │
-┌──────────────────┐       ┌────────┴─────────┐
-│  Maintainer Agent│       │  MCP Bridge      │
-│                  │──MCP─▶│ (maintainer mode)│
+┌──────────────────┐       ┌──────────────────┐
+│  Maintainer Agent│       │  Signer Server   │
+│                  │──MCP─▶│  (MCP server)    │
 │  Sees approval   │       │  Signs approvals │
 │  tools           │       │                  │
 └──────────────────┘       └──────────────────┘
@@ -87,16 +87,19 @@ Production implementations are maintained independently. See the application reg
 
 ```
 specs/                          MPAS specification documents
-sdk/                            SDK packages (MCP Bridge, core utilities)
+sdk/
+  protocol/                     @oma3/mpas — protocol SDK (types, verification,
+                                policy engine, receipts, proposer primitives,
+                                protocol clients, MCP bridge)
 examples/
-  demo/                         Minimal demo of the full MPAS flow
-    bridge/                     Example MCP Bridge
-    credential-adapter/         Example Credential Adapter (JSON policy)
-    coordination-service/       Example Coordination Service
-    plugins/                    Example application plugins
-    profiles/                   Example profiles
-    guides/
-      setup-macos.md            macOS setup guide for running the demo
+  demo/                         Reference implementation of the full MPAS flow
+    src/
+      adapter/                  Credential Adapter daemon (Fastify HTTP server)
+      coordination/             Coordination Service (in-memory, Fastify)
+      signer-server/            MPAS Signer MCP Server (standalone, per-agent)
+      core/                     Re-exports from @oma3/mpas (thin barrel files)
+      cli/                      CLI commands (daemon management, trace inspection)
+    tests/                      213+ tests (unit, integration, e2e)
 application-registry/
   applications/                 One JSON file per application
 conformance/
@@ -108,15 +111,7 @@ docs/
   site/                         Documentation website content
 ```
 
-Each example in `examples/` is self-contained with its own build tooling. There is no top-level monorepo orchestrator.
-
-## Related Repositories
-
-| Repository | Description |
-|---|---|
-| [mpas-docs](https://github.com/oma3dao/mpas-docs) | MPAS specifications (archived — migrated to `specs/`) |
-| [mpas-sdk](https://github.com/oma3dao/mpas-sdk) | SDK packages (archived — migrated to `sdk/`) |
-| [mpas-local](https://github.com/alftom/mpas-local) | Original adapter implementation (archived — migrated to `examples/demo/`) |
+Each example in `examples/` is self-contained with its own build tooling. The demo depends on the SDK via `"@oma3/mpas": "file:../../sdk/protocol"`.
 
 ## Documentation
 

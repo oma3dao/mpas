@@ -137,18 +137,24 @@ export function createHttpEndpoint(options: HttpEndpointOptions): FastifyInstanc
     const payloadValidation = validatePayloadAgainstPlugin(pkg.executionPayload, loadedConfig.plugin);
     const opName = operationName(pkg);
     const inPolicy = opName !== undefined && loadedConfig.config.policy.policies?.[opName] !== undefined;
-    const isGovernedOperation = payloadValidation.ok || payloadValidation.error.code !== "UNKNOWN_OPERATION" || inPolicy;
+    const inPlugin = payloadValidation.ok;
+    const isGovernedOperation = inPlugin || payloadValidation.error.code !== "UNKNOWN_OPERATION" || inPolicy;
 
     // --- Routing decision: governed vs. pass-through ---
-    // If the operation IS in the plugin → full governance (schema validation + policy).
-    // If the operation is NOT in the plugin → pass-through (skip schema + policy, just proxy credential).
+    // If the operation IS in the plugin OR has a policy entry → governance applies.
+    // If the operation is NOT in either → pass-through (skip schema + policy, just proxy credential).
     if (isGovernedOperation) {
-      // Governed path: validate schema and evaluate policy.
-      if (!payloadValidation.ok) {
+      // Governed path: validate schema (only if in plugin) and evaluate policy.
+      if (inPlugin) {
+        trace.emit("verification_step", { actionId, step: "plugin_validation", passed: true });
+      } else if (payloadValidation.error.code === "UNKNOWN_OPERATION" && inPolicy) {
+        // Operation is not in the plugin but has an operator-defined policy entry.
+        // Skip schema validation — the operator explicitly governs this action.
+        trace.emit("verification_step", { actionId, step: "plugin_validation", passed: true, note: "operator-governed" });
+      } else if (!payloadValidation.ok) {
         trace.emit("verification_step", { actionId, step: "plugin_validation", passed: false, code: payloadValidation.error.code });
         return rejection(pkg, options, envelopeHash, "rejected", payloadValidation.error.code, payloadValidation.error.message);
       }
-      trace.emit("verification_step", { actionId, step: "plugin_validation", passed: true });
 
       const policyResult = evaluatePolicy(pkg, verification.verifiedApprovals, policyFromLoadedConfig(loadedConfig));
       if (policyResult.status === "denied") {

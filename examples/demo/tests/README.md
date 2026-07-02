@@ -1,7 +1,7 @@
 # MPAS Demo Test Guide
 
 This package uses Vitest for unit, integration, and local E2E coverage. Most tests run with no external services. The MCP
-bridge E2E is opt-in because it depends on the sibling `sdk/mcp-bridge` package in the same repository.
+bridge E2E is opt-in because it depends on the sibling `sdk/protocol` package in the same repository.
 
 ## Quick Start
 
@@ -82,16 +82,16 @@ The MCP bridge E2E verifies the complete local approval path:
 Run it with an explicit bridge package path:
 
 ```sh
-npm run test:e2e:mcp-bridge -- --mcp-bridge-dir ../../sdk/mcp-bridge
+npm run test:e2e:mcp-bridge -- --mcp-bridge-dir ../../sdk/protocol
 ```
 
 Or set the environment variable:
 
 ```sh
-MPAS_MCP_BRIDGE_DIR=../../sdk/mcp-bridge npm run test:e2e:mcp-bridge
+MPAS_MCP_BRIDGE_DIR=../../sdk/protocol npm run test:e2e:mcp-bridge
 ```
 
-If neither is provided, the runner defaults to `../../sdk/mcp-bridge` relative to the `examples/demo` package root.
+If neither is provided, the runner defaults to `../../sdk/protocol` relative to the `examples/demo` package root.
 
 The E2E runner builds the bridge package first:
 
@@ -133,5 +133,5 @@ For changes that touch bridge coordination, adapter replay behavior, approval co
 ```sh
 npm run build
 npm test
-npm run test:e2e:mcp-bridge -- --mcp-bridge-dir ../../sdk/mcp-bridge
+npm run test:e2e:mcp-bridge -- --mcp-bridge-dir ../../sdk/protocol
 ```

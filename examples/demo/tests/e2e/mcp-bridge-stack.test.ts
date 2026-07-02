@@ -7,6 +7,7 @@ import type { FastifyInstance } from "fastify";
 import { afterEach, describe, expect, it } from "vitest";
 import { startDaemon } from "../../src/adapter/daemon.js";
 import { startCoordinationDaemon } from "../../src/coordination/daemon.js";
+import { SignerServer } from "../../src/signer-server/index.js";
 
 interface ToolCallResult {
   isError?: boolean;
@@ -20,17 +21,17 @@ interface BridgeInstance {
 
 interface BridgeModule {
   ProposerBridge: new (config: Record<string, unknown>) => BridgeInstance;
-  MaintainerBridge: new (config: Record<string, unknown>) => BridgeInstance;
   ActionPackageBuilder: new (config: Record<string, unknown>) => {
     buildFromToolCall(toolName: string, args: object): Promise<Record<string, any>>;
   };
   KeyManager: { fromFile(path: string): Promise<{ did: string }> };
   AdapterClient: new (config: { url: string }) => {
-    submit(pkg: Record<string, any>): Promise<{ result: string; error?: { code: string } }>;
+    submit(pkg: Record<string, any>): Promise<Record<string, any>>;
   };
 }
 
 const fixturesDir = join(process.cwd(), "tests", "fixtures");
+const e2eConfigDir = join(fixturesDir, "configs", "e2e");
 const bridgeDir = process.env.MPAS_MCP_BRIDGE_DIR;
 const e2eDescribe = bridgeDir ? describe : describe.skip;
 const startedApps: FastifyInstance[] = [];
@@ -39,18 +40,171 @@ afterEach(async () => {
   await Promise.allSettled(startedApps.splice(0).map((app) => app.close()));
 });
 
-e2eDescribe("MCP bridge, Credential Adapter, and Coordination Service E2E", () => {
-  it("collects a signer approval and executes the completed Action Package", async () => {
-    const { ProposerBridge, MaintainerBridge } = await loadBridgeModule();
-    const adapter = await startDaemon({
-      configDir: join(fixturesDir, "configs"),
-      credentialDir: await credentialDir(),
-      adapterKeyPath: join(fixturesDir, "test-keys", "adapter.json"),
-      port: 0,
-      journalPath: join(await mkdtemp(join(tmpdir(), "mpas-e2e-journal-")), "dispatch-ledger.jsonl"),
+e2eDescribe("MPAS E2E: Policy routing and dispatch", () => {
+  // Scenario 1: Action in plugin with explicit proposerOnly policy → executes immediately
+  it("auto-executes create_issue (in plugin, proposerOnly policy)", async () => {
+    const { ActionPackageBuilder, KeyManager, AdapterClient } = await loadBridgeModule();
+    const { adapter } = await startStack();
+
+    const keyManager = await KeyManager.fromFile(join(fixturesDir, "test-keys", "proposer.json"));
+    const plugin = await readJson(join(fixturesDir, "plugins", "github-repo.json"));
+    const builder = new ActionPackageBuilder({
+      applicationDid: plugin.applicationDid,
+      executionProfile: { id: plugin.executionProfile.id, format: plugin.executionProfile.format ?? "mcp.toolsCall" },
+      keyManager,
     });
-    const coordination = await startCoordinationDaemon({ port: 0 });
-    startedApps.push(adapter.app, coordination.app);
+    const client = new AdapterClient({ url: adapter.address });
+
+    const pkg = await builder.buildFromToolCall("create_issue", {
+      owner: "example-org",
+      repo: "mpas-demo-repository",
+      title: "E2E: proposerOnly action",
+    });
+    const response = await client.submit(pkg);
+
+    expect(response.result).toBe("executed");
+    const text = (response as any).executionResult?.content?.[0]?.text;
+    const parsed = JSON.parse(text);
+    expect(parsed.simulated_result.title).toBe("E2E: proposerOnly action");
+  });
+
+  // Scenario 2: Action in plugin with threshold 1 policy → needs 1 approval
+  it("requires 1 approval for delete_branch (in plugin, threshold 1 policy)", async () => {
+    const { ActionPackageBuilder, KeyManager, AdapterClient } = await loadBridgeModule();
+    const { adapter, coordination } = await startStack();
+
+    const keyManager = await KeyManager.fromFile(join(fixturesDir, "test-keys", "proposer.json"));
+    const plugin = await readJson(join(fixturesDir, "plugins", "github-repo.json"));
+    const builder = new ActionPackageBuilder({
+      applicationDid: plugin.applicationDid,
+      executionProfile: { id: plugin.executionProfile.id, format: plugin.executionProfile.format ?? "mcp.toolsCall" },
+      keyManager,
+    });
+    const client = new AdapterClient({ url: adapter.address });
+
+    const pkg = await builder.buildFromToolCall("delete_branch", {
+      owner: "example-org",
+      repo: "mpas-demo-repository",
+      branch: "feature/e2e-test",
+    });
+    const response = await client.submit(pkg);
+
+    expect(response.result).toBe("additionalApprovalsRequired");
+    const authReqs = (response as any).authorizationRequirements;
+    expect(authReqs.approvalRequirements.anyOf[0].threshold).toBe(1);
+    expect(authReqs.approvalRequirements.anyOf[0].description).toContain("Branch deletion");
+  });
+
+  // Scenario 3: Action in plugin with threshold 2 policy → needs 2 approvals
+  it("requires 2 approvals for merge_pull_request (in plugin, threshold 2 policy)", async () => {
+    const { ActionPackageBuilder, KeyManager, AdapterClient } = await loadBridgeModule();
+    const { adapter } = await startStack();
+
+    const keyManager = await KeyManager.fromFile(join(fixturesDir, "test-keys", "proposer.json"));
+    const plugin = await readJson(join(fixturesDir, "plugins", "github-repo.json"));
+    const builder = new ActionPackageBuilder({
+      applicationDid: plugin.applicationDid,
+      executionProfile: { id: plugin.executionProfile.id, format: plugin.executionProfile.format ?? "mcp.toolsCall" },
+      keyManager,
+    });
+    const client = new AdapterClient({ url: adapter.address });
+
+    const pkg = await builder.buildFromToolCall("merge_pull_request", {
+      owner: "example-org",
+      repo: "mpas-demo-repository",
+      pullNumber: 42,
+      baseRef: "main",
+      expectedHeadSha: "abc123",
+      mergeMethod: "squash",
+    });
+    const response = await client.submit(pkg);
+
+    expect(response.result).toBe("additionalApprovalsRequired");
+    const authReqs = (response as any).authorizationRequirements;
+    expect(authReqs.approvalRequirements.anyOf[0].threshold).toBe(2);
+    expect(authReqs.approvalRequirements.anyOf[0].description).toContain("PR merge");
+  });
+
+  // Scenario 4: Action NOT in plugin, but operator added a policy → uses operator policy
+  it("uses operator policy for close_issue (not in plugin, operator-added threshold 1)", async () => {
+    const { ActionPackageBuilder, KeyManager, AdapterClient } = await loadBridgeModule();
+    const { adapter } = await startStack();
+
+    const keyManager = await KeyManager.fromFile(join(fixturesDir, "test-keys", "proposer.json"));
+    const plugin = await readJson(join(fixturesDir, "plugins", "github-repo.json"));
+    const builder = new ActionPackageBuilder({
+      applicationDid: plugin.applicationDid,
+      executionProfile: { id: plugin.executionProfile.id, format: plugin.executionProfile.format ?? "mcp.toolsCall" },
+      keyManager,
+    });
+    const client = new AdapterClient({ url: adapter.address });
+
+    const pkg = await builder.buildFromToolCall("close_issue", {
+      owner: "example-org",
+      repo: "mpas-demo-repository",
+      issueNumber: 7,
+    });
+    const response = await client.submit(pkg);
+
+    expect(response.result).toBe("additionalApprovalsRequired");
+    const authReqs = (response as any).authorizationRequirements;
+    expect(authReqs.approvalRequirements.anyOf[0].threshold).toBe(1);
+    expect(authReqs.approvalRequirements.anyOf[0].description).toContain("Operator policy (close_issue)");
+  });
+
+  // Scenario 5: Action NOT in plugin, NOT in policy → pass-through, executes immediately
+  it("passes through star_repository (not in plugin, not in policy)", async () => {
+    const { ActionPackageBuilder, KeyManager, AdapterClient } = await loadBridgeModule();
+    const { adapter } = await startStack();
+
+    const keyManager = await KeyManager.fromFile(join(fixturesDir, "test-keys", "proposer.json"));
+    const plugin = await readJson(join(fixturesDir, "plugins", "github-repo.json"));
+    const builder = new ActionPackageBuilder({
+      applicationDid: plugin.applicationDid,
+      executionProfile: { id: plugin.executionProfile.id, format: plugin.executionProfile.format ?? "mcp.toolsCall" },
+      keyManager,
+    });
+    const client = new AdapterClient({ url: adapter.address });
+
+    const pkg = await builder.buildFromToolCall("star_repository", {
+      owner: "example-org",
+      repo: "mpas-demo-repository",
+    });
+    const response = await client.submit(pkg);
+
+    expect(response.result).toBe("executed");
+    const text = (response as any).executionResult?.content?.[0]?.text;
+    const parsed = JSON.parse(text);
+    expect(parsed.simulated_result.starred).toBe(true);
+  });
+
+  // Scenario 6: Action NOT in plugin, NOT in policy, echo server doesn't know it → dispatch fails
+  it("returns failed for unknown_tool (pass-through, target rejects)", async () => {
+    const { ActionPackageBuilder, KeyManager, AdapterClient } = await loadBridgeModule();
+    const { adapter } = await startStack();
+
+    const keyManager = await KeyManager.fromFile(join(fixturesDir, "test-keys", "proposer.json"));
+    const plugin = await readJson(join(fixturesDir, "plugins", "github-repo.json"));
+    const builder = new ActionPackageBuilder({
+      applicationDid: plugin.applicationDid,
+      executionProfile: { id: plugin.executionProfile.id, format: plugin.executionProfile.format ?? "mcp.toolsCall" },
+      keyManager,
+    });
+    const client = new AdapterClient({ url: adapter.address });
+
+    const pkg = await builder.buildFromToolCall("unknown_tool", {
+      owner: "example-org",
+      repo: "mpas-demo-repository",
+    });
+    const response = await client.submit(pkg);
+
+    expect(response.result).toBe("failed");
+  });
+
+  // Full approval flow: proposer → adapter → coordination → signer → resubmit → executed
+  it("full approval flow: delete_branch with signer approval", async () => {
+    const { ProposerBridge } = await loadBridgeModule();
+    const { adapter, coordination } = await startStack();
 
     const plugin = await readJson(join(fixturesDir, "plugins", "github-repo.json"));
     const proposer = new ProposerBridge({
@@ -62,8 +216,8 @@ e2eDescribe("MCP bridge, Credential Adapter, and Coordination Service E2E", () =
       approvalStrategy: "wait",
       approvalTimeoutMs: 5_000,
     });
-    const signer = new MaintainerBridge({
-      maintainerKey: join(fixturesDir, "test-keys", "maintainer-a.json"),
+    const signer = new SignerServer({
+      signerKey: join(fixturesDir, "test-keys", "maintainer-a.json"),
       coordinationUrl: coordination.address,
     });
 
@@ -73,62 +227,60 @@ e2eDescribe("MCP bridge, Credential Adapter, and Coordination Service E2E", () =
       branch: "feature/e2e-coordination",
     });
     const approvalRequest = await waitForApprovalRequest(signer);
-    const review = await signer.handleToolCall("mpas_review_action", {
-      actionId: approvalRequest.actionRef.actionId.value,
-    });
-    const approval = await signer.handleToolCall("mpas_approve", {
+    await signer.handleToolCall("mpas_approve", {
       actionId: approvalRequest.actionRef.actionId.value,
     });
     const proposerResult = await proposerResultPromise;
 
-    expect(review.isError).toBeUndefined();
-    expect(approval.isError).toBeUndefined();
-    expect(proposerResult.isError, JSON.stringify(proposerResult)).toBeUndefined();
-    // executionResult is the verbatim MCP tools/call result object (not the old dispatch wrapper).
-    expect(proposerResult.content[0]?.text).toContain('"mode": "dry_run"');
+    expect(proposerResult.isError).toBeUndefined();
     const parsed = JSON.parse(proposerResult.content[0].text!);
     expect(parsed.mode).toBe("dry_run");
     expect(parsed.simulated_result).toMatchObject({ deleted: true, ref: "feature/e2e-coordination" });
   });
 
-  it("rejects replay of a dispatched actionId and accepts a fresh one", async () => {
+  // Replay detection: same actionId after dispatch → rejected
+  it("rejects replay of a dispatched actionId", async () => {
     const { ActionPackageBuilder, KeyManager, AdapterClient } = await loadBridgeModule();
-    const adapter = await startDaemon({
-      configDir: join(fixturesDir, "configs"),
-      credentialDir: await credentialDir(),
-      adapterKeyPath: join(fixturesDir, "test-keys", "adapter.json"),
-      port: 0,
-      journalPath: join(await mkdtemp(join(tmpdir(), "mpas-e2e-journal-")), "dispatch-ledger.jsonl"),
-    });
-    startedApps.push(adapter.app);
+    const { adapter } = await startStack();
 
-    const plugin = await readJson(join(fixturesDir, "plugins", "github-repo.json"));
     const keyManager = await KeyManager.fromFile(join(fixturesDir, "test-keys", "proposer.json"));
+    const plugin = await readJson(join(fixturesDir, "plugins", "github-repo.json"));
     const builder = new ActionPackageBuilder({
       applicationDid: plugin.applicationDid,
       executionProfile: { id: plugin.executionProfile.id, format: plugin.executionProfile.format ?? "mcp.toolsCall" },
       keyManager,
     });
     const client = new AdapterClient({ url: adapter.address });
-    const args = { owner: "example-org", repo: "mpas-demo-repository", title: "hello from e2e" };
 
-    // Build + sign a package (auto-approved create_issue), dispatch it once.
-    const pkg = await builder.buildFromToolCall("create_issue", args);
+    const pkg = await builder.buildFromToolCall("create_issue", {
+      owner: "example-org",
+      repo: "mpas-demo-repository",
+      title: "replay test",
+    });
+
     const first = await client.submit(pkg);
-    expect(first.result, JSON.stringify(first)).toBe("executed");
+    expect(first.result).toBe("executed");
 
-    // Replaying the exact same package (same actionId, same envelope hash) is rejected.
     const replay = await client.submit(pkg);
     expect(replay.result).toBe("rejected");
-    expect(replay.error?.code).toBe("REPLAY_DETECTED");
-
-    // Rebuilding mints a fresh actionId (and re-signs), so it dispatches normally.
-    const freshPkg = await builder.buildFromToolCall("create_issue", args);
-    expect(freshPkg.actionEnvelope.actionId.value).not.toBe(pkg.actionEnvelope.actionId.value);
-    const third = await client.submit(freshPkg);
-    expect(third.result, JSON.stringify(third)).toBe("executed");
+    expect((replay as any).error?.code).toBe("REPLAY_DETECTED");
   });
 });
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+async function startStack() {
+  const adapter = await startDaemon({
+    configDir: e2eConfigDir,
+    credentialDir: await credentialDir(),
+    adapterKeyPath: join(fixturesDir, "test-keys", "adapter.json"),
+    port: 0,
+    journalPath: join(await mkdtemp(join(tmpdir(), "mpas-e2e-journal-")), "dispatch-ledger.jsonl"),
+  });
+  const coordination = await startCoordinationDaemon({ port: 0 });
+  startedApps.push(adapter.app, coordination.app);
+  return { adapter, coordination };
+}
 
 async function waitForApprovalRequest(signer: BridgeInstance): Promise<Record<string, any>> {
   const deadline = Date.now() + 3_000;

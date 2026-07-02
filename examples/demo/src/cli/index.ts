@@ -163,6 +163,12 @@ export async function runCli(args = process.argv.slice(2), io: CliIo = defaultIo
       return { exitCode: 0 };
     }
 
+    if (domain === "signer-server" && command === "start") {
+      const { runSignerServer } = await import("../signer-server/index.js");
+      await runSignerServer(args.filter((a) => a !== "signer-server" && a !== "start"));
+      return { exitCode: 0 };
+    }
+
     io.stderr.write(`${usage()}\n`);
     return { exitCode: 1 };
   } catch (error) {
@@ -597,6 +603,7 @@ function usage(): string {
     "  mpas daemon start [--config-dir <dir>] [--credential-dir <dir>] [--adapter-key <file>] [--journal-path <file>] [--trace <file>] [--host <host>] [--port <port>] [--coordination-port <port>]",
     "  mpas daemon status [--config-dir <dir>] [--host <host>] [--port <port>]",
     "  mpas coordination start [--host <host>] [--port <port>] [--trace <file>]",
+    "  mpas signer-server start --config <path>",
     "  mpas key generate <name> [--key-dir <dir>]",
     "  mpas test submit <file> [--url <adapter-url>]",
     "  mpas test dry-run <file> [--config-dir <dir>]",

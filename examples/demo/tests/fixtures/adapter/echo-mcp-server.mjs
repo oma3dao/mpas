@@ -61,6 +61,33 @@ const tools = [
       additionalProperties: false,
     },
   },
+  {
+    name: "close_issue",
+    description: "Close an existing issue.",
+    inputSchema: {
+      type: "object",
+      required: ["owner", "repo", "issueNumber"],
+      properties: {
+        owner: { type: "string" },
+        repo: { type: "string" },
+        issueNumber: { type: "integer" },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "star_repository",
+    description: "Star a repository.",
+    inputSchema: {
+      type: "object",
+      required: ["owner", "repo"],
+      properties: {
+        owner: { type: "string" },
+        repo: { type: "string" },
+      },
+      additionalProperties: false,
+    },
+  },
 ];
 
 function handleToolCall(name, args) {
@@ -103,6 +130,31 @@ function handleToolCall(name, args) {
           merged: true,
           sha: "dry-run-no-real-sha",
           message: "Pull request merge simulated",
+        },
+      };
+
+    case "close_issue":
+      return {
+        mode: "dry_run",
+        pid: process.pid,
+        credentialPresent,
+        message: "MPAS dry run: issue close validated but not dispatched to GitHub.",
+        simulated_result: {
+          number: args.issueNumber ?? 1,
+          state: "closed",
+        },
+      };
+
+    case "star_repository":
+      return {
+        mode: "dry_run",
+        pid: process.pid,
+        credentialPresent,
+        message: "MPAS dry run: star validated but not dispatched to GitHub.",
+        simulated_result: {
+          starred: true,
+          owner: args.owner,
+          repo: args.repo,
         },
       };
 

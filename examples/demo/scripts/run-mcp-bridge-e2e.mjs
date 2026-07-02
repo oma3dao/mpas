@@ -3,7 +3,7 @@ import { resolve } from "node:path";
 import { spawn } from "node:child_process";
 
 const args = process.argv.slice(2);
-let bridgeDir = process.env.MPAS_MCP_BRIDGE_DIR ?? resolve(process.cwd(), "..", "..", "sdk", "mcp-bridge");
+let bridgeDir = process.env.MPAS_MCP_BRIDGE_DIR ?? resolve(process.cwd(), "..", "..", "sdk", "protocol");
 
 for (let index = 0; index < args.length; index += 1) {
   const arg = args[index];

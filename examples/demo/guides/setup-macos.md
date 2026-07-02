@@ -4,7 +4,7 @@
 **Tested target:** MacBook Pro 15-inch 2017, Intel Core i7, 16 GB RAM, macOS Ventura 13.7.x  
 **Purpose:** Run the local MPAS demo stack with autonomous agents  
 **Last updated:** 2026-06-14  
-**Specifications:** https://github.com/oma3dao/mpas-docs/specification
+**Specifications:** ../../specs/ (local)
 
 | Document                              | Description                                                       |
 | ------------------------------------- | ----------------------------------------------------------------- |
@@ -48,7 +48,7 @@ If you already have MPAS built and tests passing, skip to Part 2 (single-user) o
 >
 > **Recommendation:** Keep the default name (`main`) rather than renaming it — renaming can break the harness's internal agent registry and message routing. Just remember: **wherever this guide says "proposer," substitute your harness's default agent name** (`main` for OpenClaw). For the **maintainer**, you create a second agent — name that one `maintainer` (or any name you like) since it has no default.
 >
-> **Terminology note:** The MPAS protocol uses "signer" as a generic term for any participant that signs something (both proposers and maintainers are signers). In this guide, we use "maintainer" for the specific role that reviews and approves/rejects actions. You'll see `trustedSigners` in config files — that array contains ALL participants regardless of role.
+> **Terminology note:** The MPAS protocol uses "signer" as a generic term for any participant that signs something (both proposers and maintainers are signers). In this guide, we use "maintainer" for the specific role that reviews and approves/rejects actions. In config files, `signerKeys` is the key registry (DID + publicJwk for verification) and `policy.signerGroups` defines authorization (who can propose, who can approve).
 
 ---
 
@@ -177,16 +177,16 @@ npm run build
 npm test
 ```
 
-Then the MCP bridge package:
+Then the protocol SDK:
 
 ```sh
-cd ~/Projects/mpas/mpas/sdk/mcp-bridge
+cd ~/Projects/mpas/mpas/sdk/protocol
 npm install
 npm run build
 npm test
 ```
 
-Expected: `examples/demo` passes 170 tests; `mcp-bridge` passes 48 tests.
+Expected: `examples/demo` passes 213+ tests; `sdk/protocol` passes 42 tests.
 
 ### Step 8: Run the E2E Test
 
@@ -194,7 +194,7 @@ This verifies the full stack end-to-end (proposer → coordination → maintaine
 
 ```sh
 cd ~/Projects/mpas/mpas/examples/demo
-npm run test:e2e:mcp-bridge -- --mcp-bridge-dir ~/Projects/mpas/mpas/sdk/mcp-bridge
+npm run test:e2e:mcp-bridge -- --mcp-bridge-dir ~/Projects/mpas/mpas/sdk/protocol
 ```
 
 Expected: 2 tests pass (approval flow + replay detection).
@@ -319,7 +319,7 @@ Each command prints the `did` and `publicJwk` needed for the next step (register
 
 ### Register keys in the deployment config and bridge configs
 
-You now need to paste the `did` and `publicJwk` values from the `key generate` output into three files. The deployment config needs them in `trustedSigners`, and each bridge config needs the corresponding `did` in `agent.did`.
+You now need to paste the `did` and `publicJwk` values from the `key generate` output into three files. The deployment config needs them in `signerKeys` (key registry) and `policy.signerGroups` (authorization groups), and each bridge config needs the corresponding `did` in `agent.did`.
 
 First, create the bridge config files with placeholders:
 
@@ -350,7 +350,6 @@ EOF
 ```sh
 cat > $MPAS_HOME/bridge-configs/maintainer-a-bridge.json <<EOF
 {
-  "mode": "maintainer",
   "agent": {
     "did": "REPLACE_ME_WITH_MAINTAINER_A_DID",
     "keyFile": "$MPAS_HOME/keys/maintainer-a-key.json"
@@ -364,23 +363,38 @@ EOF
 
 Now edit these three files using the `did` and `publicJwk` values from `key generate`:
 
-1. **`$MPAS_HOME/config/github-strict.json`** — replace the `trustedSigners` array:
+1. **`$MPAS_HOME/config/github-strict.json`** — replace the `signerKeys` array and update `policy.signerGroups`:
 
 ```json
-"trustedSigners": [
+"signerKeys": [
   {
     "did": "<did from proposer key generate output>",
-    "roles": ["proposer"],
     "label": "Proposer Agent",
     "publicJwk": { <publicJwk from proposer key generate output> }
   },
   {
     "did": "<did from maintainer-a key generate output>",
-    "roles": ["maintainer"],
     "label": "Maintainer A",
     "publicJwk": { <publicJwk from maintainer-a key generate output> }
   }
 ]
+```
+
+And inside the `policy` object, set the `signerGroups`:
+
+```json
+"signerGroups": {
+  "all": [
+    "<proposer did>",
+    "<maintainer-a did>"
+  ],
+  "proposers": [
+    "<proposer did>"
+  ],
+  "maintainers": [
+    "<maintainer-a did>"
+  ]
+}
 ```
 
 2. **`$MPAS_HOME/bridge-configs/proposer-bridge.json`** — replace `REPLACE_ME_WITH_PROPOSER_DID` with the proposer `did` value.
@@ -413,7 +427,7 @@ node dist/cli/index.js config validate github-strict \
   --bridge-dir "$MPAS_HOME/bridge-configs"
 ```
 
-This checks that each `trustedSigners` entry has a DID that matches its `publicJwk`, that credentials exist, and that each bridge config's `agent.did` is listed in `trustedSigners`. Fix any errors before proceeding.
+This checks that each `signerKeys` entry has a DID that matches its `publicJwk`, that credentials exist, and that each bridge config's `agent.did` is listed in `signerKeys`. Fix any errors before proceeding.
 
 > **Expected warnings (safe to ignore in single-user mode):** You will see warnings that `proposer-bridge.json` and `maintainer-a-bridge.json` use different DIDs. This is correct — they are two separate agents with distinct identities. The warning exists for the dual-role case where one agent runs both bridges with a shared DID (so self-approval prevention applies between them). In the single-user demo, you have two independent agents, so different DIDs are intentional.
 
@@ -480,7 +494,7 @@ Create `~/.codex-proposer/config.toml`:
 [mcp_servers.github-mpas]
 command = "node"
 args = [
-  "/Users/YOU/Projects/mpas/mpas/sdk/mcp-bridge/dist/cli.js",
+  "/Users/YOU/Projects/mpas/mpas/sdk/protocol/dist/cli.js",
   "--config",
   "/Users/YOU/.mpas/bridge-configs/proposer-bridge.json"
 ]
@@ -497,7 +511,7 @@ Create `~/.codex-maintainer/config.toml`:
 [mcp_servers.mpas-coordination]
 command = "node"
 args = [
-  "/Users/YOU/Projects/mpas/mpas/sdk/mcp-bridge/dist/cli.js",
+  "/Users/YOU/Projects/mpas/mpas/examples/demo/dist/signer-server/index.js",
   "--config",
   "/Users/YOU/.mpas/bridge-configs/maintainer-a-bridge.json"
 ]
@@ -674,7 +688,7 @@ openclaw config set mcp.servers "$(cat <<'JSON'
   "github-mpas": {
     "command": "/ABSOLUTE/PATH/TO/node",
     "args": [
-      "/Users/YOU/Projects/mpas/mpas/sdk/mcp-bridge/dist/cli.js",
+      "/Users/YOU/Projects/mpas/mpas/sdk/protocol/dist/cli.js",
       "--config",
       "/Users/YOU/.mpas/bridge-configs/proposer-bridge.json"
     ]
@@ -682,7 +696,7 @@ openclaw config set mcp.servers "$(cat <<'JSON'
   "mpas-coordination": {
     "command": "/ABSOLUTE/PATH/TO/node",
     "args": [
-      "/Users/YOU/Projects/mpas/mpas/sdk/mcp-bridge/dist/cli.js",
+      "/Users/YOU/Projects/mpas/mpas/examples/demo/dist/signer-server/index.js",
       "--config",
       "/Users/YOU/.mpas/bridge-configs/maintainer-a-bridge.json"
     ]
@@ -801,7 +815,7 @@ Edit `~/Library/Application Support/Claude/claude_desktop_config.json`:
     "github-mpas": {
       "command": "node",
       "args": [
-        "/Users/YOU/Projects/mpas/mpas/sdk/mcp-bridge/dist/cli.js",
+        "/Users/YOU/Projects/mpas/mpas/sdk/protocol/dist/cli.js",
         "--config",
         "/Users/YOU/.mpas/bridge-configs/proposer-bridge.json"
       ]
@@ -809,7 +823,7 @@ Edit `~/Library/Application Support/Claude/claude_desktop_config.json`:
     "mpas-coordination": {
       "command": "node",
       "args": [
-        "/Users/YOU/Projects/mpas/mpas/sdk/mcp-bridge/dist/cli.js",
+        "/Users/YOU/Projects/mpas/mpas/examples/demo/dist/signer-server/index.js",
         "--config",
         "/Users/YOU/.mpas/bridge-configs/maintainer-a-bridge.json"
       ]
@@ -1215,7 +1229,6 @@ Replace `REPLACE_WITH_YOUR_DID_FROM_KEY_GENERATE` with the `did` value from `key
 ```sh
 cat > ~/.mpas/bridge-configs/maintainer-a-bridge.json <<EOF
 {
-  "mode": "maintainer",
   "agent": {
     "did": "REPLACE_WITH_YOUR_DID_FROM_KEY_GENERATE",
     "keyFile": "$HOME/.mpas/keys/maintainer-a-key.json"
@@ -1231,7 +1244,7 @@ Replace `REPLACE_WITH_YOUR_DID_FROM_KEY_GENERATE` with the `did` value from `key
 
 ## 5.4 Register DIDs on the Operator
 
-Back in the **operator** account, edit `$MPAS_HOME/config/github-strict.json` and replace the `trustedSigners` array with the new agent DIDs:
+Back in the **operator** account, edit `$MPAS_HOME/config/github-strict.json` and update the `signerKeys` array and `policy.signerGroups` with the new agent DIDs:
 
 > **Transferring DIDs between accounts:** macOS clipboard (copy/paste) does not work across user sessions. To get the `did` and `publicJwk` values from each agent account to the operator, use one of:
 > - **Shared temp file:** write the key generate output to `/tmp/agent-a-did.txt` (world-readable), then read it from the operator session. Delete after.
@@ -1240,21 +1253,31 @@ Back in the **operator** account, edit `$MPAS_HOME/config/github-strict.json` an
 >
 > The DID and publicJwk are public values — there's no security concern sharing them.
 
+Update `signerKeys` (the key registry for signature verification):
+
 ```json
-"trustedSigners": [
+"signerKeys": [
   {
     "did": "<did from agent-a key generate>",
-    "roles": ["proposer"],
     "label": "Agent A (Proposer)",
     "publicJwk": { <publicJwk from agent-a key generate> }
   },
   {
     "did": "<did from agent-b key generate>",
-    "roles": ["maintainer"],
     "label": "Agent B (Maintainer)",
     "publicJwk": { <publicJwk from agent-b key generate> }
   }
 ]
+```
+
+And inside the `policy` object, update `signerGroups` (authorization):
+
+```json
+"signerGroups": {
+  "all": ["<agent-a did>", "<agent-b did>"],
+  "proposers": ["<agent-a did>"],
+  "maintainers": ["<agent-b did>"]
+}
 ```
 
 Restart the daemon (stop with Ctrl+C, restart per §2.2) so it picks up the new signers.
@@ -1355,10 +1378,9 @@ cat > ~/.mpas/bridge-configs/proposer-bridge.json <<EOF
 }
 EOF
 
-# Maintainer bridge
+# Signer server config
 cat > ~/.mpas/bridge-configs/maintainer-a-bridge.json <<EOF
 {
-  "mode": "maintainer",
   "agent": {
     "did": "<did from key generate>",
     "keyFile": "$HOME/.mpas/keys/agent-1.json"
@@ -1419,7 +1441,7 @@ openclaw config set mcp.servers "$(cat <<'JSON'
   "github-mpas": {
     "command": "/ABSOLUTE/PATH/TO/node",
     "args": [
-      "/Users/YOU/Projects/mpas/mpas/sdk/mcp-bridge/dist/cli.js",
+      "/Users/YOU/Projects/mpas/mpas/sdk/protocol/dist/cli.js",
       "--config",
       "/Users/YOU/.mpas/bridge-configs/proposer-bridge.json"
     ]
@@ -1427,7 +1449,7 @@ openclaw config set mcp.servers "$(cat <<'JSON'
   "mpas-coordination": {
     "command": "/ABSOLUTE/PATH/TO/node",
     "args": [
-      "/Users/YOU/Projects/mpas/mpas/sdk/mcp-bridge/dist/cli.js",
+      "/Users/YOU/Projects/mpas/mpas/examples/demo/dist/signer-server/index.js",
       "--config",
       "/Users/YOU/.mpas/bridge-configs/maintainer-a-bridge.json"
     ]
@@ -1443,7 +1465,7 @@ JSON
 [mcp_servers.github-mpas]
 command = "node"
 args = [
-  "/Users/YOU/Projects/mpas/mpas/sdk/mcp-bridge/dist/cli.js",
+  "/Users/YOU/Projects/mpas/mpas/sdk/protocol/dist/cli.js",
   "--config",
   "/Users/YOU/.mpas/bridge-configs/proposer-bridge.json"
 ]
@@ -1452,25 +1474,36 @@ enabled = true
 [mcp_servers.mpas-coordination]
 command = "node"
 args = [
-  "/Users/YOU/Projects/mpas/mpas/sdk/mcp-bridge/dist/cli.js",
+  "/Users/YOU/Projects/mpas/mpas/examples/demo/dist/signer-server/index.js",
   "--config",
   "/Users/YOU/.mpas/bridge-configs/maintainer-a-bridge.json"
 ]
 enabled = true
 ```
 
-5. **Deployment config** — on the operator account, register the agent's DID with both roles in `$MPAS_HOME/config/github-strict.json` (the same `trustedSigners` array you edited in §5.4):
+5. **Deployment config** — on the operator account, register the agent's DID in `$MPAS_HOME/config/github-strict.json`:
+
+In `signerKeys`:
 
 ```json
 {
   "did": "<agent-1 did>",
-  "roles": ["proposer", "maintainer"],
   "label": "Agent 1 (symmetric)",
   "publicJwk": { <publicJwk from key generate> }
 }
 ```
 
-Each symmetric agent gets one entry with `"roles": ["proposer", "maintainer"]` instead of the dedicated single-role entries used in the standard topology.
+In `policy.signerGroups`, add the agent's DID to both `proposers` and `maintainers` (and `all`):
+
+```json
+"signerGroups": {
+  "all": ["<agent-1 did>", "<agent-2 did>"],
+  "proposers": ["<agent-1 did>", "<agent-2 did>"],
+  "maintainers": ["<agent-1 did>", "<agent-2 did>"]
+}
+```
+
+Each symmetric agent appears in both the `proposers` and `maintainers` groups instead of being in only one.
 
 ### Protocol enforcement
 
@@ -1495,7 +1528,7 @@ This means symmetric signers require at least two agents to function. A single s
 | ------------------------------------------------------ | ----------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
 | `node --version` shows less than `v22.x`               | Shell is using another Node                           | Run `nvm install --lts`; check `which node`; reopen the terminal.                                |
 | Node install says your macOS is too old                | Newer Node versions may not support your OS           | Install Node 22 with `nvm install 22`; if macOS is older than 11, upgrade macOS or use another machine. |
-| `npm install` fails immediately                        | Wrong directory or missing package.json               | Run it inside `mpas/examples/demo` or `mpas/sdk/mcp-bridge`.                                    |
+| `npm install` fails immediately                        | Wrong directory or missing package.json               | Run it inside `mpas/examples/demo` or `mpas/sdk/protocol`.                                    |
 | `npm run build` fails with modern JS/TS syntax errors  | Wrong Node version                                    | Verify `node --version` is `v22.x` or later.                                                    |
 | `generate-fixtures.ts` fails                           | Missing dependencies                                  | Run `npm install` first.                                                                         |
 | `EACCES` on keys or credentials                        | File permissions or wrong path                        | Run `chmod 600 "$MPAS_HOME"/keys/*.json "$MPAS_HOME"/credentials/*.json`.                        |
@@ -1522,14 +1555,14 @@ This means symmetric signers require at least two agents to function. A single s
 - [ ] macOS 11+
 - [ ] `node --version` → `v22.x` or later
 - [ ] `mpas/examples/demo`: install + generate fixtures + build + test pass
-- [ ] `mcp-bridge`: install + build + test pass
+- [ ] `sdk/protocol`: install + build + test pass
 - [ ] E2E test: 2 tests pass
 - [ ] Agent harness installed and responding
 
 **Part 2 — Single-User Demo Setup:**
 
 - [ ] Keys generated (adapter, proposer, maintainer-a)
-- [ ] `trustedSigners` populated in deployment config
+- [ ] `signerKeys` and `policy.signerGroups` populated in deployment config
 - [ ] Bridge configs created with correct DIDs and absolute paths
 - [ ] `config validate` passes
 - [ ] Adapter health: `http://127.0.0.1:7544/mpas/v1/health`
@@ -1553,7 +1586,7 @@ This means symmetric signers require at least two agents to function. A single s
 - [ ] Part 1 completed on each agent account (Node 22+, repos on `main`, built, tests pass)
 - [ ] `~/.mpas` directory structure created on each agent
 - [ ] Fresh keys generated on each agent account
-- [ ] DIDs registered in operator's `trustedSigners`; daemon restarted
+- [ ] DIDs registered in operator's `signerKeys` and `policy.signerGroups`; daemon restarted
 - [ ] Bridge configs created on each agent account (proposer has plugin copy)
 - [ ] Part 3 (harness setup) completed on each agent account
 - [ ] Cross-account demo verified (§5.6)
@@ -1563,7 +1596,7 @@ This means symmetric signers require at least two agents to function. A single s
 
 # References
 
-- MPAS Specifications: https://github.com/oma3dao/mpas-docs/specification
+- MPAS Specifications: ../../specs/ (local)
 - Node.js LTS macOS support: https://nodejs.org/en/about/previous-releases
 - Codex CLI: https://github.com/openai/codex
 - Codex CLI MCP config: https://openai-codex.mintlify.app/configuration/mcp-servers

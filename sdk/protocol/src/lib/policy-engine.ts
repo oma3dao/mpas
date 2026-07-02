@@ -1,0 +1,407 @@
+/**
+ * MPAS JSON Verifier Policy Engine
+ *
+ * Implements the policy evaluation semantics defined in mpas-profile-policy-json.md.
+ *
+ * Key behaviors:
+ * - All matching policies apply (logical AND of their requirements).
+ * - If no policy matches, defaultRequirement applies (defaults to proposerOnly).
+ * - Explicit rules override defaultRequirement when they match.
+ * - Requirements support recursive composition via allOf/anyOf.
+ * - The proposer's own approval never counts toward thresholds (self-approval prevention).
+ */
+
+import type { ActionPackage, Did, ExecutionPayload } from "../types/mpas.js";
+import type { VerifiedApprovals } from "./verification.js";
+
+// ---------------------------------------------------------------------------
+// Requirement Types (per spec §5.5)
+// ---------------------------------------------------------------------------
+
+export interface ProposerOnlyRequirement {
+  type: "proposerOnly";
+}
+
+export interface ThresholdRequirement {
+  type: "threshold";
+  threshold: number;
+  eligibleSignerGroup?: string;
+  eligibleSigners?: Did[];
+  decision?: "approve" | "propose" | "reject" | "abstain";
+  description?: string;
+}
+
+export interface AllOfRequirement {
+  type: "allOf";
+  requirements: Requirement[];
+}
+
+export interface AnyOfRequirement {
+  type: "anyOf";
+  requirements: Requirement[];
+}
+
+export type Requirement =
+  | ProposerOnlyRequirement
+  | ThresholdRequirement
+  | AllOfRequirement
+  | AnyOfRequirement;
+
+// ---------------------------------------------------------------------------
+// Policy Config (deployment-level, consumed by the adapter)
+// ---------------------------------------------------------------------------
+
+export interface PolicyConfig {
+  defaultRequirement: Requirement;
+  policies?: Record<string, PolicyEntry[]>;
+  resourceRestrictions?: ResourceRestrictions;
+  signerGroups?: Record<string, Did[]>;
+}
+
+export interface ResourceRestrictions {
+  allowedRepositories?: string[];
+  allowedOrganizations?: string[];
+}
+
+export interface PolicyEntry {
+  description?: string;
+  match?: {
+    conditions?: PolicyCondition[];
+  };
+  requirements: Requirement;
+}
+
+// ---------------------------------------------------------------------------
+// Conditions (per spec §5.4)
+// ---------------------------------------------------------------------------
+
+export type ConditionSource = "executionPayload" | "actionEnvelope";
+
+export type ConditionOp =
+  | "eq"
+  | "neq"
+  | "in"
+  | "notIn"
+  | "gt"
+  | "gte"
+  | "lt"
+  | "lte"
+  | "exists"
+  | "notExists"
+  | "contains"
+  | "prefix";
+
+export interface PolicyCondition {
+  source: ConditionSource;
+  path: string;
+  op: ConditionOp;
+  value?: unknown;
+}
+
+// ---------------------------------------------------------------------------
+// Results
+// ---------------------------------------------------------------------------
+
+export interface UnsatisfiedThreshold {
+  requirement: ThresholdRequirement;
+  requiredRole: string;
+  requiredDecision: string;
+  threshold: number;
+  found: number;
+  eligibleSigners: Did[];
+}
+
+export type PolicyResult =
+  | { status: "satisfied" }
+  | { status: "additionalApprovalsRequired"; unsatisfiedRules: UnsatisfiedThreshold[] }
+  | { status: "denied"; code: "RESOURCE_RESTRICTED" | "DEFAULT_DENY"; message: string };
+
+// ---------------------------------------------------------------------------
+// Evaluation
+// ---------------------------------------------------------------------------
+
+export function evaluatePolicy(
+  actionPackage: ActionPackage,
+  verifiedApprovals: VerifiedApprovals,
+  policy: PolicyConfig,
+): PolicyResult {
+  // Resource restrictions are checked first (outside the policy model proper).
+  if (policy.resourceRestrictions && !checkResourceRestrictions(actionPackage.executionPayload, policy.resourceRestrictions)) {
+    return {
+      status: "denied",
+      code: "RESOURCE_RESTRICTED",
+      message: "Execution Payload references a restricted resource.",
+    };
+  }
+
+  const proposerDid = actionPackage.actionEnvelope.proposer.did;
+
+  // Determine the action name from the execution payload.
+  const payload = actionPackage.executionPayload;
+  const actionName = isRecord(payload) && typeof payload.name === "string" ? payload.name : undefined;
+
+  // Look up the action name in the policies object (structural match by key).
+  const policyEntries = actionName && policy.policies?.[actionName];
+
+  // Collect all matching entries within the action's policy array.
+  const matchedEntries: PolicyEntry[] = [];
+  if (policyEntries) {
+    for (const entry of policyEntries) {
+      if (!entry.match?.conditions || entry.match.conditions.length === 0 || matchesConditions(entry.match.conditions, actionPackage)) {
+        matchedEntries.push(entry);
+      }
+    }
+  }
+
+  // Determine the effective requirement.
+  let effectiveRequirement: Requirement;
+
+  if (matchedEntries.length > 0) {
+    // All matching entries apply — combine with allOf.
+    if (matchedEntries.length === 1) {
+      effectiveRequirement = matchedEntries[0].requirements;
+    } else {
+      effectiveRequirement = {
+        type: "allOf",
+        requirements: matchedEntries.map((e) => e.requirements),
+      };
+    }
+  } else {
+    // No policy entry matched — use defaultRequirement.
+    effectiveRequirement = policy.defaultRequirement;
+  }
+
+  // Evaluate the effective requirement tree.
+  const unsatisfied = evaluateRequirement(effectiveRequirement, verifiedApprovals, policy, proposerDid);
+
+  if (unsatisfied.length === 0) {
+    return { status: "satisfied" };
+  }
+
+  return {
+    status: "additionalApprovalsRequired",
+    unsatisfiedRules: unsatisfied,
+  };
+}
+
+/**
+ * Recursively evaluates a requirement tree.
+ * Returns an array of unsatisfied threshold requirements (empty if satisfied).
+ */
+function evaluateRequirement(
+  requirement: Requirement,
+  verifiedApprovals: VerifiedApprovals,
+  policy: PolicyConfig,
+  proposerDid?: string,
+): UnsatisfiedThreshold[] {
+  switch (requirement.type) {
+    case "proposerOnly":
+      // Proposer's valid approval is sufficient — always satisfied at this level.
+      // (The proposer's envelope signature was verified upstream.)
+      return [];
+
+    case "threshold":
+      return evaluateThreshold(requirement, verifiedApprovals, policy, proposerDid);
+
+    case "allOf":
+      // All nested requirements must be satisfied.
+      return requirement.requirements.flatMap((r) =>
+        evaluateRequirement(r, verifiedApprovals, policy, proposerDid),
+      );
+
+    case "anyOf":
+      // At least one nested requirement must be fully satisfied.
+      for (const r of requirement.requirements) {
+        const result = evaluateRequirement(r, verifiedApprovals, policy, proposerDid);
+        if (result.length === 0) {
+          return []; // This branch is satisfied.
+        }
+      }
+      // None satisfied — return the unsatisfied from the first branch as representative.
+      // (The operator can see what's needed for any path.)
+      return evaluateRequirement(requirement.requirements[0], verifiedApprovals, policy, proposerDid);
+
+    default:
+      return [];
+  }
+}
+
+function evaluateThreshold(
+  requirement: ThresholdRequirement,
+  verifiedApprovals: VerifiedApprovals,
+  policy: PolicyConfig,
+  proposerDid?: string,
+): UnsatisfiedThreshold[] {
+  if (requirement.threshold === 0) {
+    return [];
+  }
+
+  const decision = requirement.decision ?? "approve";
+  const eligibleSigners = resolveEligibleSigners(requirement, policy);
+  const eligibleSet = eligibleSigners.length > 0
+    ? new Set(eligibleSigners.map((d) => d.toLowerCase()))
+    : null;
+
+  const found = verifiedApprovals.approvals.filter((approval) => {
+    // Never count the proposer's own approval.
+    if (approval.signerDid === proposerDid) return false;
+    // Must have the required decision.
+    if (approval.decision !== decision) return false;
+
+    // Check DID membership in eligible set.
+    if (eligibleSet && eligibleSet.has(approval.signerDid.toLowerCase())) {
+      return true;
+    }
+
+    return false;
+  }).length;
+
+  if (found >= requirement.threshold) {
+    return [];
+  }
+
+  return [
+    {
+      requirement,
+      requiredRole: requirement.eligibleSignerGroup ?? "unknown",
+      requiredDecision: decision,
+      threshold: requirement.threshold,
+      found,
+      eligibleSigners,
+    },
+  ];
+}
+
+/**
+ * Resolves eligible signers for a threshold requirement.
+ * Checks eligibleSigners (inline) first, then eligibleSignerGroup in signerGroups.
+ */
+function resolveEligibleSigners(requirement: ThresholdRequirement, policy: PolicyConfig): Did[] {
+  // Inline eligible signers take precedence.
+  if (requirement.eligibleSigners && requirement.eligibleSigners.length > 0) {
+    return requirement.eligibleSigners;
+  }
+
+  if (!requirement.eligibleSignerGroup) {
+    return [];
+  }
+
+  // Look up signerGroups (plain DID arrays).
+  return policy.signerGroups?.[requirement.eligibleSignerGroup] ?? [];
+}
+
+// ---------------------------------------------------------------------------
+// Condition matching
+// ---------------------------------------------------------------------------
+
+function matchesConditions(conditions: PolicyCondition[], actionPackage: ActionPackage): boolean {
+  return conditions.every((condition) => conditionMatches(condition, actionPackage));
+}
+
+function conditionMatches(condition: PolicyCondition, actionPackage: ActionPackage): boolean {
+  const source = condition.source === "actionEnvelope"
+    ? actionPackage.actionEnvelope
+    : actionPackage.executionPayload;
+
+  const actual = getJsonPointerValue(source, condition.path);
+
+  switch (condition.op) {
+    case "eq":
+      return actual === condition.value;
+
+    case "neq":
+      return actual !== condition.value;
+
+    case "in":
+      return Array.isArray(condition.value) && condition.value.includes(actual);
+
+    case "notIn":
+      return Array.isArray(condition.value) && !condition.value.includes(actual);
+
+    case "gt":
+      return toNumber(actual) > toNumber(condition.value);
+
+    case "gte":
+      return toNumber(actual) >= toNumber(condition.value);
+
+    case "lt":
+      return toNumber(actual) < toNumber(condition.value);
+
+    case "lte":
+      return toNumber(actual) <= toNumber(condition.value);
+
+    case "exists":
+      return actual !== undefined;
+
+    case "notExists":
+      return actual === undefined;
+
+    case "contains":
+      return Array.isArray(actual) && actual.includes(condition.value);
+
+    case "prefix":
+      return typeof actual === "string" && typeof condition.value === "string" && actual.startsWith(condition.value);
+
+    default:
+      return false;
+  }
+}
+
+function toNumber(value: unknown): number {
+  if (typeof value === "number") return value;
+  if (typeof value === "bigint") return Number(value);
+  if (typeof value === "string") {
+    const n = Number(value);
+    return Number.isNaN(n) ? -Infinity : n;
+  }
+  return -Infinity;
+}
+
+// ---------------------------------------------------------------------------
+// Resource restrictions (adapter-level, outside the spec policy model)
+// ---------------------------------------------------------------------------
+
+export function checkResourceRestrictions(payload: ExecutionPayload, restrictions: ResourceRestrictions): boolean {
+  const args = getJsonPointerValue(payload, "/arguments");
+  if (!isRecord(args)) {
+    return true;
+  }
+
+  const owner = typeof args.owner === "string" ? args.owner : undefined;
+  const repo = typeof args.repo === "string" ? args.repo : undefined;
+
+  if (restrictions.allowedOrganizations && owner && !restrictions.allowedOrganizations.includes(owner)) {
+    return false;
+  }
+
+  if (restrictions.allowedRepositories && owner && repo) {
+    return restrictions.allowedRepositories.includes(`${owner}/${repo}`);
+  }
+
+  return true;
+}
+
+// ---------------------------------------------------------------------------
+// JSON Pointer resolution (RFC 6901)
+// ---------------------------------------------------------------------------
+
+function getJsonPointerValue(value: unknown, pointer: string): unknown {
+  if (pointer === "") {
+    return value;
+  }
+
+  const parts = pointer.split("/").slice(1).map((part) => part.replaceAll("~1", "/").replaceAll("~0", "~"));
+  let current = value;
+  for (const part of parts) {
+    if (!isRecord(current) && !Array.isArray(current)) {
+      return undefined;
+    }
+    current = (current as Record<string, unknown>)[part];
+  }
+
+  return current;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}

@@ -1,6 +1,6 @@
 # mpas-demo
 
-Local MPAS (Multi-Party Action Security) services — Credential Adapter daemon and Coordination Service.
+Local MPAS (Multi-Party Action Security) services — Credential Adapter daemon, Coordination Service, and Signer Server.
 
 MPAS is a protocol for multi-party approval of AI agent actions. Instead of giving agents direct access to privileged APIs (GitHub, cloud providers, databases), MPAS routes actions through a Credential Adapter that enforces policy-based approval workflows before execution.
 
@@ -8,19 +8,17 @@ MPAS is a protocol for multi-party approval of AI agent actions. Instead of givi
 
 For the full protocol design, start with the base specification:
 
-- [mpas-specification.md](https://github.com/oma3dao/mpas-docs/blob/main/specification/mpas-specification.md) — **Core protocol: Action Lifecycle, dispatch ledger, artifact model, trust architecture**
-- [mpas-profile-http.md](https://github.com/oma3dao/mpas-docs/blob/main/specification/mpas-profile-http.md) — HTTP Profile: wire format, ActionRequest/Response, coordination
-- [mpas-profile-mcp.md](https://github.com/oma3dao/mpas-docs/blob/main/specification/mpas-profile-mcp.md) — MCP Profile: execution payload format for MCP tool calls
-- [mpas-profile-application-plugin.md](https://github.com/oma3dao/mpas-docs/blob/main/specification/mpas-profile-application-plugin.md) — Application Plugin Profile: plugin schema and operation defs
-- [mpas-profile-policy-json.md](https://github.com/oma3dao/mpas-docs/blob/main/specification/mpas-profile-policy-json.md) — JSON Verifier Policy Profile: policy matching and evaluation
+- [mpas-specification.md](../../specs/mpas-specification.md) — **Core protocol: Action Lifecycle, dispatch ledger, artifact model, trust architecture**
+- [mpas-profile-http.md](../../specs/mpas-profile-http.md) — HTTP Profile: wire format, ActionRequest/Response, coordination
+- [mpas-profile-mcp.md](../../specs/mpas-profile-mcp.md) — MCP Profile: execution payload format for MCP tool calls
+- [mpas-profile-application-plugin.md](../../specs/mpas-profile-application-plugin.md) — Application Plugin Profile: plugin schema and operation defs
+- [mpas-profile-policy-json.md](../../specs/mpas-profile-policy-json.md) — JSON Verifier Policy Profile: policy matching and evaluation
 
 ## Related Packages
 
 | Location                                                                 | Description                                           |
 | ------------------------------------------------------------------------ | ----------------------------------------------------- |
-| [mpas-docs](https://github.com/oma3dao/mpas-docs)                        | MPAS specification documents                          |
-| [`sdk/mcp-bridge`](../../sdk/mcp-bridge)                                 | MCP Bridge package (in this repo)                     |
-| [mpas-demo-repository](https://github.com/alftom/mpas-demo-repository)   | Demo GitHub repo with expendable branches for testing |
+| [`sdk/protocol`](../../sdk/protocol)                                     | @oma3/mpas protocol SDK                               |
 
 ## Architecture
 
@@ -44,9 +42,9 @@ For the full protocol design, start with the base specification:
                                     │
                                     │ HTTP (list/approve/reject)
                                     │
-┌──────────────────┐       ┌────────┴─────────┐
-│  Maintainer Agent│       │  MCP Bridge      │
-│                  │──MCP─▶│ (maintainer mode)│
+┌──────────────────┐       ┌──────────────────┐
+│  Maintainer Agent│       │  Signer Server   │
+│                  │──MCP─▶│  (MCP server)    │
 │  Sees approval   │       │  Signs approvals │
 │  tools           │       │                  │
 └──────────────────┘       └──────────────────┘
@@ -70,9 +68,9 @@ For the full protocol design, start with the base specification:
 
 **Maintainer flow:**
 
-1. Agent calls `mpas_list_pending` → MCP Bridge (maintainer mode) queries the Coordination Service
-2. Agent calls `mpas_review_action` → Bridge fetches full action details
-3. Agent calls `mpas_approve` → Bridge signs an approval and submits it to the Coordination Service
+1. Agent calls `mpas_list_pending` → Signer Server queries the Coordination Service
+2. Agent calls `mpas_review_action` → Server fetches full action details and verifies integrity
+3. Agent calls `mpas_approve` → Server signs an approval and submits it to the Coordination Service
 4. The proposer's bridge detects the approval on its next poll and resubmits
 
 **Key security properties:**
@@ -80,7 +78,7 @@ For the full protocol design, start with the base specification:
 - Agents hold no privileged credentials — all writes route through the adapter
 - The adapter verifies cryptographic signatures and evaluates policy before dispatching
 - Self-approval is prevented at both coordination (rejects matching DIDs) and policy engine (excludes proposer from threshold counts) levels
-- The MCP Bridge is the trust boundary — it holds the agent's signing key and performs all protocol operations
+- The MCP Bridge and Signer Server are the trust boundaries — they hold the agent's signing key and perform all protocol operations
 
 ### Why workspace separation matters
 
@@ -114,11 +112,59 @@ In production, every participant typically acts as both proposer and maintainer 
 
 Some deployments assign agents a single role — a large foundation model might only propose actions, while a smaller specialized model trained for security review might only approve. Other deployments allow agents to act as both proposer and maintainer — they can propose their own actions and approve other agents' actions, but never their own.
 
-For a dual-role agent, register both a proposer bridge and a maintainer bridge pointing at the same key file (one DID per agent for auditability). The harness registers two MCP servers — one proposer bridge process and one maintainer bridge process. The agent sees GitHub operation tools from the proposer bridge and approval tools from the maintainer bridge.
+For a dual-role agent, register both a proposer bridge and a signer server pointing at the same key file (one DID per agent for auditability). The harness registers two MCP servers — one proposer bridge process and one signer server process. The agent sees GitHub operation tools from the proposer bridge and approval tools from the signer server.
 
 Self-approval is enforced at two levels regardless of role assignment:
 1. **Coordination service** — rejects any approval submission where `signerDid` matches the action's `proposer.did`
 2. **Policy engine (defense in depth)** — excludes the proposer's DID when counting approvals toward thresholds on resubmission
+
+## Signer Server
+
+The MPAS Signer Server (`src/signer-server/`) is a standalone MCP server that enables agents to act as Signers. One instance per agent, handling approvals across all applications.
+
+It imports protocol primitives from `@oma3/mpas` (KeyManager, CoordinationClient, ApprovalBuilder, hash utilities) and exposes four MCP tools:
+
+| Tool | Description |
+|------|-------------|
+| `mpas_list_pending` | Poll the Coordination Service for actions awaiting this agent's approval |
+| `mpas_review_action` | Fetch and integrity-check the review set for a pending action |
+| `mpas_approve` | Sign and submit an approval for a pending action |
+| `mpas_reject` | Sign and submit a rejection for a pending action |
+
+### Running
+
+```sh
+npx tsx src/signer-server/index.ts --config <path-to-config.json>
+```
+
+### Configuration
+
+```json
+{
+  "agent": {
+    "did": "did:key:z6Mk...",
+    "keyFile": "./keys/maintainer-a.json"
+  },
+  "coordination": {
+    "url": "http://localhost:7545"
+  }
+}
+```
+
+The signer server is application-agnostic — it handles approval requests for any application routed through the configured Coordination Service. There is no background polling; it queries on demand when the agent calls `mpas_list_pending`.
+
+### MCP Client Configuration
+
+```json
+{
+  "mcpServers": {
+    "mpas-signer": {
+      "command": "npx",
+      "args": ["tsx", "examples/demo/src/signer-server/index.ts", "--config", "./signer-config.json"]
+    }
+  }
+}
+```
 
 ## How Credentials Work with MPAS
 
@@ -143,16 +189,17 @@ MPAS uses three types of configuration files:
 ```
 ┌───────────────────────────────────────────────────────────────────────────┐
 │  Application Plugin (published by vendor or ecosystem participant)        │
-│  Declares: operations, payload schemas, credential requirements,          │
-│            policy suggestions. Often audited by trusted parties.          │
+│  Declares: operations, payload schemas, credential requirements.          │
+│            Often audited by trusted parties.                              │
 │  File: $MPAS_HOME/plugins/github-repo.json                                │
 └───────────────────────────────────────┬───────────────────────────────────┘
                                         │ referenced by (path + hash)
                                         ▼
 ┌────────────────────────────────────────────────────────────────────────────┐
 │  Deployment Config (authored by the operator who runs the adapter)         │
-│  Declares: which operations to enable, policy rules, trusted signers,      │
-│            execution target, credential bindings, resource restrictions    │
+│  Declares: policy (signerGroups, approval thresholds, action-keyed         │
+│            policies), signer keys, execution target, credential bindings,  │
+│            resource restrictions                                           │
 │  File: $MPAS_HOME/config/github-strict.json                                │
 └───────────────────────────────────────┬────────────────────────────────────┘
                                         │ loaded at startup
@@ -175,8 +222,7 @@ The plugin is a stable, published artifact that describes what an MCP server can
 | `applicationDid`         | The application this plugin describes (e.g., `did:web:github.example`)     |
 | `executionProfile`       | Declares how execution payloads are formatted (`mcp.toolsCall`)            |
 | `credentialRequirements` | What credential the adapter needs to authenticate to the target            |
-| `operations`             | Array of operations: name, description, and a JSON Schema for the payload  |
-| `policySuggestions`      | Advisory hints for the deployer — not enforced                             |
+| `operations`             | Object keyed by operation name: description, optional impact, JSON Schema  |
 
 You do not edit the plugin directly. Its integrity is verified via `artifactDid` at startup — any modification invalidates the DID.
 
@@ -187,14 +233,13 @@ You do not edit the plugin directly. Its integrity is verified via `artifactDid`
 | `name`                 | Human-readable label (e.g., `github-strict`)                                |
 | `target.applicationDid`| Must match the plugin's `applicationDid`                                    |
 | `plugin`               | Reference to the plugin file: DID, version, path, and `artifactDid`         |
-| `enabledOperations`    | Subset of plugin operations this deployment allows                          |
 | `credentialBindings`   | Maps credential handles to providers (`"github-test-token"` → `file`)       |
 | `resourceRestrictions` | Limits which repos/orgs can be targeted                                     |
 | `executionTarget`      | How to call the real MCP server (`mcp.stdio` spawns a child process)        |
-| `policy`               | Approval rules: default policy + per-operation threshold requirements       |
-| `trustedSigners`       | Authorized DIDs with roles, labels, and public keys                         |
+| `policy`               | Full `MpasApplicationPolicy` object: signerGroups, policies (keyed by action name), defaultRequirement |
+| `signerKeys`           | Key registry: DID + label + publicJwk for each participant (for signature verification) |
 
-**Relationship between `policySuggestions` and `policy.rules`:** The plugin's suggestions are advisory. The operator decides what rules to actually enforce.
+**Relationship between plugin and policy:** The plugin describes what operations exist and their payload schemas. The `policy` object (an embedded `MpasApplicationPolicy`) defines who can propose, who can approve, and what thresholds apply. An operation is governed if it's in the plugin's `operations` OR has an entry in `policy.policies`.
 
 ### Bridge Config
 
@@ -205,7 +250,7 @@ The bridge config lives on the agent side and tells the MCP Bridge how to connec
 | `mode`                   | `"proposer"` (can call operations) or `"maintainer"` (can approve/reject)      |
 | `plugin`                 | Path to the plugin file (bridge reads it to know what tools to expose)         |
 | `adapter.url`            | Where to submit action packages                                                |
-| `agent.did`              | This agent's DID — must be in the deployment config's `trustedSigners`         |
+| `agent.did`              | This agent's DID — must be in the deployment config's `signerKeys`         |
 | `agent.keyFile`          | Path to the Ed25519 key file for signing                                       |
 | `target.applicationDid`  | Which application DID to target                                                |
 | `approvalStrategy`       | `"wait"` (polls until resolved) or `"return"` (returns immediately)            |
@@ -221,7 +266,7 @@ Each participant has an Ed25519 signing key (`$MPAS_HOME/keys/*.json`):
 | `did`        | The `did:key` derived from the public key                      |
 | `kid`        | Key ID (DID + fragment)                                        |
 | `privateJwk` | Private key in JWK format — used to sign                       |
-| `publicJwk`  | Public key in JWK format — shared in `trustedSigners`          |
+| `publicJwk`  | Public key in JWK format — shared in `signerKeys`          |
 
 ### Credential Files
 
@@ -253,7 +298,7 @@ Useful commands:
 ```sh
 mpas daemon start
 mpas coordination start --port 7545
-npm run test:e2e:mcp-bridge -- --mcp-bridge-dir ../../sdk/mcp-bridge
+npm run test:e2e:mcp-bridge -- --mcp-bridge-dir ../../sdk/protocol
 ```
 
 Coordination endpoints:

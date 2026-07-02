@@ -1,0 +1,77 @@
+{
+  "name": "@oma3/mpas",
+  "version": "0.0.0",
+  "description": "MPAS protocol SDK — types, verification, policy evaluation, receipts, and protocol primitives",
+  "type": "module",
+  "private": true,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./policy-engine": {
+      "types": "./dist/lib/policy-engine.d.ts",
+      "default": "./dist/lib/policy-engine.js"
+    },
+    "./plugin-loader": {
+      "types": "./dist/lib/plugin-loader.d.ts",
+      "default": "./dist/lib/plugin-loader.js"
+    },
+    "./verification": {
+      "types": "./dist/lib/verification.d.ts",
+      "default": "./dist/lib/verification.js"
+    },
+    "./receipt-builder": {
+      "types": "./dist/lib/receipt-builder.d.ts",
+      "default": "./dist/lib/receipt-builder.js"
+    },
+    "./auth-requirements-builder": {
+      "types": "./dist/lib/auth-requirements-builder.d.ts",
+      "default": "./dist/lib/auth-requirements-builder.js"
+    },
+    "./did-key": {
+      "types": "./dist/lib/did-key.d.ts",
+      "default": "./dist/lib/did-key.js"
+    },
+    "./trace": {
+      "types": "./dist/lib/trace.d.ts",
+      "default": "./dist/lib/trace.js"
+    },
+    "./key-manager": {
+      "types": "./dist/lib/key-manager.d.ts",
+      "default": "./dist/lib/key-manager.js"
+    },
+    "./coordination-client": {
+      "types": "./dist/lib/coordination-client.d.ts",
+      "default": "./dist/lib/coordination-client.js"
+    },
+    "./approval-builder": {
+      "types": "./dist/lib/approval-builder.d.ts",
+      "default": "./dist/lib/approval-builder.js"
+    },
+    "./hash": {
+      "types": "./dist/utils/hash.d.ts",
+      "default": "./dist/utils/hash.js"
+    }
+  },
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "test": "node scripts/run-tests.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.13.0",
+    "ajv": "^8.17.1",
+    "jose": "^6.0.11",
+    "json-canonicalize": "^2.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.29",
+    "tsx": "^4.20.3",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.2"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
