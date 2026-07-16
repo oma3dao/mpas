@@ -7,6 +7,7 @@ import { SignerServer } from "../../src/signer-server/index.js";
 import type { Approval, CoordinationPollResponse, SignerReviewSet } from "../../src/signer-server/types.js";
 
 const fixturesDir = fileURLToPath(new URL("./fixtures/", import.meta.url));
+const testKeysDir = fileURLToPath(new URL("../fixtures/test-keys/", import.meta.url));
 
 async function readJson<T>(path: string): Promise<T> {
   return JSON.parse(await readFile(path, "utf8")) as T;
@@ -15,7 +16,7 @@ async function readJson<T>(path: string): Promise<T> {
 describe("SignerServer", () => {
   it("registers 4 signer tools", async () => {
     const server = new SignerServer({
-      signerKey: join(fixturesDir, "keys", "maintainer-a.json"),
+      signerKey: join(testKeysDir, "maintainer-a.json"),
       coordinationUrl: "http://127.0.0.1:1",
     });
 
@@ -37,7 +38,7 @@ describe("SignerServer", () => {
 
     try {
       const server = new SignerServer({
-        signerKey: join(fixturesDir, "keys", "maintainer-a.json"),
+        signerKey: join(testKeysDir, "maintainer-a.json"),
         coordinationUrl: coordination.url,
       });
       const result = await server.handleToolCall("mpas_list_pending", {});
@@ -59,7 +60,7 @@ describe("SignerServer", () => {
 
     try {
       const server = new SignerServer({
-        signerKey: join(fixturesDir, "keys", "maintainer-a.json"),
+        signerKey: join(testKeysDir, "maintainer-a.json"),
         coordinationUrl: coordination.url,
       });
       const result = await server.handleToolCall("mpas_review_action", {
@@ -98,7 +99,7 @@ describe("SignerServer", () => {
 
     try {
       const server = new SignerServer({
-        signerKey: join(fixturesDir, "keys", "maintainer-a.json"),
+        signerKey: join(testKeysDir, "maintainer-a.json"),
         coordinationUrl: coordination.url,
       });
       const result = await server.handleToolCall("mpas_approve", {
@@ -147,7 +148,7 @@ describe("SignerServer", () => {
 
     try {
       const server = new SignerServer({
-        signerKey: join(fixturesDir, "keys", "maintainer-a.json"),
+        signerKey: join(testKeysDir, "maintainer-a.json"),
         coordinationUrl: coordination.url,
       });
       const result = await server.handleToolCall("mpas_review_action", {

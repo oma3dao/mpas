@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { CompactSign, importJWK } from "jose";
 import { canonicalize } from "json-canonicalize";
-import { computeArtifactDid } from "../src/adapter/config-loader.js";
+import { computeArtifactDid } from "../../src/adapter/config-loader.js";
 
 const keys = {
   proposer: {
@@ -103,17 +103,6 @@ function hashJson(value: unknown) {
   };
 }
 
-async function readFixtureKeys(fixtureRoot: string) {
-  const loaded: Record<string, unknown> = {};
-  for (const key of Object.values(keys)) {
-    const file = join(fixtureRoot, "test-keys", `${key.label}.json`);
-    const parsed = JSON.parse(await readFile(file, "utf8"));
-    loaded[key.label === "maintainer-a" ? "maintainerA" : key.label === "maintainer-b" ? "maintainerB" : key.label] =
-      parsed;
-  }
-  return loaded;
-}
-
 async function signApproval(actionEnvelopeHash: { alg: string; value: string }, signer: typeof keys.proposer, decision: string, createdAt: string) {
   const payload = {
     type: "ApprovalPayload",
@@ -199,13 +188,6 @@ async function makeActionPackage({
 
 async function main() {
 const fixtureRoot = join(process.cwd(), "tests", "fixtures");
-await mkdir(join(fixtureRoot, "test-keys"), { recursive: true });
-
-for (const key of Object.values(keys)) {
-  await writeFile(join(fixtureRoot, "test-keys", `${key.label}.json`), `${JSON.stringify(key, null, 2)}\n`);
-}
-
-Object.assign(keys, await readFixtureKeys(fixtureRoot));
 
 const packages = {
   "valid-no-approval-required.json": await makeActionPackage({
@@ -618,7 +600,6 @@ const coordinationFixtures = {
 };
 
 await mkdir(join(fixtureRoot, "core"), { recursive: true });
-await mkdir(join(fixtureRoot, "test-keys"), { recursive: true });
 await mkdir(join(fixtureRoot, "plugins"), { recursive: true });
 await mkdir(join(fixtureRoot, "configs"), { recursive: true });
 await mkdir(join(fixtureRoot, "coordination"), { recursive: true });
@@ -629,10 +610,6 @@ for (const [file, value] of Object.entries(packages)) {
 
 for (const [file, value] of Object.entries(invalidPackages)) {
   await writeFile(join(fixtureRoot, "core", file), `${JSON.stringify(value, null, 2)}\n`);
-}
-
-for (const key of Object.values(keys)) {
-  await writeFile(join(fixtureRoot, "test-keys", `${key.label}.json`), `${JSON.stringify(key, null, 2)}\n`);
 }
 
 await writeFile(join(fixtureRoot, "plugins", "github-repo.json"), `${JSON.stringify(githubPlugin, null, 2)}\n`);

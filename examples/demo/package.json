@@ -12,8 +12,8 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "node scripts/run-tests.mjs",
-    "test:e2e:mcp-bridge": "node scripts/run-mcp-bridge-e2e.mjs"
+    "test": "node tests/scripts/run-tests.mjs",
+    "test:e2e:mcp-bridge": "node tests/scripts/run-mcp-bridge-e2e.mjs"
   },
   "dependencies": {
     "@oma3/mpas": "file:../../sdk/protocol",

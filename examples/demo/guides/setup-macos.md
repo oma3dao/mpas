@@ -172,7 +172,6 @@ Install dependencies and build the demo package and MCP bridge:
 ```sh
 cd ~/Projects/mpas/mpas/examples/demo
 npm install
-npx tsx scripts/generate-fixtures.ts
 npm run build
 npm test
 ```
@@ -1521,7 +1520,7 @@ This means symmetric signers require at least two agents to function. A single s
 | `EACCES` on keys or credentials                        | File permissions or wrong path                        | Run `chmod 600 "$MPAS_HOME"/keys/*.json "$MPAS_HOME"/credentials/*.json`.                        |
 | `ECONNREFUSED` on `:7544`                              | Adapter is not running                                | Start per §2.2.                                                                                  |
 | `ECONNREFUSED` on `:7545`                              | Coordination is not running                           | Start per §2.2 (unified daemon starts both).                                                     |
-| `PLUGIN_HASH_MISMATCH`                                 | Config and plugin fixture are out of sync             | Re-run `npx tsx scripts/generate-fixtures.ts` and re-copy to `$MPAS_HOME`.                       |
+| `PLUGIN_HASH_MISMATCH`                                 | Config and plugin fixture are out of sync             | Re-run `npx tsx tests/scripts/generate-fixtures.ts` and re-copy to `$MPAS_HOME`.                       |
 | `UNKNOWN_APPLICATION`                                  | Config target DID does not match the Action Package   | Ensure `github-strict.json` and plugin are from the same fixtures run.                           |
 | Agent does not see bridge tools                        | MCP server config paths are wrong                     | Check absolute paths. Run the bridge command manually to see errors.                             |
 | Bridge exits immediately                               | Missing key file or plugin                            | Run: `node dist/cli.js --config /path/to/config.json` manually and read the error.           |

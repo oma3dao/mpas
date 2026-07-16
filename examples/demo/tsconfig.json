@@ -19,7 +19,7 @@
   "ts-node": {
     "transpileOnly": true,
     "moduleTypes": {
-      "scripts/generate-fixtures.ts": "cjs"
+      "tests/scripts/generate-fixtures.ts": "cjs"
     },
     "compilerOptions": {
       "module": "CommonJS",
