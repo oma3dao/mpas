@@ -8,7 +8,7 @@ import { daemonStatus, defaultAdapterKeyPath, defaultConfigDir, defaultCredentia
 import { loadDeploymentConfigs } from "../adapter/config-loader.js";
 import { FileCredentialProvider } from "../adapter/credential-provider.js";
 import { startCoordinationDaemon } from "../coordination/daemon.js";
-import { policyFromLoadedConfig } from "../adapter/http-endpoint.js";
+import { policyFromLoadedConfig } from "../adapter/adapter-api-server.js";
 import { evaluatePolicy } from "../core/policy-engine.js";
 import { loadPlugin, validatePayloadAgainstPlugin } from "../core/plugin-loader.js";
 import { parseActionPackage, verifyActionPackage } from "../core/verification.js";

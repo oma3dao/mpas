@@ -7,7 +7,7 @@ import type { FastifyInstance } from "fastify";
 import { compactVerify, importJWK, type JWK } from "jose";
 import { loadDeploymentConfigs } from "../../src/adapter/config-loader.js";
 import { FileCredentialProvider } from "../../src/adapter/credential-provider.js";
-import { createHttpEndpoint } from "../../src/adapter/http-endpoint.js";
+import { createAdapterApiServer } from "../../src/adapter/adapter-api-server.js";
 import type { Did, ExecutionReceipt, ReceiptPayload } from "../../src/core/types.js";
 
 const fixturesDir = fileURLToPath(new URL("../fixtures/", import.meta.url));
@@ -43,7 +43,7 @@ async function makeApp(configDir?: string) {
     throw new Error(configs.error.message);
   }
   const adapter = await readJson<KeyFixture>(join(fixturesDir, "test-keys", "adapter.json"));
-  const app = createHttpEndpoint({
+  const app = createAdapterApiServer({
     configsByApplicationDid: configs.configsByApplicationDid,
     credentialProvider: new FileCredentialProvider(await credentialDir()),
     adapterDid: adapter.did,

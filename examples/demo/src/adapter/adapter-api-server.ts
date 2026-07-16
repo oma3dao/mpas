@@ -31,7 +31,7 @@ export interface HttpEndpointOptions {
   traceLogger?: TraceLogger;
 }
 
-export function createHttpEndpoint(options: HttpEndpointOptions): FastifyInstance {
+export function createAdapterApiServer(options: HttpEndpointOptions): FastifyInstance {
   const app = Fastify({ logger: false });
   const ledger = options.ledger ?? new DispatchLedger();
   const maxEnvelopeValidityMs = options.maxEnvelopeValidityMs ?? DEFAULT_MAX_ENVELOPE_VALIDITY_MS;

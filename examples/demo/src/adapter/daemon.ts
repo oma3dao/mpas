@@ -5,7 +5,7 @@ import type { FastifyInstance } from "fastify";
 import type { JWK } from "jose";
 import { loadDeploymentConfigs, type LoadedDeploymentConfig } from "./config-loader.js";
 import { FileCredentialProvider } from "./credential-provider.js";
-import { createHttpEndpoint } from "./http-endpoint.js";
+import { createAdapterApiServer } from "./adapter-api-server.js";
 import { DispatchLedger, FileDispatchJournal } from "./dispatch-ledger.js";
 import { TraceLogger, TraceWriter } from "../core/trace.js";
 import type { Did } from "../core/types.js";
@@ -76,7 +76,7 @@ export async function startDaemon(options: DaemonOptions = {}): Promise<StartedD
   const ledger = new DispatchLedger(new FileDispatchJournal(options.journalPath ?? defaultJournalPath()));
   const traceWriter = options.tracePath ? new TraceWriter(options.tracePath) : undefined;
   const traceLogger = new TraceLogger("adapter", traceWriter);
-  const app = createHttpEndpoint({
+  const app = createAdapterApiServer({
     configsByApplicationDid: loaded.configsByApplicationDid,
     credentialProvider: new FileCredentialProvider(options.credentialDir ?? defaultCredentialDir()),
     adapterDid: adapterKey.did,

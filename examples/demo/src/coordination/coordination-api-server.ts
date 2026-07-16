@@ -13,7 +13,7 @@ export interface CoordinationHttpEndpointOptions {
   traceLogger?: TraceLogger;
 }
 
-export function createCoordinationHttpEndpoint(options: CoordinationHttpEndpointOptions = {}): FastifyInstance {
+export function createCoordinationApiServer(options: CoordinationHttpEndpointOptions = {}): FastifyInstance {
   const app = Fastify({ logger: false });
   const store = options.store ?? new CoordinationStore();
   const trace = options.traceLogger ?? new TraceLogger("coordination");

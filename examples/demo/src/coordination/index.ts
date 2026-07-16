@@ -3,7 +3,7 @@
 import { pathToFileURL } from "node:url";
 import { startCoordinationDaemon } from "./daemon.js";
 
-export { createCoordinationHttpEndpoint } from "./http-endpoint.js";
+export { createCoordinationApiServer } from "./coordination-api-server.js";
 export { CoordinationStore, CoordinationStoreError } from "./store.js";
 export * from "./types.js";
 

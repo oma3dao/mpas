@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { CompactSign, importJWK, type JWK } from "jose";
 import { canonicalize } from "json-canonicalize";
 import { afterEach, describe, expect, it } from "vitest";
-import { createCoordinationHttpEndpoint } from "../../src/coordination/http-endpoint.js";
+import { createCoordinationApiServer } from "../../src/coordination/coordination-api-server.js";
 import type { CoordinationActionRequest } from "../../src/coordination/types.js";
 import type { ActionPackage, Approval, Decision, Did, Hash } from "../../src/core/types.js";
 import { computeJsonHash } from "../../src/core/verification.js";
@@ -14,7 +14,7 @@ interface FixtureKey {
   privateJwk: JWK;
 }
 
-const apps = new Set<ReturnType<typeof createCoordinationHttpEndpoint>>();
+const apps = new Set<ReturnType<typeof createCoordinationApiServer>>();
 
 afterEach(async () => {
   await Promise.all([...apps].map((app) => app.close()));
@@ -137,14 +137,14 @@ describe("coordination HTTP endpoint", () => {
   });
 
   it("does not import adapter internals", async () => {
-    const source = await readFile(join(process.cwd(), "src", "coordination", "http-endpoint.ts"), "utf8");
+    const source = await readFile(join(process.cwd(), "src", "coordination", "coordination-api-server.ts"), "utf8");
 
     expect(source).not.toContain("../adapter/");
   });
 });
 
 function createApp() {
-  const app = createCoordinationHttpEndpoint();
+  const app = createCoordinationApiServer();
   apps.add(app);
   return app;
 }

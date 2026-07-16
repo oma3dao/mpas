@@ -42,7 +42,7 @@ export type {
   CoordinationApprovalResponse,
   CoordinationCancelResponse,
   CredentialRequirement,
-  PluginOperation,
+  PluginOperationDescriptor,
   PolicySuggestion,
   MpasApplicationPlugin,
   AdapterError,
