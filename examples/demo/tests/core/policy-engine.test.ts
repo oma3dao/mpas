@@ -14,7 +14,6 @@ interface KeyFixture {
 }
 
 interface DeploymentConfig {
-  resourceRestrictions?: PolicyConfig["resourceRestrictions"];
   policy: {
     version: "1";
     type: "MpasApplicationPolicy";
@@ -68,7 +67,6 @@ async function policyFromConfig(file: string): Promise<PolicyConfig> {
   return {
     defaultRequirement: config.policy.defaultRequirement,
     policies: config.policy.policies as PolicyConfig["policies"],
-    resourceRestrictions: config.resourceRestrictions,
     signerGroups: config.policy.signerGroups,
   };
 }
@@ -115,15 +113,6 @@ describe("evaluatePolicy", () => {
     // operation passes through policy evaluation.
     expect(evaluatePolicy(actionPackage, verifiedApprovals, await policyFromConfig("github-auto-approve.json"))).toMatchObject({
       status: "satisfied",
-    });
-  });
-
-  it("denies restricted resources", async () => {
-    const { actionPackage, verifiedApprovals } = await verifiedFixture("invalid-resource-restricted.json");
-
-    expect(evaluatePolicy(actionPackage, verifiedApprovals, await policyFromConfig("github-strict.json"))).toMatchObject({
-      status: "denied",
-      code: "RESOURCE_RESTRICTED",
     });
   });
 

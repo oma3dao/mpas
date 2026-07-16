@@ -359,10 +359,6 @@ Each deployment config binds a plugin to operator decisions:
       "provider": "macos-keychain"
     }
   ],
-  "resourceRestrictions": {
-    "allowedRepositories": ["oma3dao/app-registry"],
-    "allowedOrganizations": ["oma3dao"]
-  },
   "executionTarget": {
     "type": "mcp.stdio",
     "command": "npx",
@@ -616,10 +612,6 @@ For the `mcp.toolsCall` execution profile:
 4. Launch / connect the configured MCP server (stdio or HTTP). Steps 3–4 are fallible, side-effect-free preparation and occur BEFORE the dispatch-ledger `executing` write (Core 6.9.2 A); their failure is a stateless rejection with no receipt and no ledger entry.
 5. Write the `executing` ledger entry (write-ahead, fsync), then forward a `tools/call` JSON-RPC request to the MCP server.
 6. Capture the MCP response and resolve the ledger entry (`executed` / `failed` / `indeterminate`).
-
-### 10.4 Resource Restriction Enforcement
-
-Before dispatching, the adapter checks `resourceRestrictions` from the deployment config. If the Execution Payload's arguments reference resources outside the allowed set, the adapter rejects (a stateless deterministic rejection) before credential retrieval, target launch, or any ledger write.
 
 ### 10.5 Dispatch Timeout
 

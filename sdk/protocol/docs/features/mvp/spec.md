@@ -127,7 +127,6 @@ The published npm package (`sdk/protocol/`). Provides:
 
 **Policy Engine:**
 - **`evaluatePolicy`** — Evaluate a PolicyConfig against an ActionPackage and its verified approvals.
-- **`checkResourceRestrictions`** — Check resource-level access restrictions.
 
 **Plugin Profile:**
 - **`loadPlugin`** — Load and schema-validate an MPAS Application Plugin JSON file.

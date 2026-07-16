@@ -1,7 +1,7 @@
 import Fastify, { type FastifyInstance, type FastifyReply } from "fastify";
 import type { JWK } from "jose";
 import { buildAuthorizationRequirements } from "../core/auth-requirements-builder.js";
-import { evaluatePolicy, checkResourceRestrictions, type PolicyConfig } from "../core/policy-engine.js";
+import { evaluatePolicy, type PolicyConfig } from "../core/policy-engine.js";
 import { validatePayloadAgainstPlugin } from "../core/plugin-loader.js";
 import { buildAndSignReceipt } from "../core/receipt-builder.js";
 import type { ActionPackage, Did, ExecutionReceipt, Hash, ReceiptResult } from "../core/types.js";
@@ -172,16 +172,8 @@ export function createHttpEndpoint(options: HttpEndpointOptions): FastifyInstanc
       trace.emit("verification_step", { actionId, step: "policy_evaluation", passed: true, policyStatus: policyResult.status });
     } else {
       // Pass-through path: operation is not in the plugin, skip schema validation
-      // and policy evaluation. Still check resource restrictions below.
+      // and policy evaluation.
       trace.emit("verification_step", { actionId, step: "routing_decision", passed: true, path: "pass-through", operation: operationName(pkg) });
-
-      // Resource restrictions apply to pass-through operations too.
-      if (loadedConfig.config.resourceRestrictions) {
-        if (!checkResourceRestrictions(pkg.executionPayload, loadedConfig.config.resourceRestrictions)) {
-          trace.emit("verification_step", { actionId, step: "resource_restrictions", passed: false });
-          return rejection(pkg, options, envelopeHash, "rejected", "RESOURCE_RESTRICTED", "Execution Payload references a restricted resource.");
-        }
-      }
     }
 
     // Authorized. Fallible, side-effect-free preparation happens BEFORE the ledger
@@ -301,7 +293,6 @@ export function policyFromLoadedConfig(loadedConfig: LoadedDeploymentConfig): Po
   return {
     defaultRequirement: loadedConfig.config.policy.defaultRequirement,
     policies: loadedConfig.config.policy.policies as PolicyConfig["policies"],
-    resourceRestrictions: loadedConfig.config.resourceRestrictions,
     signerGroups: loadedConfig.config.policy.signerGroups,
   };
 }

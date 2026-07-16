@@ -4,7 +4,6 @@
  */
 export {
   evaluatePolicy,
-  checkResourceRestrictions,
 } from "@oma3/mpas/policy-engine";
 
 export type {
@@ -20,5 +19,4 @@ export type {
   ThresholdRequirement,
   AllOfRequirement,
   AnyOfRequirement,
-  ResourceRestrictions,
 } from "@oma3/mpas/policy-engine";

@@ -533,10 +533,6 @@ function baseDeploymentConfig(name: string, policy: ReturnType<typeof makePolicy
         provider: "file",
       },
     ],
-    resourceRestrictions: {
-      allowedRepositories: ["example-org/mpas-demo-repository"],
-      allowedOrganizations: ["example-org"],
-    },
     executionTarget: {
       type: "mcp.stdio",
       command: "node",

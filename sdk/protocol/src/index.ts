@@ -18,7 +18,6 @@ export * from "./lib/plugin-tool-generator.js";
 export * from "./lib/verification.js";
 export {
   evaluatePolicy,
-  checkResourceRestrictions,
   type PolicyConfig,
   type PolicyEntry,
   type PolicyCondition,
@@ -30,7 +29,6 @@ export {
   type ProposerOnlyRequirement,
   type AllOfRequirement,
   type AnyOfRequirement,
-  type ResourceRestrictions,
 } from "./lib/policy-engine.js";
 export {
   loadPlugin,

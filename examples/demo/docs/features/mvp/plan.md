@@ -123,7 +123,6 @@ Each fixture includes:
 | `insufficient-approvals.json` | Merge into main with only proposer approval (policy needs 2 maintainers) | `additionalApprovalsRequired` |
 | `invalid-unknown-application.json` | `target.applicationDid` not in any deployment config | `rejected` (unknown application) |
 | `invalid-disabled-operation.json` | Operation exists in plugin but not in `enabledOperations` | `rejected` |
-| `invalid-resource-restricted.json` | Repository not in `allowedRepositories` | `rejected` |
 
 **Done when:** Each fixture is valid JSON with the specific defect described.
 
@@ -390,15 +389,6 @@ Full pipeline integration:
 8. Return the `ActionResponse`
 
 **Done when:** Can `curl -X POST http://localhost:7544/mpas/v1/action -H 'content-type: application/mpas+json' -d @fixtures/valid-no-approval-required.json` and get a valid `ActionResponse` with a receipt.
-
-#### Task 3.7: Resource restriction enforcement
-
-Implement `checkResourceRestrictions(payload: ExecutionPayload, restrictions: ResourceRestrictions): boolean`
-
-- Checks payload arguments against `allowedRepositories`, `allowedOrganizations`, etc.
-- Rejects before credential retrieval if restricted.
-
-**Done when:** `invalid-resource-restricted.json` is rejected. Valid fixtures with allowed resources pass.
 
 #### Task 3.8: CLI — daemon and testing
 

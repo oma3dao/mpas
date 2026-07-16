@@ -787,8 +787,6 @@ In the **maintainer** TUI, poll for pending approvals:
 
 Nothing is pending yet (the issue was auto-approved), so an empty list is the expected, successful result — it confirms the maintainer sees its `mpas_list_pending` tool and can reach the coordination service.
 
-The target repository must be listed in `resourceRestrictions.allowedRepositories` in your deployment config (`github-strict.json`) — the default is `example-org/mpas-demo-repository`; §4.4 covers switching to a real repo for live dispatch.
-
 That's the wiring check. The full approval flow — proposing an action that requires approval, then approving it from the maintainer terminal — is the demo in Part 4. Because an approval-required action makes the proposer's tool call block until a maintainer approves, you keep both terminals open and act in the maintainer terminal while the proposer waits; Part 4 walks through it.
 
 ### Troubleshooting OpenClaw
@@ -951,7 +949,7 @@ The `{{credential:github-test-token}}` template in the deployment config resolve
 
 Edit `$MPAS_HOME/config/github-strict.json`:
 
-**1. Change `executionTarget`** from the echo fixture to the demo GitHub MCP server:
+Change `executionTarget` from the echo fixture to the demo GitHub MCP server:
 
 ```json
 "executionTarget": {
@@ -967,17 +965,6 @@ Edit `$MPAS_HOME/config/github-strict.json`:
 Replace `<absolute-path-to-node>` with the output of `which node` (e.g., `/Users/you/.nvm/versions/node/v24.1.0/bin/node`). The `command` field must be an absolute path because the adapter spawns child processes without a shell, so nvm's PATH is not available.
 
 Replace `<absolute-path-to>` with the full path to `examples/demo` in your `mpas` clone (e.g., `/Users/you/Projects/mpas/mpas/examples/demo/tests/fixtures/adapter/github-mcp-server.mjs`).
-
-**2. Update `resourceRestrictions`** to match your demo repository:
-
-```json
-"resourceRestrictions": {
-  "allowedRepositories": ["YOUR_USER/YOUR_DEMO_REPO"],
-  "allowedOrganizations": ["YOUR_USER"]
-}
-```
-
-Replace `YOUR_USER/YOUR_DEMO_REPO` with your actual GitHub username and repository name (e.g., `alftom/mpas-demo-repository`).
 
 ### Restart the adapter and run the live demo
 

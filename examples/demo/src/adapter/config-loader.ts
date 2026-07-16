@@ -65,7 +65,6 @@ export interface DeploymentConfig {
     credentialHandle: string;
     provider: "file" | "macos-keychain";
   }>;
-  resourceRestrictions?: PolicyConfig["resourceRestrictions"];
   executionTarget: McpStdioTarget | McpHttpTarget;
   policy: MpasApplicationPolicy;
   signerKeys: SignerKey[];
@@ -152,7 +151,6 @@ const deploymentConfigSchema = {
       },
       minItems: 1,
     },
-    resourceRestrictions: { type: "object" },
     executionTarget: { type: "object", required: ["type"] },
     policy: {
       type: "object",

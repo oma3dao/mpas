@@ -234,7 +234,6 @@ You do not edit the plugin directly. Its integrity is verified via `artifactDid`
 | `target.applicationDid`| Must match the plugin's `applicationDid`                                    |
 | `plugin`               | Reference to the plugin file: DID, version, path, and `artifactDid`         |
 | `credentialBindings`   | Maps credential handles to providers (`"github-test-token"` → `file`)       |
-| `resourceRestrictions` | Limits which repos/orgs can be targeted                                     |
 | `executionTarget`      | How to call the real MCP server (`mcp.stdio` spawns a child process)        |
 | `policy`               | Full `MpasApplicationPolicy` object: signerGroups, policies (keyed by action name), defaultRequirement |
 | `signerKeys`           | Key registry: DID + label + publicJwk for each participant (for signature verification) |

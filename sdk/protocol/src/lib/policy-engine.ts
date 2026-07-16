@@ -11,7 +11,7 @@
  * - The proposer's own approval never counts toward thresholds (self-approval prevention).
  */
 
-import type { ActionPackage, Did, ExecutionPayload } from "../types/mpas.js";
+import type { ActionPackage, Did } from "../types/mpas.js";
 import type { VerifiedApprovals } from "./verification.js";
 
 // ---------------------------------------------------------------------------
@@ -54,13 +54,7 @@ export type Requirement =
 export interface PolicyConfig {
   defaultRequirement: Requirement;
   policies?: Record<string, PolicyEntry[]>;
-  resourceRestrictions?: ResourceRestrictions;
   signerGroups?: Record<string, Did[]>;
-}
-
-export interface ResourceRestrictions {
-  allowedRepositories?: string[];
-  allowedOrganizations?: string[];
 }
 
 export interface PolicyEntry {
@@ -114,7 +108,7 @@ export interface UnsatisfiedThreshold {
 export type PolicyResult =
   | { status: "satisfied" }
   | { status: "additionalApprovalsRequired"; unsatisfiedRules: UnsatisfiedThreshold[] }
-  | { status: "denied"; code: "RESOURCE_RESTRICTED" | "DEFAULT_DENY"; message: string };
+  | { status: "denied"; code: "DEFAULT_DENY"; message: string };
 
 // ---------------------------------------------------------------------------
 // Evaluation
@@ -125,15 +119,6 @@ export function evaluatePolicy(
   verifiedApprovals: VerifiedApprovals,
   policy: PolicyConfig,
 ): PolicyResult {
-  // Resource restrictions are checked first (outside the policy model proper).
-  if (policy.resourceRestrictions && !checkResourceRestrictions(actionPackage.executionPayload, policy.resourceRestrictions)) {
-    return {
-      status: "denied",
-      code: "RESOURCE_RESTRICTED",
-      message: "Execution Payload references a restricted resource.",
-    };
-  }
-
   const proposerDid = actionPackage.actionEnvelope.proposer.did;
 
   // Determine the action name from the execution payload.
@@ -355,30 +340,6 @@ function toNumber(value: unknown): number {
     return Number.isNaN(n) ? -Infinity : n;
   }
   return -Infinity;
-}
-
-// ---------------------------------------------------------------------------
-// Resource restrictions (adapter-level, outside the spec policy model)
-// ---------------------------------------------------------------------------
-
-export function checkResourceRestrictions(payload: ExecutionPayload, restrictions: ResourceRestrictions): boolean {
-  const args = getJsonPointerValue(payload, "/arguments");
-  if (!isRecord(args)) {
-    return true;
-  }
-
-  const owner = typeof args.owner === "string" ? args.owner : undefined;
-  const repo = typeof args.repo === "string" ? args.repo : undefined;
-
-  if (restrictions.allowedOrganizations && owner && !restrictions.allowedOrganizations.includes(owner)) {
-    return false;
-  }
-
-  if (restrictions.allowedRepositories && owner && repo) {
-    return restrictions.allowedRepositories.includes(`${owner}/${repo}`);
-  }
-
-  return true;
 }
 
 // ---------------------------------------------------------------------------

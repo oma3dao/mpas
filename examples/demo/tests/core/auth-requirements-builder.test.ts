@@ -15,7 +15,6 @@ interface KeyFixture {
 }
 
 interface DeploymentConfig {
-  resourceRestrictions?: PolicyConfig["resourceRestrictions"];
   policy: {
     defaultRequirement: PolicyConfig["defaultRequirement"];
     signerGroups: Record<string, Did[]>;
@@ -50,7 +49,6 @@ async function policyFromConfig(file: string): Promise<PolicyConfig> {
   return {
     defaultRequirement: config.policy.defaultRequirement,
     policies: config.policy.policies as PolicyConfig["policies"],
-    resourceRestrictions: config.resourceRestrictions,
     signerGroups: config.policy.signerGroups,
   };
 }
