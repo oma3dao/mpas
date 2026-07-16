@@ -133,7 +133,6 @@ describe("plugin, config, and key fixtures", () => {
     expect(validate(plugin), JSON.stringify(validate.errors, null, 2)).toBe(true);
     expect(typeof plugin.operations).toBe("object");
     expect(Object.keys(plugin.operations)).toEqual([
-      "create_issue",
       "merge_pull_request",
       "delete_branch",
     ]);
@@ -147,7 +146,6 @@ describe("plugin, config, and key fixtures", () => {
     const ajv = new Ajv2020({ strict: false });
 
     for (const file of [
-      "valid-no-approval-required.json",
       "valid-two-approvals.json",
       "valid-delete-branch.json",
     ]) {

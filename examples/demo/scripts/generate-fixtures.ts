@@ -389,33 +389,6 @@ const githubPlugin = {
     },
   ],
   operations: {
-    create_issue: {
-      description: "Create a new issue in a repository.",
-      impact: "low",
-      executionPayloadSchema: {
-        type: "object",
-        required: ["name", "arguments"],
-        properties: {
-          name: { const: "create_issue" },
-          arguments: {
-            type: "object",
-            required: ["owner", "repo", "title"],
-            properties: {
-              owner: { type: "string" },
-              repo: { type: "string" },
-              title: { type: "string" },
-              body: { type: "string" },
-              labels: {
-                type: "array",
-                items: { type: "string" },
-              },
-            },
-            additionalProperties: false,
-          },
-        },
-        additionalProperties: false,
-      },
-    },
     merge_pull_request: {
       description: "Merge a pull request into its base branch.",
       impact: "high",

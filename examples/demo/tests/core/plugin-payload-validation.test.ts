@@ -22,7 +22,6 @@ async function githubPlugin() {
 
 describe("validatePayloadAgainstPlugin", () => {
   it.each([
-    ["valid-no-approval-required.json", "create_issue"],
     ["valid-two-approvals.json", "merge_pull_request"],
     ["valid-delete-branch.json", "delete_branch"],
   ])("matches and validates %s", async (fixtureFile, operationName) => {
@@ -40,6 +39,19 @@ describe("validatePayloadAgainstPlugin", () => {
 
   it("rejects an unknown operation", async () => {
     const result = validatePayloadAgainstPlugin({ name: "nonexistent_tool", arguments: {} }, await githubPlugin());
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        code: "UNKNOWN_OPERATION",
+      },
+    });
+  });
+
+  it("treats create_issue as an unknown operation (pass-through)", async () => {
+    const plugin = await githubPlugin();
+    const actionPackage = await readJson<ActionPackage>(join(fixturesDir, "core", "valid-no-approval-required.json"));
+    const result = validatePayloadAgainstPlugin(actionPackage.executionPayload, plugin);
 
     expect(result).toMatchObject({
       ok: false,

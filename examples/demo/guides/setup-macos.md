@@ -618,7 +618,7 @@ and wait for approval from a separate maintainer agent before they execute.
 
 ### Your MPAS tools
 
-- `create_issue` — Create a GitHub issue (auto-approved, no maintainer needed)
+- `create_issue` — Create a GitHub issue (pass-through, no approval needed)
 - `delete_branch` — Delete a branch (requires 1 maintainer approval)
 - `merge_pull_request` — Merge a PR (requires 1 maintainer approval)
 
@@ -775,7 +775,7 @@ openclaw tui --session agent:maintainer:main
 
 Now run a wiring check in each session.
 
-In the **proposer** TUI, create an issue — `create_issue` is auto-approved, so it completes without any maintainer involvement and confirms the proposer bridge reaches the adapter:
+In the **proposer** TUI, create an issue — `create_issue` is a pass-through operation (not governed by the plugin), so it completes without any maintainer involvement and confirms the proposer bridge reaches the adapter:
 
 > Create an issue titled "MPAS demo test" in `example-org/mpas-demo-repository`.
 
@@ -862,7 +862,7 @@ The maintainer calls `mpas_list_pending` → `mpas_review_action` → `mpas_appr
 
 > Create an issue titled "MPAS demo test" in `example-org/mpas-demo-repository`.
 
-The policy allows `create_issue` without approval. The adapter dispatches immediately — no maintainer involvement needed.
+`create_issue` is not in the application plugin, so the adapter passes it through without policy evaluation — no maintainer involvement needed.
 
 ## 4.3 Merge a PR (1 Maintainer Required)
 
@@ -1389,7 +1389,7 @@ agents. You cannot approve your own proposals — only actions from a different 
 
 ## Proposer tools (github-mpas)
 
-- `create_issue` — Create a GitHub issue (auto-approved, no other agent needed)
+- `create_issue` — Create a GitHub issue (pass-through, no other agent needed)
 - `delete_branch` — Delete a branch (requires approval from another agent)
 - `merge_pull_request` — Merge a PR (requires approval from another agent)
 

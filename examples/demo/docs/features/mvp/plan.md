@@ -101,7 +101,7 @@ Create JSON fixture files representing well-formed Action Packages:
 
 | Fixture | Description |
 |---|---|
-| `valid-no-approval-required.json` | A `create_issue` action with proposer approval only. Policy auto-approves (no threshold rule matches). |
+| `valid-no-approval-required.json` | A `create_issue` action with proposer approval only. Takes the pass-through path (not in plugin). |
 | `valid-two-approvals.json` | A `merge_pull_request` into `main` with proposer + 2 maintainer approvals. Satisfies a threshold-2 policy. |
 | `valid-delete-branch.json` | A `delete_branch` with proposer + 1 maintainer approval. Satisfies a threshold-1 policy. |
 

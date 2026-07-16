@@ -279,11 +279,11 @@ The filename (minus `.json`) is the credential handle. At dispatch time, the ada
 
 ## Policy (Demo Configuration)
 
-| Action                             | Approval requirement                 |
-| ---------------------------------- | ------------------------------------ |
-| `create_issue`                     | Auto-approved (no maintainer needed) |
-| `delete_branch`                    | 1 maintainer approval                |
-| `merge_pull_request` into `main`   | 1 maintainer approval                |
+| Action                             | Approval requirement                        |
+| ---------------------------------- | ------------------------------------------- |
+| `create_issue`                     | Pass-through (not governed, no approval)    |
+| `delete_branch`                    | 1 maintainer approval                       |
+| `merge_pull_request` into `main`   | 1 maintainer approval                       |
 
 ## Local Services
 

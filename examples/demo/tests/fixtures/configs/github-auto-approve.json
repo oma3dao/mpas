@@ -8,7 +8,7 @@
   "plugin": {
     "pluginDid": "did:web:plugins.example.com:github-repo",
     "pluginVersion": "1.0.0",
-    "artifactDid": "did:artifact:bafkreibcvcjsvedldqxe4o5ytb5hcbgf7yels6lszi2imeawo2qxlwd56q",
+    "artifactDid": "did:artifact:bafkreihadq62mlwog3bnl5a3gvjwdamjuwirdnqwx5k4kkzdddsevzcej4",
     "path": "../plugins/github-repo.json"
   },
   "credentialBindings": [

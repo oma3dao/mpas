@@ -111,7 +111,7 @@ Create fixture files:
 | Proposer key | `fixtures/keys/proposer.json` | Ed25519 JWK with private key |
 | Signer A key | `fixtures/keys/signer-a.json` | Ed25519 JWK with private key |
 | Signer B key | `fixtures/keys/signer-b.json` | Ed25519 JWK with private key |
-| GitHub plugin | `fixtures/plugins/github-repo.json` | `MpasApplicationPlugin` with `merge_pull_request`, `delete_branch`, `create_issue` |
+| GitHub plugin | `fixtures/plugins/github-repo.json` | `MpasApplicationPlugin` with `merge_pull_request`, `delete_branch` |
 | Adapter signing key | `fixtures/keys/adapter.json` | For generating mock receipts in tests |
 
 Keys must be real Ed25519 key pairs that can sign and verify. The plugin must conform to the Application Plugin Profile JSON Schema.
