@@ -62,7 +62,7 @@ async function makeAutoApproveConfigDir() {
   const config = await readJson<Record<string, unknown>>(join(fixturesDir, "configs", "github-auto-approve.json"));
   config.plugin = {
     ...(config.plugin as Record<string, unknown>),
-    path: join(fixturesDir, "plugins", "github-repo.json"),
+    path: join(fixturesDir, "plugins", "github-demo-plugin.json"),
   };
   await writeFile(join(dir, "github-auto-approve.json"), `${JSON.stringify(config, null, 2)}\n`);
   return dir;
@@ -84,7 +84,7 @@ async function makeTargetConfigDir(server: string, timeoutMs: number) {
   const config = await readJson<Record<string, unknown>>(join(fixturesDir, "configs", "github-auto-approve.json"));
   config.plugin = {
     ...(config.plugin as Record<string, unknown>),
-    path: join(fixturesDir, "plugins", "github-repo.json"),
+    path: join(fixturesDir, "plugins", "github-demo-plugin.json"),
   };
   config.executionTarget = {
     type: "mcp.stdio",

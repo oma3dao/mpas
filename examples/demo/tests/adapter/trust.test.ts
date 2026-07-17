@@ -20,7 +20,7 @@ const mockCheckLinkage = vi.mocked(checkLinkage);
 const fakePlugin: MpasApplicationPlugin = {
   version: "1",
   type: "MpasApplicationPlugin",
-  pluginDid: "did:web:plugins.example.com:github-repo",
+  pluginDid: "did:web:plugins.example.com:github-demo-plugin",
   pluginVersion: "1.0.0",
   publisherDid: "did:web:publisher.example",
   applicationDid: "did:web:github.example",
@@ -34,10 +34,10 @@ const fakeConfig: DeploymentConfig = {
   name: "github-test",
   target: { applicationDid: "did:web:github.example" },
   plugin: {
-    pluginDid: "did:web:plugins.example.com:github-repo",
+    pluginDid: "did:web:plugins.example.com:github-demo-plugin",
     pluginVersion: "1.0.0",
     artifactDid: "did:artifact:bafkreibfakeartifactdid",
-    path: "../plugins/github-repo.json",
+    path: "../plugins/github-demo-plugin.json",
   },
   credentialBindings: [{ credentialHandle: "gh-token", provider: "file" }],
   executionTarget: { type: "mcp.stdio", command: "node", args: ["server.js"], env: {} },

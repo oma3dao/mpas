@@ -45,11 +45,13 @@ const tools = [
     description: "Merge a pull request.",
     inputSchema: {
       type: "object",
-      required: ["owner", "repo", "pullNumber"],
+      required: ["owner", "repo", "pullNumber", "baseRef", "expectedHeadSha", "mergeMethod"],
       properties: {
         owner: { type: "string" },
         repo: { type: "string" },
         pullNumber: { type: "integer" },
+        baseRef: { type: "string" },
+        expectedHeadSha: { type: "string" },
         mergeMethod: { type: "string", enum: ["merge", "squash", "rebase"] },
       },
       additionalProperties: false,

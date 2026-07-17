@@ -8,7 +8,6 @@ import {
   AdapterClient,
   computeHash,
   KeyManager,
-  PluginToolGenerator,
   type ActionPackage,
   type AdapterResponse,
   type MpasApplicationPlugin,
@@ -33,8 +32,7 @@ describe("proposer flow integration", () => {
     });
 
     try {
-      const tools = new PluginToolGenerator(plugin).generateTools();
-      expect(tools.map((tool) => tool.name)).toContain("create_issue");
+      expect(Object.keys(plugin.operations)).toContain("create_issue");
 
       const keyManager = await KeyManager.fromFile(join(fixturesDir, "keys", "proposer.json"));
       const builder = new ActionPackageBuilder({

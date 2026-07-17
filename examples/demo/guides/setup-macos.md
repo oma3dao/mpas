@@ -193,10 +193,10 @@ This verifies the full stack end-to-end (proposer → coordination → maintaine
 
 ```sh
 cd ~/Projects/mpas/mpas/examples/demo
-npm run test:e2e:mcp-bridge -- --mcp-bridge-dir ~/Projects/mpas/mpas/sdk/protocol
+npm run test:e2e:mcp-bridge
 ```
 
-Expected: 2 tests pass (approval flow + replay detection).
+Expected: the local MCP bridge E2E tests pass.
 
 ## 1.2 Install Your Agent Harness
 
@@ -279,7 +279,7 @@ The plugin and config give you a template you can customize for your MPAS implem
 
 ```sh
 cd ~/Projects/mpas/mpas/examples/demo
-cp tests/fixtures/plugins/github-repo.json "$MPAS_HOME/plugins/github-repo.json"
+cp plugins/github-demo-plugin.json "$MPAS_HOME/plugins/github-demo-plugin.json"
 cp tests/fixtures/configs/github-strict.json "$MPAS_HOME/config/github-strict.json"
 ```
 
@@ -326,7 +326,7 @@ First, create the bridge config files with placeholders:
 cat > $MPAS_HOME/bridge-configs/proposer-bridge.json <<EOF
 {
   "mode": "proposer",
-  "plugin": "$MPAS_HOME/plugins/github-repo.json",
+  "plugin": "$MPAS_HOME/plugins/github-demo-plugin.json",
   "adapter": {
     "url": "http://127.0.0.1:7544"
   },
@@ -493,7 +493,7 @@ Create `~/.codex-proposer/config.toml`:
 [mcp_servers.github-mpas]
 command = "node"
 args = [
-  "/Users/YOU/Projects/mpas/mpas/sdk/protocol/dist/cli.js",
+  "/Users/YOU/Projects/mpas/mpas/examples/demo/dist/bridge/github-bridge.js",
   "--config",
   "/Users/YOU/.mpas/bridge-configs/proposer-bridge.json"
 ]
@@ -687,7 +687,7 @@ openclaw config set mcp.servers "$(cat <<'JSON'
   "github-mpas": {
     "command": "/ABSOLUTE/PATH/TO/node",
     "args": [
-      "/Users/YOU/Projects/mpas/mpas/sdk/protocol/dist/cli.js",
+      "/Users/YOU/Projects/mpas/mpas/examples/demo/dist/bridge/github-bridge.js",
       "--config",
       "/Users/YOU/.mpas/bridge-configs/proposer-bridge.json"
     ]
@@ -812,7 +812,7 @@ Edit `~/Library/Application Support/Claude/claude_desktop_config.json`:
     "github-mpas": {
       "command": "node",
       "args": [
-        "/Users/YOU/Projects/mpas/mpas/sdk/protocol/dist/cli.js",
+        "/Users/YOU/Projects/mpas/mpas/examples/demo/dist/bridge/github-bridge.js",
         "--config",
         "/Users/YOU/.mpas/bridge-configs/proposer-bridge.json"
       ]
@@ -1027,7 +1027,7 @@ Before creating accounts, understand what each role needs on disk:
 | Adapter key (`adapter-key.json`)           | Yes      | —                    | —                    |
 | Deployment config (`github-strict.json`).  | Yes      | —                    | —                    |
 | Application credential (PAT)               | Yes      | —                    | —                    |
-| Plugin (`github-repo.json`)                | Yes      | Yes (copy)           | —                    |
+| Plugin (`github-demo-plugin.json`)         | Yes      | Yes (copy)           | —                    |
 | Bridge config (`proposer-bridge.json`)     | —        | Yes                  | —                    |
 | Bridge config (`maintainer-a-bridge.json`) | —        | —                    | Yes                  |
 | Proposer signing key                       | —        | Yes                  | —                    |
@@ -1176,10 +1176,10 @@ Each command prints the `did` and `publicJwk`. Save these — you'll need them i
 
 **On `agent-a` (proposer):**
 
-Copy the application plugin (the proposer bridge needs it to build action packages):
+Copy the application plugin (the proposer bridge uses it for application identity and execution profile):
 
 ```sh
-cp ~/Projects/mpas/mpas/examples/demo/tests/fixtures/plugins/github-repo.json ~/.mpas/plugins/github-repo.json
+cp ~/Projects/mpas/mpas/examples/demo/plugins/github-demo-plugin.json ~/.mpas/plugins/github-demo-plugin.json
 ```
 
 Create the bridge config:
@@ -1188,7 +1188,7 @@ Create the bridge config:
 cat > ~/.mpas/bridge-configs/proposer-bridge.json <<EOF
 {
   "mode": "proposer",
-  "plugin": "$HOME/.mpas/plugins/github-repo.json",
+  "plugin": "$HOME/.mpas/plugins/github-demo-plugin.json",
   "adapter": {
     "url": "http://127.0.0.1:7544"
   },
@@ -1351,7 +1351,7 @@ node dist/cli/index.js key generate agent-1 --key-dir ~/.mpas/keys
 cat > ~/.mpas/bridge-configs/proposer-bridge.json <<EOF
 {
   "mode": "proposer",
-  "plugin": "$HOME/.mpas/plugins/github-repo.json",
+  "plugin": "$HOME/.mpas/plugins/github-demo-plugin.json",
   "adapter": { "url": "http://127.0.0.1:7544" },
   "agent": {
     "did": "<did from key generate>",
@@ -1427,7 +1427,7 @@ openclaw config set mcp.servers "$(cat <<'JSON'
   "github-mpas": {
     "command": "/ABSOLUTE/PATH/TO/node",
     "args": [
-      "/Users/YOU/Projects/mpas/mpas/sdk/protocol/dist/cli.js",
+      "/Users/YOU/Projects/mpas/mpas/examples/demo/dist/bridge/github-bridge.js",
       "--config",
       "/Users/YOU/.mpas/bridge-configs/proposer-bridge.json"
     ]
@@ -1451,7 +1451,7 @@ JSON
 [mcp_servers.github-mpas]
 command = "node"
 args = [
-  "/Users/YOU/Projects/mpas/mpas/sdk/protocol/dist/cli.js",
+  "/Users/YOU/Projects/mpas/mpas/examples/demo/dist/bridge/github-bridge.js",
   "--config",
   "/Users/YOU/.mpas/bridge-configs/proposer-bridge.json"
 ]

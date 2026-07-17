@@ -25,18 +25,18 @@ async function tempDir(prefix: string) {
 describe("CLI management commands", () => {
   it("installs and lists plugins", async () => {
     const pluginDir = await tempDir("mpas-cli-plugins-");
-    const install = await installPlugin(join(fixturesDir, "plugins", "github-repo.json"), pluginDir);
+    const install = await installPlugin(join(fixturesDir, "plugins", "github-demo-plugin.json"), pluginDir);
     const list = await listPlugins(pluginDir);
 
     expect(install).toMatchObject({
       installed: true,
-      pluginDid: "did:web:plugins.example.com:github-repo",
+      pluginDid: "did:web:plugins.example.com:github-demo-plugin",
     });
     expect(list).toMatchObject({
       plugins: [
         {
-          file: "github-repo.json",
-          pluginDid: "did:web:plugins.example.com:github-repo",
+          file: "github-demo-plugin.json",
+          pluginDid: "did:web:plugins.example.com:github-demo-plugin",
         },
       ],
     });
@@ -66,7 +66,7 @@ describe("CLI management commands", () => {
     ).resolves.toMatchObject({
       valid: true,
       name: "github-strict",
-      pluginDid: "did:web:plugins.example.com:github-repo",
+      pluginDid: "did:web:plugins.example.com:github-demo-plugin",
       credentials: [
         {
           handle: "github-test-token",

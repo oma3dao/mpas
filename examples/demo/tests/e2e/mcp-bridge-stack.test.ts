@@ -1,8 +1,6 @@
-import { existsSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { pathToFileURL } from "node:url";
 import type { FastifyInstance } from "fastify";
 import { afterEach, describe, expect, it } from "vitest";
 import { startDaemon } from "../../src/adapter/daemon.js";
@@ -20,7 +18,7 @@ interface BridgeInstance {
 }
 
 interface BridgeModule {
-  ProposerBridge: new (config: Record<string, unknown>) => BridgeInstance;
+  GeneratedBridge: new (config: Record<string, unknown>) => BridgeInstance;
   ActionPackageBuilder: new (config: Record<string, unknown>) => {
     buildFromToolCall(toolName: string, args: object): Promise<Record<string, any>>;
   };
@@ -32,22 +30,20 @@ interface BridgeModule {
 
 const fixturesDir = join(process.cwd(), "tests", "fixtures");
 const e2eConfigDir = join(fixturesDir, "configs", "e2e");
-const bridgeDir = process.env.MPAS_MCP_BRIDGE_DIR;
-const e2eDescribe = bridgeDir ? describe : describe.skip;
 const startedApps: FastifyInstance[] = [];
 
 afterEach(async () => {
   await Promise.allSettled(startedApps.splice(0).map((app) => app.close()));
 });
 
-e2eDescribe("MPAS E2E: Policy routing and dispatch", () => {
-  // Scenario 1: Action in plugin with explicit proposerOnly policy → executes immediately
-  it("auto-executes create_issue (in plugin, proposerOnly policy)", async () => {
+describe("MPAS E2E: Policy routing and dispatch", () => {
+  // Scenario 1: Action not in plugin or policy → pass-through
+  it("auto-executes create_issue (pass-through, not in reviewed plugin)", async () => {
     const { ActionPackageBuilder, KeyManager, AdapterClient } = await loadBridgeModule();
     const { adapter } = await startStack();
 
     const keyManager = await KeyManager.fromFile(join(fixturesDir, "test-keys", "proposer.json"));
-    const plugin = await readJson(join(fixturesDir, "plugins", "github-repo.json"));
+    const plugin = await readJson(join(fixturesDir, "plugins", "github-demo-plugin.json"));
     const builder = new ActionPackageBuilder({
       applicationDid: plugin.applicationDid,
       executionProfile: { id: plugin.executionProfile.id, format: plugin.executionProfile.format ?? "mcp.toolsCall" },
@@ -74,7 +70,7 @@ e2eDescribe("MPAS E2E: Policy routing and dispatch", () => {
     const { adapter, coordination } = await startStack();
 
     const keyManager = await KeyManager.fromFile(join(fixturesDir, "test-keys", "proposer.json"));
-    const plugin = await readJson(join(fixturesDir, "plugins", "github-repo.json"));
+    const plugin = await readJson(join(fixturesDir, "plugins", "github-demo-plugin.json"));
     const builder = new ActionPackageBuilder({
       applicationDid: plugin.applicationDid,
       executionProfile: { id: plugin.executionProfile.id, format: plugin.executionProfile.format ?? "mcp.toolsCall" },
@@ -101,7 +97,7 @@ e2eDescribe("MPAS E2E: Policy routing and dispatch", () => {
     const { adapter } = await startStack();
 
     const keyManager = await KeyManager.fromFile(join(fixturesDir, "test-keys", "proposer.json"));
-    const plugin = await readJson(join(fixturesDir, "plugins", "github-repo.json"));
+    const plugin = await readJson(join(fixturesDir, "plugins", "github-demo-plugin.json"));
     const builder = new ActionPackageBuilder({
       applicationDid: plugin.applicationDid,
       executionProfile: { id: plugin.executionProfile.id, format: plugin.executionProfile.format ?? "mcp.toolsCall" },
@@ -131,7 +127,7 @@ e2eDescribe("MPAS E2E: Policy routing and dispatch", () => {
     const { adapter } = await startStack();
 
     const keyManager = await KeyManager.fromFile(join(fixturesDir, "test-keys", "proposer.json"));
-    const plugin = await readJson(join(fixturesDir, "plugins", "github-repo.json"));
+    const plugin = await readJson(join(fixturesDir, "plugins", "github-demo-plugin.json"));
     const builder = new ActionPackageBuilder({
       applicationDid: plugin.applicationDid,
       executionProfile: { id: plugin.executionProfile.id, format: plugin.executionProfile.format ?? "mcp.toolsCall" },
@@ -152,39 +148,13 @@ e2eDescribe("MPAS E2E: Policy routing and dispatch", () => {
     expect(authReqs.approvalRequirements.anyOf[0].description).toContain("Operator policy (close_issue)");
   });
 
-  // Scenario 5: Action NOT in plugin, NOT in policy → pass-through, executes immediately
-  it("passes through star_repository (not in plugin, not in policy)", async () => {
-    const { ActionPackageBuilder, KeyManager, AdapterClient } = await loadBridgeModule();
-    const { adapter } = await startStack();
-
-    const keyManager = await KeyManager.fromFile(join(fixturesDir, "test-keys", "proposer.json"));
-    const plugin = await readJson(join(fixturesDir, "plugins", "github-repo.json"));
-    const builder = new ActionPackageBuilder({
-      applicationDid: plugin.applicationDid,
-      executionProfile: { id: plugin.executionProfile.id, format: plugin.executionProfile.format ?? "mcp.toolsCall" },
-      keyManager,
-    });
-    const client = new AdapterClient({ url: adapter.address });
-
-    const pkg = await builder.buildFromToolCall("star_repository", {
-      owner: "example-org",
-      repo: "mpas-demo-repository",
-    });
-    const response = await client.submit(pkg);
-
-    expect(response.result).toBe("executed");
-    const text = (response as any).executionResult?.content?.[0]?.text;
-    const parsed = JSON.parse(text);
-    expect(parsed.simulated_result.starred).toBe(true);
-  });
-
-  // Scenario 6: Action NOT in plugin, NOT in policy, echo server doesn't know it → dispatch fails
+  // Scenario 5: Action NOT in plugin, NOT in policy, echo server doesn't know it → dispatch fails
   it("returns failed for unknown_tool (pass-through, target rejects)", async () => {
     const { ActionPackageBuilder, KeyManager, AdapterClient } = await loadBridgeModule();
     const { adapter } = await startStack();
 
     const keyManager = await KeyManager.fromFile(join(fixturesDir, "test-keys", "proposer.json"));
-    const plugin = await readJson(join(fixturesDir, "plugins", "github-repo.json"));
+    const plugin = await readJson(join(fixturesDir, "plugins", "github-demo-plugin.json"));
     const builder = new ActionPackageBuilder({
       applicationDid: plugin.applicationDid,
       executionProfile: { id: plugin.executionProfile.id, format: plugin.executionProfile.format ?? "mcp.toolsCall" },
@@ -203,11 +173,11 @@ e2eDescribe("MPAS E2E: Policy routing and dispatch", () => {
 
   // Full approval flow: proposer → adapter → coordination → signer → resubmit → executed
   it("full approval flow: delete_branch with signer approval", async () => {
-    const { ProposerBridge } = await loadBridgeModule();
+    const { GeneratedBridge } = await loadBridgeModule();
     const { adapter, coordination } = await startStack();
 
-    const plugin = await readJson(join(fixturesDir, "plugins", "github-repo.json"));
-    const proposer = new ProposerBridge({
+    const plugin = await readJson(join(fixturesDir, "plugins", "github-demo-plugin.json"));
+    const proposer = new GeneratedBridge({
       plugin,
       applicationDid: plugin.applicationDid,
       adapterUrl: adapter.address,
@@ -244,7 +214,7 @@ e2eDescribe("MPAS E2E: Policy routing and dispatch", () => {
     const { adapter } = await startStack();
 
     const keyManager = await KeyManager.fromFile(join(fixturesDir, "test-keys", "proposer.json"));
-    const plugin = await readJson(join(fixturesDir, "plugins", "github-repo.json"));
+    const plugin = await readJson(join(fixturesDir, "plugins", "github-demo-plugin.json"));
     const builder = new ActionPackageBuilder({
       applicationDid: plugin.applicationDid,
       executionProfile: { id: plugin.executionProfile.id, format: plugin.executionProfile.format ?? "mcp.toolsCall" },
@@ -298,17 +268,14 @@ async function waitForApprovalRequest(signer: BridgeInstance): Promise<Record<st
 }
 
 async function loadBridgeModule(): Promise<BridgeModule> {
-  if (!bridgeDir) {
-    throw new Error("MPAS_MCP_BRIDGE_DIR is required for MCP bridge E2E tests.");
-  }
-
-  const candidates = [join(bridgeDir, "dist", "index.js"), join(bridgeDir, "dist", "src", "index.js")];
-  const entrypoint = candidates.find((candidate) => existsSync(candidate));
-  if (!entrypoint) {
-    throw new Error(`MCP bridge build output not found. Tried: ${candidates.join(", ")}`);
-  }
-
-  return import(pathToFileURL(entrypoint).href) as Promise<BridgeModule>;
+  const bridge = await import("../../src/bridge/github-bridge.js");
+  const mpas = await import("@oma3/mpas");
+  return {
+    GeneratedBridge: bridge.GeneratedBridge,
+    ActionPackageBuilder: mpas.ActionPackageBuilder,
+    KeyManager: mpas.KeyManager,
+    AdapterClient: mpas.AdapterClient,
+  } as BridgeModule;
 }
 
 async function credentialDir() {

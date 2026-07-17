@@ -1,0 +1,117 @@
+{
+  "version": "1",
+  "type": "MpasApplicationPlugin",
+  "pluginDid": "did:web:plugins.example.com:github-demo-plugin",
+  "pluginVersion": "1.0.0",
+  "publisherDid": "did:web:wivity.example",
+  "applicationDid": "did:web:github.example",
+  "executionProfile": {
+    "id": "did:web:profiles.oma3.org:mcp",
+    "format": "mcp.toolsCall"
+  },
+  "credentialRequirements": [
+    {
+      "type": "oauthToken",
+      "requiredCapabilities": [
+        "issue.write",
+        "pullRequest.merge",
+        "pullRequest.read",
+        "branch.delete"
+      ],
+      "description": "GitHub OAuth token with repository access for configured repositories."
+    }
+  ],
+  "operations": {
+    "delete_branch": {
+      "description": "Delete a branch from a GitHub repository.",
+      "impact": "critical",
+      "executionPayloadSchema": {
+        "type": "object",
+        "required": [
+          "name",
+          "arguments"
+        ],
+        "properties": {
+          "name": {
+            "const": "delete_branch"
+          },
+          "arguments": {
+            "type": "object",
+            "required": [
+              "owner",
+              "repo",
+              "branch"
+            ],
+            "properties": {
+              "owner": {
+                "type": "string"
+              },
+              "repo": {
+                "type": "string"
+              },
+              "branch": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "merge_pull_request": {
+      "description": "Merge a pull request.",
+      "impact": "high",
+      "executionPayloadSchema": {
+        "type": "object",
+        "required": [
+          "name",
+          "arguments"
+        ],
+        "properties": {
+          "name": {
+            "const": "merge_pull_request"
+          },
+          "arguments": {
+            "type": "object",
+            "required": [
+              "owner",
+              "repo",
+              "pullNumber",
+              "baseRef",
+              "expectedHeadSha",
+              "mergeMethod"
+            ],
+            "properties": {
+              "owner": {
+                "type": "string"
+              },
+              "repo": {
+                "type": "string"
+              },
+              "pullNumber": {
+                "type": "integer"
+              },
+              "baseRef": {
+                "type": "string"
+              },
+              "expectedHeadSha": {
+                "type": "string"
+              },
+              "mergeMethod": {
+                "type": "string",
+                "enum": [
+                  "merge",
+                  "squash",
+                  "rebase"
+                ]
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  }
+}

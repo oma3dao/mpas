@@ -191,7 +191,7 @@ MPAS uses three types of configuration files:
 │  Application Plugin (published by vendor or ecosystem participant)        │
 │  Declares: operations, payload schemas, credential requirements.          │
 │            Often audited by trusted parties.                              │
-│  File: $MPAS_HOME/plugins/github-repo.json                                │
+│  File: $MPAS_HOME/plugins/github-demo-plugin.json                         │
 └───────────────────────────────────────┬───────────────────────────────────┘
                                         │ referenced by (path + hash)
                                         ▼
@@ -247,7 +247,7 @@ The bridge config lives on the agent side and tells the MCP Bridge how to connec
 | Field                    | Purpose                                                                        |
 | ------------------------ | ------------------------------------------------------------------------------ |
 | `mode`                   | `"proposer"` (can call operations) or `"maintainer"` (can approve/reject)      |
-| `plugin`                 | Path to the plugin file (bridge reads it to know what tools to expose)         |
+| `plugin`                 | Path to the plugin file (bridge uses it for application identity/profile)      |
 | `adapter.url`            | Where to submit action packages                                                |
 | `agent.did`              | This agent's DID — must be in the deployment config's `signerKeys`         |
 | `agent.keyFile`          | Path to the Ed25519 key file for signing                                       |
@@ -297,7 +297,7 @@ Useful commands:
 ```sh
 mpas daemon start
 mpas coordination start --port 7545
-npm run test:e2e:mcp-bridge -- --mcp-bridge-dir ../../sdk/protocol
+npm run test:e2e:mcp-bridge
 ```
 
 Coordination endpoints:

@@ -355,7 +355,7 @@ const invalidPackages = {
 const githubPlugin = {
   version: "1",
   type: "MpasApplicationPlugin",
-  pluginDid: "did:web:plugins.example.com:github-repo",
+  pluginDid: "did:web:plugins.example.com:github-demo-plugin",
   pluginVersion: "1.0.0",
   publisherDid: "did:web:wivity.example",
   applicationDid: "did:web:github.example",
@@ -371,6 +371,28 @@ const githubPlugin = {
     },
   ],
   operations: {
+    delete_branch: {
+      description: "Delete a branch from a GitHub repository.",
+      impact: "critical",
+      executionPayloadSchema: {
+        type: "object",
+        required: ["name", "arguments"],
+        properties: {
+          name: { const: "delete_branch" },
+          arguments: {
+            type: "object",
+            required: ["owner", "repo", "branch"],
+            properties: {
+              owner: { type: "string" },
+              repo: { type: "string" },
+              branch: { type: "string" },
+            },
+            additionalProperties: false,
+          },
+        },
+        additionalProperties: false,
+      },
+    },
     merge_pull_request: {
       description: "Merge a pull request into its base branch.",
       impact: "high",
@@ -389,28 +411,6 @@ const githubPlugin = {
               baseRef: { type: "string" },
               expectedHeadSha: { type: "string" },
               mergeMethod: { type: "string", enum: ["merge", "squash", "rebase"] },
-            },
-            additionalProperties: false,
-          },
-        },
-        additionalProperties: false,
-      },
-    },
-    delete_branch: {
-      description: "Delete a branch from a repository.",
-      impact: "high",
-      executionPayloadSchema: {
-        type: "object",
-        required: ["name", "arguments"],
-        properties: {
-          name: { const: "delete_branch" },
-          arguments: {
-            type: "object",
-            required: ["owner", "repo", "branch"],
-            properties: {
-              owner: { type: "string" },
-              repo: { type: "string" },
-              branch: { type: "string" },
             },
             additionalProperties: false,
           },
@@ -480,7 +480,7 @@ function baseDeploymentConfig(name: string, policy: ReturnType<typeof makePolicy
       pluginDid: githubPlugin.pluginDid,
       pluginVersion: githubPlugin.pluginVersion,
       artifactDid: pluginArtifactDid,
-      path: "../plugins/github-repo.json",
+      path: "../plugins/github-demo-plugin.json",
     },
     credentialBindings: [
       {
@@ -612,7 +612,7 @@ for (const [file, value] of Object.entries(invalidPackages)) {
   await writeFile(join(fixtureRoot, "core", file), `${JSON.stringify(value, null, 2)}\n`);
 }
 
-await writeFile(join(fixtureRoot, "plugins", "github-repo.json"), `${JSON.stringify(githubPlugin, null, 2)}\n`);
+await writeFile(join(fixtureRoot, "plugins", "github-demo-plugin.json"), `${JSON.stringify(githubPlugin, null, 2)}\n`);
 
 for (const [file, value] of Object.entries(configs)) {
   await writeFile(join(fixtureRoot, "configs", file), `${JSON.stringify(value, null, 2)}\n`);

@@ -126,15 +126,15 @@ async function readJson<T>(path: string): Promise<T> {
 
 describe("plugin, config, and key fixtures", () => {
   it("validates the GitHub plugin against MPAS Application Plugin Profile v0.2", async () => {
-    const plugin = await readJson<MpasApplicationPlugin>(join(fixturesDir, "plugins", "github-repo.json"));
+    const plugin = await readJson<MpasApplicationPlugin>(join(fixturesDir, "plugins", "github-demo-plugin.json"));
     const ajv = new Ajv2020({ strict: false });
     const validate = ajv.compile(applicationPluginSchema);
 
     expect(validate(plugin), JSON.stringify(validate.errors, null, 2)).toBe(true);
     expect(typeof plugin.operations).toBe("object");
     expect(Object.keys(plugin.operations)).toEqual([
-      "merge_pull_request",
       "delete_branch",
+      "merge_pull_request",
     ]);
     expect(JSON.stringify(plugin)).not.toContain("nativeBinding");
     expect(JSON.stringify(plugin)).not.toContain("policySuggestions");
@@ -142,7 +142,7 @@ describe("plugin, config, and key fixtures", () => {
   });
 
   it("valid Action Package payloads validate against plugin operation schemas", async () => {
-    const plugin = await readJson<MpasApplicationPlugin>(join(fixturesDir, "plugins", "github-repo.json"));
+    const plugin = await readJson<MpasApplicationPlugin>(join(fixturesDir, "plugins", "github-demo-plugin.json"));
     const ajv = new Ajv2020({ strict: false });
 
     for (const file of [
@@ -159,7 +159,7 @@ describe("plugin, config, and key fixtures", () => {
   });
 
   it("deployment configs reference the plugin and artifact DID correctly", async () => {
-    const plugin = await readJson<MpasApplicationPlugin>(join(fixturesDir, "plugins", "github-repo.json"));
+    const plugin = await readJson<MpasApplicationPlugin>(join(fixturesDir, "plugins", "github-demo-plugin.json"));
     const expectedArtifactDid = await computeArtifactDid(plugin);
 
     for (const file of ["github-auto-approve.json", "github-strict.json"]) {
@@ -169,7 +169,7 @@ describe("plugin, config, and key fixtures", () => {
       expect(config.plugin.pluginDid).toBe(plugin.pluginDid);
       expect(config.plugin.pluginVersion).toBe(plugin.pluginVersion);
       expect(config.plugin.artifactDid).toBe(expectedArtifactDid);
-      expect(config.plugin.path).toBe("../plugins/github-repo.json");
+      expect(config.plugin.path).toBe("../plugins/github-demo-plugin.json");
     }
   });
 

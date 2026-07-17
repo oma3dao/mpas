@@ -12,7 +12,7 @@ async function readJson<T>(path: string): Promise<T> {
 }
 
 async function githubPlugin() {
-  const result = await loadPlugin(join(fixturesDir, "plugins", "github-repo.json"));
+  const result = await loadPlugin(join(fixturesDir, "plugins", "github-demo-plugin.json"));
   if (!result.ok) {
     throw new Error(result.error.message);
   }

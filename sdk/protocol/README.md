@@ -41,11 +41,10 @@ Evaluate JSON policy configurations per the MPAS Policy Profile:
 - `buildAndSignReceipt` — construct and JWS-sign Execution Receipts
 - `buildAuthorizationRequirements` — build AuthorizationRequirements from unsatisfied policy rules
 
-### Proposer Primitives (`lib/action-package-builder.ts`, `lib/approval-builder.ts`, `lib/plugin-tool-generator.ts`)
+### Proposer Primitives (`lib/action-package-builder.ts`, `lib/approval-builder.ts`)
 
 - `ActionPackageBuilder` — construct Action Packages from tool calls
 - `ApprovalBuilder` — construct and sign Approval objects
-- `PluginToolGenerator` — generate MCP tool definitions from plugin operations
 
 ### Protocol Clients (`lib/adapter-client.ts`, `lib/coordination-client.ts`)
 
@@ -57,9 +56,12 @@ Evaluate JSON policy configurations per the MPAS Policy Profile:
 - `KeyManager` — load Ed25519 keys from file, derive `did:key`, sign/verify JWS
 - `deriveDidKey`, `generateEd25519Key`, `didKeyToKid` — DID utilities
 
-### MCP Bridge (`bridges/proposer-bridge.ts`)
+### Bridge Generation
 
-- `ProposerBridge` — MCP server class that wraps tool calls in MPAS artifacts, submits to adapter, handles coordination flow
+Static MCP bridges are generated outside the runtime SDK by the top-level
+`bridge-generator/` package. Generated bridges import these SDK primitives
+but define their MCP tool surface from the upstream server, not from plugin
+policy metadata.
 
 ### Trace (`lib/trace.ts`)
 

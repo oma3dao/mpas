@@ -147,12 +147,13 @@ This section defines the MCP-specific validation that occurs during **Core §6.2
 After Core verification passes and the Execution Payload hash binding is confirmed, the Verifier MUST apply the following MCP-specific validation:
 
 1. **Validate structure.** The payload MUST have exactly two members: `name` (a string) and `arguments` (an object). Any other shape MUST be rejected as malformed.
-2. **Match the operation.** Find the plugin operation whose `name` equals the payload `name` (exact, case-sensitive string comparison). If no operation matches, resolve as `rejected`.
-3. **Validate arguments against the plugin schema.** Evaluate `arguments` against the matched operation's `executionPayloadSchema`.
+2. **Determine the routing class.** Find the plugin operation whose `name` equals the payload `name` (exact, case-sensitive string comparison), and check trusted deployment policy/configuration for an operation entry or pass-through rule. The plugin remains the normal source of operation metadata and schema validation, but a deployment MAY explicitly allow an operation that is absent from the plugin to pass through or be governed by operator policy. If the operation is absent from both trusted plugin metadata and trusted deployment configuration, the Verifier SHOULD treat it as pass-through.
+3. **Validate arguments against the plugin schema when present.** If a matched plugin operation exists, evaluate the full Execution Payload against the matched operation's `executionPayloadSchema`.
    - If the schema does not explicitly permit additional properties at a given object level, unknown members at that level MUST cause rejection (fail closed). Plugin publishers SHOULD set `additionalProperties: false` explicitly; Verifiers MUST apply fail-closed semantics even when the schema is silent.
    - Schema evaluation MUST be resource-bounded (see Security Considerations).
+4. **Evaluate policy.** If the operation is present in the plugin or has a trusted deployment policy entry, evaluate the Action Package against deployment policy. Deployments commonly rely on the plugin plus default policy, using config only for special cases.
 
-Validation failures in steps 1–3 are deterministic properties of the payload and therefore resolve the `actionId` per the Core Action Lifecycle (§6.9) — they can never succeed on resubmission. Policy evaluation outcomes (Core §6.2.2 Steps 7–10) follow the JSON Verifier Policy Profile.
+Validation failures in steps 1 and 3 are deterministic properties of the payload and therefore resolve the `actionId` per the Core Action Lifecycle (§6.9) — they can never succeed on resubmission. Policy evaluation outcomes (Core §6.2.2 Steps 7–10) follow the JSON Verifier Policy Profile.
 
 ---
 
@@ -206,7 +207,7 @@ Renderers MUST NOT display semantic claims not derivable from the hash-covered p
 ## 9. Security Considerations
 
 - **Exact-payload discipline.** The two-member rule (3.1) and the exclusion list (3.2) exist so that the bytes signers approve are the bytes that execute. Any relaxation (extra members, host-injected fields, namespace rewriting) reintroduces a gap between reviewed intent and executed action.
-- **Fail-closed argument validation.** Unknown argument members are rejected (§5 step 3) because an unvalidated member would ride inside a signed payload and reach the target application without ever being constrained by the plugin schema or rendered meaningfully to signers.
+- **Fail-closed argument validation for plugin-covered operations.** Unknown argument members are rejected (§5 step 3) because an unvalidated member would ride inside a signed payload and reach the target application without ever being constrained by the plugin schema or rendered meaningfully to signers. Deployments that permit pass-through operations absent from the plugin accept that local trust decision explicitly and should monitor upstream tool drift.
 - **Schema evaluation resource bounds.** Plugin-supplied JSON Schemas are third-party input to the Verifier. Implementations MUST bound schema evaluation (regex execution time or safe-regex subsets, recursion depth, document size) to prevent denial of service against the trust anchor.
 - **Number canonicalization.** ECMAScript number serialization under JCS means semantically distinct lexical forms (`1.50` vs `1.5`) canonicalize identically, and very large integers lose precision. The string-typing rule (3.3) removes this class of ambiguity for sensitive values; plugin authors are the first line of enforcement via schema types.
 - **TOCTOU / state binding.** This profile binds the request, not the world state it will act upon. Operations whose safety depends on current state (force-pushes, deletions, transfers) SHOULD include state preconditions as explicit arguments (e.g., an expected head SHA) so that the precondition is hash-bound and enforced by the target application. Protocol-level precondition support is future work in MPAS Core.

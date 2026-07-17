@@ -22,8 +22,8 @@ async function tempFixtureConfigDir() {
   await mkdir(configDir, { recursive: true });
   await mkdir(pluginDir, { recursive: true });
 
-  const plugin = await readJson<unknown>(join(fixturesDir, "plugins", "github-repo.json"));
-  await writeJson(join(pluginDir, "github-repo.json"), plugin);
+  const plugin = await readJson<unknown>(join(fixturesDir, "plugins", "github-demo-plugin.json"));
+  await writeJson(join(pluginDir, "github-demo-plugin.json"), plugin);
 
   return { root, configDir, pluginDir };
 }

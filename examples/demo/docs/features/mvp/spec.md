@@ -349,7 +349,7 @@ Each deployment config binds a plugin to operator decisions:
   "type": "MpasAdapterDeploymentConfig",
   "name": "github-production",
   "plugin": {
-    "pluginDid": "did:web:plugins.example.com:github-repo",
+    "pluginDid": "did:web:plugins.example.com:github-demo-plugin",
     "pluginVersion": "1.0.0",
     "artifactDid": "did:artifact:bafkrei..."
   },
@@ -776,7 +776,7 @@ All responses use the HTTP profile's `result` field (not a separate `outcome` fi
 ~/.mpas/
   adapter.json              # Adapter identity, listen address, global settings
   plugins/                  # Immutable plugin JSON files (never modified)
-    github-repo.json
+    github-demo-plugin.json
   config/                   # Deployment configs (operator-authored and edited)
     github-production.json
     github-sandbox.json

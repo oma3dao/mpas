@@ -12,7 +12,6 @@ export * from "./lib/adapter-client.js";
 export * from "./lib/approval-builder.js";
 export * from "./lib/coordination-client.js";
 export * from "./lib/key-manager.js";
-export * from "./lib/plugin-tool-generator.js";
 
 // Protocol primitives — Verifier side
 export * from "./lib/verification.js";
@@ -43,6 +42,3 @@ export * from "./lib/receipt-builder.js";
 export * from "./lib/auth-requirements-builder.js";
 export * from "./lib/did-key.js";
 export * from "./lib/trace.js";
-
-// Bridges (MCP integration)
-export * from "./bridges/proposer-bridge.js";

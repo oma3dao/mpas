@@ -9,14 +9,14 @@ const pluginsDir = fileURLToPath(new URL("../fixtures/plugins/", import.meta.url
 
 describe("loadPlugin", () => {
   it("loads the valid GitHub plugin fixture", async () => {
-    const result = await loadPlugin(join(pluginsDir, "github-repo.json"));
+    const result = await loadPlugin(join(pluginsDir, "github-demo-plugin.json"));
 
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.plugin.type).toBe("MpasApplicationPlugin");
       expect(Object.keys(result.plugin.operations)).toEqual([
-        "merge_pull_request",
         "delete_branch",
+        "merge_pull_request",
       ]);
     }
   });

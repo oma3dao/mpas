@@ -1,0 +1,17 @@
+{
+  "name": "bridge-generator",
+  "version": "0.0.0",
+  "description": "Development-time generator for static MPAS MCP bridge servers",
+  "type": "module",
+  "private": true,
+  "bin": {
+    "bridge-generator": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "../sdk/protocol/node_modules/.bin/tsc -p tsconfig.json",
+    "test": "../sdk/protocol/node_modules/.bin/vitest run --passWithNoTests"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

@@ -132,7 +132,7 @@ Create fixture files for:
 
 | Fixture | File |
 |---|---|
-| GitHub application plugin | `fixtures/plugins/github-repo.json` |
+| GitHub application plugin | `fixtures/plugins/github-demo-plugin.json` |
 | Deployment config (auto-approve low-risk) | `fixtures/configs/github-auto-approve.json` |
 | Deployment config (require 2 maintainer approvals for merges) | `fixtures/configs/github-strict.json` |
 | Test signing keys (Ed25519, 3 key pairs) | `fixtures/test-keys/proposer.json`, `fixtures/test-keys/maintainer-a.json`, `fixtures/test-keys/maintainer-b.json` |

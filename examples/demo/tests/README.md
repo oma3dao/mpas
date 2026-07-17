@@ -1,7 +1,7 @@
 # MPAS Demo Test Guide
 
 This package uses Vitest for unit, integration, and local E2E coverage. Most tests run with no external services. The MCP
-bridge E2E is opt-in because it depends on the sibling `sdk/protocol` package in the same repository.
+bridge E2E uses the checked-in generated bridge at `src/bridge/github-bridge.ts`.
 
 ## Quick Start
 
@@ -12,8 +12,7 @@ npm run build
 npm test
 ```
 
-`npm test` runs the normal suite. The MCP bridge E2E is discovered but skipped unless `MPAS_MCP_BRIDGE_DIR`
-is set by the dedicated E2E runner.
+`npm test` runs the normal suite, including the generated MCP bridge E2E.
 
 ## Test Layout
 
@@ -71,7 +70,7 @@ The MCP bridge E2E verifies the complete local approval path:
 
 1. Start the Credential Adapter on a random local port.
 2. Start the Coordination Service on a random local port.
-3. Load `ProposerBridge` and `MaintainerBridge` from the SDK bridge package.
+3. Load the generated GitHub proposer bridge and the standalone signer server.
 4. Submit a protected `delete_branch` call through the proposer.
 5. Receive `additionalApprovalsRequired` from the adapter.
 6. Store the pending action in coordination.
@@ -79,31 +78,13 @@ The MCP bridge E2E verifies the complete local approval path:
 8. Poll coordination for the completed Action Package.
 9. Resubmit to the adapter and assert execution succeeds.
 
-Run it with an explicit bridge package path:
+Run it with:
 
 ```sh
-npm run test:e2e:mcp-bridge -- --mcp-bridge-dir ../../sdk/protocol
+npm run test:e2e:mcp-bridge
 ```
 
-Or set the environment variable:
-
-```sh
-MPAS_MCP_BRIDGE_DIR=../../sdk/protocol npm run test:e2e:mcp-bridge
-```
-
-If neither is provided, the runner defaults to `../../sdk/protocol` relative to the `examples/demo` package root.
-
-The E2E runner builds the bridge package first:
-
-```sh
-npm run build
-```
-
-inside the bridge package, then runs only:
-
-```sh
-tests/e2e/mcp-bridge-stack.test.ts
-```
+The E2E runner builds `sdk/protocol`, then `examples/demo`, then runs only `tests/e2e/mcp-bridge-stack.test.ts`.
 
 Like the coordination daemon tests, this E2E binds localhost ports and may require sandbox approval in restricted
 environments.
@@ -133,5 +114,5 @@ For changes that touch bridge coordination, adapter replay behavior, approval co
 ```sh
 npm run build
 npm test
-npm run test:e2e:mcp-bridge -- --mcp-bridge-dir ../../sdk/protocol
+npm run test:e2e:mcp-bridge
 ```

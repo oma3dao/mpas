@@ -51,11 +51,13 @@ const tools = [
     description: "Merge a pull request.",
     inputSchema: {
       type: "object",
-      required: ["owner", "repo", "pullNumber"],
+      required: ["owner", "repo", "pullNumber", "baseRef", "expectedHeadSha", "mergeMethod"],
       properties: {
         owner: { type: "string" },
         repo: { type: "string" },
         pullNumber: { type: "integer" },
+        baseRef: { type: "string" },
+        expectedHeadSha: { type: "string" },
         mergeMethod: { type: "string", enum: ["merge", "squash", "rebase"] },
       },
       additionalProperties: false,
@@ -71,19 +73,6 @@ const tools = [
         owner: { type: "string" },
         repo: { type: "string" },
         issueNumber: { type: "integer" },
-      },
-      additionalProperties: false,
-    },
-  },
-  {
-    name: "star_repository",
-    description: "Star a repository.",
-    inputSchema: {
-      type: "object",
-      required: ["owner", "repo"],
-      properties: {
-        owner: { type: "string" },
-        repo: { type: "string" },
       },
       additionalProperties: false,
     },
@@ -142,19 +131,6 @@ function handleToolCall(name, args) {
         simulated_result: {
           number: args.issueNumber ?? 1,
           state: "closed",
-        },
-      };
-
-    case "star_repository":
-      return {
-        mode: "dry_run",
-        pid: process.pid,
-        credentialPresent,
-        message: "MPAS dry run: star validated but not dispatched to GitHub.",
-        simulated_result: {
-          starred: true,
-          owner: args.owner,
-          repo: args.repo,
         },
       };
 

@@ -6,10 +6,10 @@
     "applicationDid": "did:web:github.example"
   },
   "plugin": {
-    "pluginDid": "did:web:plugins.example.com:github-repo",
+    "pluginDid": "did:web:plugins.example.com:github-demo-plugin",
     "pluginVersion": "1.0.0",
-    "artifactDid": "did:artifact:bafkreihadq62mlwog3bnl5a3gvjwdamjuwirdnqwx5k4kkzdddsevzcej4",
-    "path": "../../plugins/github-repo.json"
+    "artifactDid": "did:artifact:bafkreibxqcektio5okyrkdvdrfryi6moye72xatwnsl5hukoni6rympjra",
+    "path": "../../plugins/github-demo-plugin.json"
   },
   "credentialBindings": [
     {
