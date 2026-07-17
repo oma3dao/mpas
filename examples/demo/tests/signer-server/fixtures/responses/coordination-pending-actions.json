@@ -23,7 +23,7 @@
           "version": "1",
           "type": "ActionEnvelope",
           "proposer": {
-            "did": "did:key:z6MkpPanM5XyyGcp6HAwJSm7SmWmmb4MpfmBfgRSq4t7GokV"
+            "did": "did:jwk:eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6Ims2TzdjaVFrbXBodUVFdDFpM3lBaW1KSldlR0ttT3EzdF9mc05renphNm8ifQ"
           },
           "target": {
             "applicationDid": "did:web:github.example",
@@ -61,7 +61,7 @@
           },
           "result": "additionalApprovalsRequired",
           "verifier": {
-            "did": "did:key:z6MkjNteHVrscbEvtZ11x56uSdCNjAGL1rWpTrcXAPRky6vm"
+            "did": "did:jwk:eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6IlNTdnBpcVdXb1BFQXR1TWhCMEd4Z0NtLU44QUdIdS1feDlxR2JSaDB0MUkifQ"
           },
           "approvalRequirements": {
             "anyOf": [
@@ -69,7 +69,7 @@
                 "type": "threshold",
                 "threshold": 1,
                 "eligibleSigners": [
-                  "did:key:z6MkvnsFe1agZ33u5c9JuDkRxKRqupn3qbmPd2cjZ5rmerJi"
+                  "did:jwk:eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6IjhzRFY3NmI4aUY3NlBJbUF3NUk5V3ZlanNfOGJTOE4xMld2SHpQYTVWdzgifQ"
                 ],
                 "decision": "approve"
               }

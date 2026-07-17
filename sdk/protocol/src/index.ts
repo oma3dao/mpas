@@ -45,5 +45,5 @@ export {
 } from "./lib/plugin-loader.js";
 export * from "./lib/receipt-builder.js";
 export * from "./lib/auth-requirements-builder.js";
-export * from "./lib/did-key.js";
+export * from "./lib/did-jwk.js";
 export * from "./lib/trace.js";

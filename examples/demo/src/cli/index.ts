@@ -12,7 +12,7 @@ import { policyFromLoadedConfig } from "../adapter/adapter-api-server.js";
 import { evaluatePolicy } from "../core/policy-engine.js";
 import { loadPlugin, validatePayloadAgainstPlugin } from "../core/plugin-loader.js";
 import { parseActionPackage, verifyActionPackage } from "../core/verification.js";
-import { generateEd25519Key, deriveDidKey } from "../core/did-key.js";
+import { generateEd25519Key, didJwkToJwk, isDidJwk } from "../core/did-jwk.js";
 import type { Did } from "../core/types.js";
 
 export interface CliIo {
@@ -378,16 +378,22 @@ export async function validateConfig(name: string, options: Pick<ParsedOptions, 
       ok: true,
     };
 
-    // Verify the DID is derivable from the publicJwk
+    // Verify the signer identity. For did:jwk the DID embeds the key and is
+    // the source of truth; any configured publicJwk must agree with it.
     try {
-      const derivedDid = deriveDidKey(signer.publicJwk);
-      if (derivedDid !== signer.did) {
+      if (isDidJwk(signer.did)) {
+        const embedded = didJwkToJwk(signer.did);
+        if (signer.publicJwk && signer.publicJwk.x !== embedded.x) {
+          check.ok = false;
+          check.error = "publicJwk does not match the key embedded in did:jwk (the DID is the source of truth).";
+        }
+      } else if (!signer.publicJwk) {
         check.ok = false;
-        check.error = `DID does not match publicJwk. Expected ${derivedDid}, got ${signer.did}`;
+        check.error = "publicJwk is required for non-did:jwk DIDs.";
       }
     } catch (error) {
       check.ok = false;
-      check.error = `Invalid publicJwk: ${error instanceof Error ? error.message : String(error)}`;
+      check.error = `Invalid did:jwk: ${error instanceof Error ? error.message : String(error)}`;
     }
 
     signerChecks.push(check);

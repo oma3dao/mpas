@@ -85,11 +85,11 @@ describe("CLI management commands", () => {
     const { writeFile } = await import("node:fs/promises");
     await writeFile(
       join(bridgeDir, "proposer.json"),
-      JSON.stringify({ mode: "proposer", agent: { did: "did:key:z6MkpPanM5XyyGcp6HAwJSm7SmWmmb4MpfmBfgRSq4t7GokV", keyFile: "x" } }),
+      JSON.stringify({ mode: "proposer", agent: { did: "did:jwk:eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6Ims2TzdjaVFrbXBodUVFdDFpM3lBaW1KSldlR0ttT3EzdF9mc05renphNm8ifQ", keyFile: "x" } }),
     );
     await writeFile(
       join(bridgeDir, "signer.json"),
-      JSON.stringify({ mode: "signer", agent: { did: "did:key:z6MkvnsFe1agZ33u5c9JuDkRxKRqupn3qbmPd2cjZ5rmerJi", keyFile: "x" } }),
+      JSON.stringify({ mode: "signer", agent: { did: "did:jwk:eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6IjhzRFY3NmI4aUY3NlBJbUF3NUk5V3ZlanNfOGJTOE4xMld2SHpQYTVWdzgifQ", keyFile: "x" } }),
     );
 
     const result = await validateConfig("github-strict", {
@@ -115,7 +115,7 @@ describe("CLI management commands", () => {
     const { writeFile } = await import("node:fs/promises");
     await writeFile(
       join(bridgeDir, "unknown.json"),
-      JSON.stringify({ mode: "proposer", agent: { did: "did:key:z6MkUnknownDid", keyFile: "x" } }),
+      JSON.stringify({ mode: "proposer", agent: { did: "did:web:agents.example:unknowndid", keyFile: "x" } }),
     );
 
     const result = await validateConfig("github-strict", {

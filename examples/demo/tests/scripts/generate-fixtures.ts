@@ -4,96 +4,51 @@ import { join } from "node:path";
 import { CompactSign, importJWK } from "jose";
 import { canonicalize } from "json-canonicalize";
 import { computeArtifactDid } from "../../src/adapter/config-loader.js";
+import { deriveDidJwk, didJwkToKid } from "@oma3/mpas";
 
-const keys = {
+const keyMaterial = {
   proposer: {
     label: "proposer",
-    did: "did:key:z6MkpPanM5XyyGcp6HAwJSm7SmWmmb4MpfmBfgRSq4t7GokV",
-    kid: "did:key:z6MkpPanM5XyyGcp6HAwJSm7SmWmmb4MpfmBfgRSq4t7GokV#z6MkpPanM5XyyGcp6HAwJSm7SmWmmb4MpfmBfgRSq4t7GokV",
-    privateJwk: {
-      crv: "Ed25519",
-      d: "UA1VsxVt4yqqnFyc4xENa10rWJOqNnWO27v-f1_nUmk",
-      x: "k6O7ciQkmphuEEt1i3yAimJJWeGKmOq3t_fsNkzza6o",
-      kty: "OKP",
-      alg: "EdDSA",
-      use: "sig",
-      kid: "did:key:z6MkpPanM5XyyGcp6HAwJSm7SmWmmb4MpfmBfgRSq4t7GokV#z6MkpPanM5XyyGcp6HAwJSm7SmWmmb4MpfmBfgRSq4t7GokV",
-    },
-    publicJwk: {
-      crv: "Ed25519",
-      x: "k6O7ciQkmphuEEt1i3yAimJJWeGKmOq3t_fsNkzza6o",
-      kty: "OKP",
-      alg: "EdDSA",
-      use: "sig",
-      kid: "did:key:z6MkpPanM5XyyGcp6HAwJSm7SmWmmb4MpfmBfgRSq4t7GokV#z6MkpPanM5XyyGcp6HAwJSm7SmWmmb4MpfmBfgRSq4t7GokV",
-    },
+    d: "UA1VsxVt4yqqnFyc4xENa10rWJOqNnWO27v-f1_nUmk",
+    x: "k6O7ciQkmphuEEt1i3yAimJJWeGKmOq3t_fsNkzza6o",
   },
   maintainerA: {
     label: "maintainer-a",
-    did: "did:key:z6MkvnsFe1agZ33u5c9JuDkRxKRqupn3qbmPd2cjZ5rmerJi",
-    kid: "did:key:z6MkvnsFe1agZ33u5c9JuDkRxKRqupn3qbmPd2cjZ5rmerJi#z6MkvnsFe1agZ33u5c9JuDkRxKRqupn3qbmPd2cjZ5rmerJi",
-    privateJwk: {
-      crv: "Ed25519",
-      d: "kSRUeh59TL7vVxo6oeJL0SvujeYlqP_ICEu6urlNrs0",
-      x: "8sDV76b8iF76PImAw5I9Wvejs_8bS8N12WvHzPa5Vw8",
-      kty: "OKP",
-      alg: "EdDSA",
-      use: "sig",
-      kid: "did:key:z6MkvnsFe1agZ33u5c9JuDkRxKRqupn3qbmPd2cjZ5rmerJi#z6MkvnsFe1agZ33u5c9JuDkRxKRqupn3qbmPd2cjZ5rmerJi",
-    },
-    publicJwk: {
-      crv: "Ed25519",
-      x: "8sDV76b8iF76PImAw5I9Wvejs_8bS8N12WvHzPa5Vw8",
-      kty: "OKP",
-      alg: "EdDSA",
-      use: "sig",
-      kid: "did:key:z6MkvnsFe1agZ33u5c9JuDkRxKRqupn3qbmPd2cjZ5rmerJi#z6MkvnsFe1agZ33u5c9JuDkRxKRqupn3qbmPd2cjZ5rmerJi",
-    },
+    d: "kSRUeh59TL7vVxo6oeJL0SvujeYlqP_ICEu6urlNrs0",
+    x: "8sDV76b8iF76PImAw5I9Wvejs_8bS8N12WvHzPa5Vw8",
   },
   maintainerB: {
     label: "maintainer-b",
-    did: "did:key:z6MkujMqQsmtUpjtAAJQw6z8CDMh9GDdh6gmWogYwYqxAFV8",
-    kid: "did:key:z6MkujMqQsmtUpjtAAJQw6z8CDMh9GDdh6gmWogYwYqxAFV8#z6MkujMqQsmtUpjtAAJQw6z8CDMh9GDdh6gmWogYwYqxAFV8",
-    privateJwk: {
-      crv: "Ed25519",
-      d: "NKLetLnK0SqzMfy0m3EftV1H6SOgYdo2AJEnW170Hbk",
-      x: "4v8kxXJiFpCHpVxWxHRQLLq0bjIlUF-sE1UINoy50-8",
-      kty: "OKP",
-      alg: "EdDSA",
-      use: "sig",
-      kid: "did:key:z6MkujMqQsmtUpjtAAJQw6z8CDMh9GDdh6gmWogYwYqxAFV8#z6MkujMqQsmtUpjtAAJQw6z8CDMh9GDdh6gmWogYwYqxAFV8",
-    },
-    publicJwk: {
-      crv: "Ed25519",
-      x: "4v8kxXJiFpCHpVxWxHRQLLq0bjIlUF-sE1UINoy50-8",
-      kty: "OKP",
-      alg: "EdDSA",
-      use: "sig",
-      kid: "did:key:z6MkujMqQsmtUpjtAAJQw6z8CDMh9GDdh6gmWogYwYqxAFV8#z6MkujMqQsmtUpjtAAJQw6z8CDMh9GDdh6gmWogYwYqxAFV8",
-    },
+    d: "NKLetLnK0SqzMfy0m3EftV1H6SOgYdo2AJEnW170Hbk",
+    x: "4v8kxXJiFpCHpVxWxHRQLLq0bjIlUF-sE1UINoy50-8",
   },
   adapter: {
     label: "adapter",
-    did: "did:key:z6MkjNteHVrscbEvtZ11x56uSdCNjAGL1rWpTrcXAPRky6vm",
-    kid: "did:key:z6MkjNteHVrscbEvtZ11x56uSdCNjAGL1rWpTrcXAPRky6vm#z6MkjNteHVrscbEvtZ11x56uSdCNjAGL1rWpTrcXAPRky6vm",
-    privateJwk: {
-      crv: "Ed25519",
-      d: "_yARgWiyVyU1gZkULFUI9FZFhAqsyrsbr9dTbnhsG7o",
-      x: "SSvpiqWWoPEAtuMhB0GxgCm-N8AGHu-_x9qGbRh0t1I",
-      kty: "OKP",
-      alg: "EdDSA",
-      use: "sig",
-      kid: "did:key:z6MkjNteHVrscbEvtZ11x56uSdCNjAGL1rWpTrcXAPRky6vm#z6MkjNteHVrscbEvtZ11x56uSdCNjAGL1rWpTrcXAPRky6vm",
-    },
-    publicJwk: {
-      crv: "Ed25519",
-      x: "SSvpiqWWoPEAtuMhB0GxgCm-N8AGHu-_x9qGbRh0t1I",
-      kty: "OKP",
-      alg: "EdDSA",
-      use: "sig",
-      kid: "did:key:z6MkjNteHVrscbEvtZ11x56uSdCNjAGL1rWpTrcXAPRky6vm#z6MkjNteHVrscbEvtZ11x56uSdCNjAGL1rWpTrcXAPRky6vm",
-    },
+    d: "_yARgWiyVyU1gZkULFUI9FZFhAqsyrsbr9dTbnhsG7o",
+    x: "SSvpiqWWoPEAtuMhB0GxgCm-N8AGHu-_x9qGbRh0t1I",
   },
+};
+
+function makeKey({ label, d, x }: { label: string; d: string; x: string }) {
+  const basePublicJwk = { crv: "Ed25519", x, kty: "OKP", alg: "EdDSA", use: "sig" };
+  // The DID is minted from the key (JCS-canonical minimal public JWK) and is
+  // the identifier of record from then on; the kid fragment is always #0.
+  const did = deriveDidJwk(basePublicJwk);
+  const kid = didJwkToKid(did);
+  return {
+    label,
+    did,
+    kid,
+    privateJwk: { crv: "Ed25519", d, x, kty: "OKP", alg: "EdDSA", use: "sig", kid },
+    publicJwk: { ...basePublicJwk, kid },
+  };
+}
+
+const keys = {
+  proposer: makeKey(keyMaterial.proposer),
+  maintainerA: makeKey(keyMaterial.maintainerA),
+  maintainerB: makeKey(keyMaterial.maintainerB),
+  adapter: makeKey(keyMaterial.adapter),
 };
 
 function hashJson(value: unknown) {
@@ -600,6 +555,14 @@ const coordinationFixtures = {
 };
 
 await mkdir(join(fixtureRoot, "core"), { recursive: true });
+await mkdir(join(fixtureRoot, "test-keys"), { recursive: true });
+
+for (const key of Object.values(keys)) {
+  await writeFile(
+    join(fixtureRoot, "test-keys", `${key.label}.json`),
+    `${JSON.stringify({ label: key.label, did: key.did, kid: key.kid, privateJwk: key.privateJwk, publicJwk: key.publicJwk }, null, 2)}\n`,
+  );
+}
 await mkdir(join(fixtureRoot, "plugins"), { recursive: true });
 await mkdir(join(fixtureRoot, "configs"), { recursive: true });
 await mkdir(join(fixtureRoot, "coordination"), { recursive: true });

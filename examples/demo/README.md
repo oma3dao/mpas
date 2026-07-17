@@ -142,7 +142,7 @@ npx tsx src/signer-server/index.ts --config <path-to-config.json>
 ```json
 {
   "agent": {
-    "did": "did:key:z6Mk...",
+    "did": "did:jwk:eyJjcnYiOiJFZDI1NTE5...",
     "keyFile": "./keys/maintainer-a.json"
   },
   "coordination": {
@@ -262,7 +262,7 @@ Each participant has an Ed25519 signing key (`$MPAS_HOME/keys/*.json`):
 | Field        | Purpose                                                        |
 | ------------ | -------------------------------------------------------------- |
 | `label`      | Human-readable name (e.g., `proposer`, `maintainer-a`)         |
-| `did`        | The `did:key` derived from the public key                      |
+| `did`        | The `did:jwk` derived from the public key                      |
 | `kid`        | Key ID (DID + fragment)                                        |
 | `privateJwk` | Private key in JWK format — used to sign                       |
 | `publicJwk`  | Public key in JWK format — shared in `signerKeys`          |

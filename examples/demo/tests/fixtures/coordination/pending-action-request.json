@@ -7,11 +7,11 @@
     "type": "AuthorizationRequirements",
     "actionEnvelopeHash": {
       "alg": "sha-256",
-      "value": "dAqdEw0WPBMVWtIGL084GKz3GVJb25XHHtVNuTYyloQ"
+      "value": "FgVP3wp7mKLt0u05Dv_T3Ku94OT8qAFxqSI2LyvIRtg"
     },
     "result": "additionalApprovalsRequired",
     "verifier": {
-      "did": "did:key:z6MkjNteHVrscbEvtZ11x56uSdCNjAGL1rWpTrcXAPRky6vm"
+      "did": "did:jwk:eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6IlNTdnBpcVdXb1BFQXR1TWhCMEd4Z0NtLU44QUdIdS1feDlxR2JSaDB0MUkifQ"
     },
     "approvalRequirements": {
       "anyOf": [
@@ -19,8 +19,8 @@
           "type": "threshold",
           "threshold": 2,
           "eligibleSigners": [
-            "did:key:z6MkvnsFe1agZ33u5c9JuDkRxKRqupn3qbmPd2cjZ5rmerJi",
-            "did:key:z6MkujMqQsmtUpjtAAJQw6z8CDMh9GDdh6gmWogYwYqxAFV8"
+            "did:jwk:eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6IjhzRFY3NmI4aUY3NlBJbUF3NUk5V3ZlanNfOGJTOE4xMld2SHpQYTVWdzgifQ",
+            "did:jwk:eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6IjR2OGt4WEppRnBDSHBWeFd4SFJRTExxMGJqSWxVRi1zRTFVSU5veTUwLTgifQ"
           ],
           "decision": "approve",
           "description": "Merging into main requires two maintainer approvals."

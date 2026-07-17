@@ -285,7 +285,7 @@ cp tests/fixtures/configs/github-strict.json "$MPAS_HOME/config/github-strict.js
 
 ### Generate signing keys
 
-The test suite uses hardcoded private keys so that fixtures (signed action packages, JWS signatures) are reproducible across runs. Those keys are committed to the repository and are not secret. For the demo, you generate your own keys — each participant gets a fresh Ed25519 key pair that derives a unique `did:key` identity.
+The test suite uses hardcoded private keys so that fixtures (signed action packages, JWS signatures) are reproducible across runs. Those keys are committed to the repository and are not secret. For the demo, you generate your own keys — each participant gets a fresh Ed25519 key pair that derives a unique `did:jwk` identity.
 
 You need three keys:
 
@@ -310,11 +310,11 @@ Each command prints the `did` and `publicJwk` needed for the next step (register
 > **Expected output format:** Each `key generate` command prints something like:
 > ```
 > Generated key: adapter-key
->   did: did:key:z6MkhaXg...
+>   did: did:jwk:eyJjcnYiOiJFZDI1NTE5...
 >   publicJwk: {"kty":"OKP","crv":"Ed25519","x":"abc123..."}
 >   Saved to: /Users/you/.mpas/keys/adapter-key.json
 > ```
-> The `did` is the full `did:key:z6Mk...` string. The `publicJwk` is the JSON object on that line (including the braces). You can also extract both values from the saved key file itself if you missed the terminal output.
+> The `did` is the full `did:jwk:...` string. The `publicJwk` is the JSON object on that line (including the braces). You can also extract both values from the saved key file itself if you missed the terminal output.
 
 ### Register keys in the deployment config and bridge configs
 

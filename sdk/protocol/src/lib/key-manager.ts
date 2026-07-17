@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { CompactSign, compactVerify, importJWK, type JWK } from "jose";
 import type { Did } from "../types/mpas.js";
+import { deriveDidJwk, didJwkToKid } from "./did-jwk.js";
 
 interface KeyFixtureFile {
   did?: Did;
@@ -8,9 +9,6 @@ interface KeyFixtureFile {
   privateJwk?: JWK;
   publicJwk?: JWK;
 }
-
-const base58btcAlphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
-const ed25519MulticodecPrefix = Uint8Array.from([0xed, 0x01]);
 
 export class KeyManager {
   private constructor(private readonly jwk: JWK) {}
@@ -20,6 +18,10 @@ export class KeyManager {
     const jwk = selectJwk(parsed);
     const manager = KeyManager.fromJwk(jwk);
 
+    // Mint-once rule: the DID stored alongside the key is the identifier of
+    // record. Since MPAS fixes the did:jwk derivation (JCS-canonical minimal
+    // public JWK), re-derivation is deterministic and any mismatch means the
+    // file was corrupted or the key replaced.
     if ("did" in parsed && parsed.did && parsed.did !== manager.did) {
       throw new Error(`Configured DID ${parsed.did} does not match derived DID ${manager.did}.`);
     }
@@ -29,11 +31,11 @@ export class KeyManager {
 
   static fromJwk(jwk: JWK): KeyManager {
     validateEd25519Jwk(jwk);
-    return new KeyManager({ ...jwk, kid: jwk.kid ?? didKeyToKid(deriveDid(jwk)) });
+    return new KeyManager({ ...jwk, kid: jwk.kid ?? didJwkToKid(deriveDidJwk(jwk)) });
   }
 
   get did(): Did {
-    return deriveDid(this.jwk);
+    return deriveDidJwk(this.jwk);
   }
 
   get publicKey(): JWK {
@@ -82,58 +84,4 @@ function validateEd25519Jwk(jwk: JWK): void {
   if (typeof jwk.x !== "string" || jwk.x.length === 0) {
     throw new Error("Ed25519 JWK must include public key parameter x.");
   }
-}
-
-function deriveDid(jwk: JWK): Did {
-  const publicKeyBytes = Buffer.from(requiredPublicKey(jwk), "base64url");
-  const prefixed = new Uint8Array(ed25519MulticodecPrefix.length + publicKeyBytes.length);
-  prefixed.set(ed25519MulticodecPrefix, 0);
-  prefixed.set(publicKeyBytes, ed25519MulticodecPrefix.length);
-
-  return `did:key:z${base58Encode(prefixed)}`;
-}
-
-function requiredPublicKey(jwk: JWK): string {
-  if (typeof jwk.x !== "string") {
-    throw new Error("Ed25519 JWK must include public key parameter x.");
-  }
-
-  return jwk.x;
-}
-
-function didKeyToKid(did: Did): string {
-  return `${did}#${did.slice("did:key:".length)}`;
-}
-
-function base58Encode(bytes: Uint8Array): string {
-  if (bytes.length === 0) {
-    return "";
-  }
-
-  const digits = [0];
-  for (const byte of bytes) {
-    let carry = byte;
-    for (let index = 0; index < digits.length; index += 1) {
-      const value = digits[index] * 256 + carry;
-      digits[index] = value % 58;
-      carry = Math.floor(value / 58);
-    }
-    while (carry > 0) {
-      digits.push(carry % 58);
-      carry = Math.floor(carry / 58);
-    }
-  }
-
-  let encoded = "";
-  for (const byte of bytes) {
-    if (byte !== 0) {
-      break;
-    }
-    encoded += base58btcAlphabet[0];
-  }
-  for (let index = digits.length - 1; index >= 0; index -= 1) {
-    encoded += base58btcAlphabet[digits[index]];
-  }
-
-  return encoded;
 }

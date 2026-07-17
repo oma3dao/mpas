@@ -85,7 +85,7 @@ describe("CoordinationClient", () => {
       await expect(client.submitAction(actionPackage, authorizationRequirements)).resolves.toMatchObject({
         actionRef: pollResponse.approvalRequests[0].actionRef,
       });
-      await expect(client.poll("did:key:z6MkvnsFe1agZ33u5c9JuDkRxKRqupn3qbmPd2cjZ5rmerJi")).resolves.toEqual(
+      await expect(client.poll("did:jwk:eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6IjhzRFY3NmI4aUY3NlBJbUF3NUk5V3ZlanNfOGJTOE4xMld2SHpQYTVWdzgifQ")).resolves.toEqual(
         pollResponse,
       );
       await expect(client.submitApproval(actionPackage.approvalBundle.actionEnvelopeHash, approval)).resolves.toMatchObject({
@@ -94,7 +94,7 @@ describe("CoordinationClient", () => {
       await expect(
         client.cancelAction(
           actionPackage.actionEnvelope.actionId,
-          "did:key:z6MkpPanM5XyyGcp6HAwJSm7SmWmmb4MpfmBfgRSq4t7GokV",
+          "did:jwk:eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6Ims2TzdjaVFrbXBodUVFdDFpM3lBaW1KSldlR0ttT3EzdF9mc05renphNm8ifQ",
         ),
       ).resolves.toMatchObject({ state: "cancelled" });
 
@@ -117,7 +117,7 @@ describe("CoordinationClient", () => {
     await server.close();
 
     const client = new CoordinationClient({ url, timeoutMs: 100 });
-    await expect(client.poll("did:key:missing")).rejects.toBeInstanceOf(CoordinationUnavailableError);
+    await expect(client.poll("did:web:agents.example:missing")).rejects.toBeInstanceOf(CoordinationUnavailableError);
   });
 });
 

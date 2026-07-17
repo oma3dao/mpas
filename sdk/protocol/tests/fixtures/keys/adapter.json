@@ -1,7 +1,7 @@
 {
   "label": "adapter",
-  "did": "did:key:z6MkjNteHVrscbEvtZ11x56uSdCNjAGL1rWpTrcXAPRky6vm",
-  "kid": "did:key:z6MkjNteHVrscbEvtZ11x56uSdCNjAGL1rWpTrcXAPRky6vm#z6MkjNteHVrscbEvtZ11x56uSdCNjAGL1rWpTrcXAPRky6vm",
+  "did": "did:jwk:eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6IlNTdnBpcVdXb1BFQXR1TWhCMEd4Z0NtLU44QUdIdS1feDlxR2JSaDB0MUkifQ",
+  "kid": "did:jwk:eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6IlNTdnBpcVdXb1BFQXR1TWhCMEd4Z0NtLU44QUdIdS1feDlxR2JSaDB0MUkifQ#0",
   "privateJwk": {
     "crv": "Ed25519",
     "d": "_yARgWiyVyU1gZkULFUI9FZFhAqsyrsbr9dTbnhsG7o",
@@ -9,7 +9,7 @@
     "kty": "OKP",
     "alg": "EdDSA",
     "use": "sig",
-    "kid": "did:key:z6MkjNteHVrscbEvtZ11x56uSdCNjAGL1rWpTrcXAPRky6vm#z6MkjNteHVrscbEvtZ11x56uSdCNjAGL1rWpTrcXAPRky6vm"
+    "kid": "did:jwk:eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6IlNTdnBpcVdXb1BFQXR1TWhCMEd4Z0NtLU44QUdIdS1feDlxR2JSaDB0MUkifQ#0"
   },
   "publicJwk": {
     "crv": "Ed25519",
@@ -17,6 +17,6 @@
     "kty": "OKP",
     "alg": "EdDSA",
     "use": "sig",
-    "kid": "did:key:z6MkjNteHVrscbEvtZ11x56uSdCNjAGL1rWpTrcXAPRky6vm#z6MkjNteHVrscbEvtZ11x56uSdCNjAGL1rWpTrcXAPRky6vm"
+    "kid": "did:jwk:eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6IlNTdnBpcVdXb1BFQXR1TWhCMEd4Z0NtLU44QUdIdS1feDlxR2JSaDB0MUkifQ#0"
   }
 }

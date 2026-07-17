@@ -4,5 +4,5 @@
   "actionId": {
     "value": "urn:uuid:44444444-4444-4444-8444-444444444444"
   },
-  "proposerDid": "did:key:z6MkpPanM5XyyGcp6HAwJSm7SmWmmb4MpfmBfgRSq4t7GokV"
+  "proposerDid": "did:jwk:eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6Ims2TzdjaVFrbXBodUVFdDFpM3lBaW1KSldlR0ttT3EzdF9mc05renphNm8ifQ"
 }

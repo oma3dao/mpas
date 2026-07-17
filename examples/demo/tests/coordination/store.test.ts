@@ -23,7 +23,7 @@ describe("CoordinationStore", () => {
 
     const result = store.submitAction(request);
     const maintainerPoll = store.poll((await fixtureKey("maintainer-a")).did);
-    const outsiderPoll = store.poll("did:key:outsider" as Did);
+    const outsiderPoll = store.poll("did:web:agents.example:outsider" as Did);
 
     expect(result.created).toBe(true);
     expect(result.response.state).toBe("awaitingApprovals");

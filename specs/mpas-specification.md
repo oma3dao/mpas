@@ -246,11 +246,34 @@ The `alg` field identifies the hash algorithm. The `value` field contains the ba
 
 #### 5.1.5 DID Method Requirements
 
-MPAS does not require a specific DID method. Participants MAY use `did:web`, `did:key`, `did:pkh`, `did:ethr`, or any other DID method appropriate to their deployment.
+MPAS does not require a specific DID method. Participants MAY use `did:web`, `did:jwk`, `did:pkh`, `did:ethr`, or any other DID method appropriate to their deployment.
 
-Baseline implementations SHOULD support `did:web` and `did:key`. Future conformance classes may require specific DID method support.
+This specification RECOMMENDS `did:jwk` for signing-key identities (Proposer agents, Signers, Verifiers) and `did:pkh` for wallet-backed identities. Baseline implementations SHOULD support `did:jwk` and `did:web`. Future conformance classes may require specific DID method support.
 
 Implementations MUST reject DID methods they do not support rather than silently treating them as valid or ignoring identity verification for unsupported methods.
+
+##### 5.1.5.1 DID Comparison
+
+DIDs are compared as exact strings on their canonical form (per DID Core, the method-specific identifier is case-sensitive). Implementations MUST NOT case-fold or otherwise normalize DIDs at comparison time. Method-specific normalization (e.g., lowercasing a `did:web` host, checksumming a `did:pkh` account address) is an ingest concern: it happens once, when an identifier enters configuration or is minted, never during verification or policy evaluation.
+
+##### 5.1.5.2 did:jwk Derivation (Normative)
+
+The `did:jwk` method does not mandate a canonical JWK serialization: the same public key can yield different identifiers depending on member order and optional members. The method's contract is that the minted DID string is the identifier of record ("store the fully serialized URI"). To make independent MPAS implementations mint identical DIDs for identical keys, MPAS fixes the derivation:
+
+1. Construct the minimal public JWK containing exactly the members required by RFC 7638 for the key type. For Ed25519 (OKP): `crv`, `kty`, `x`. Private members (`d`) MUST NOT be present.
+2. Canonicalize with JCS (RFC 8785). For the minimal member set this equals the RFC 7638 thumbprint input: members in lexicographic order, no whitespace, UTF-8.
+3. Encode the canonical bytes as base64url without padding and prefix with `did:jwk:`.
+
+This rule governs minting only. At verification time the DID string is compared exactly (5.1.5.1) and, for `did:jwk`, is the source of truth for the key: implementations resolve the verification key by base64url-decoding the method-specific identifier. A decoded JWK containing private key material MUST be rejected. Where a deployment also configures a `publicJwk` alongside a `did:jwk` identity, the key embedded in the DID is authoritative; implementations SHOULD reject configurations where the two disagree.
+
+Test vector (Ed25519):
+
+```
+publicJwk (minimal): {"crv":"Ed25519","kty":"OKP","x":"k6O7ciQkmphuEEt1i3yAimJJWeGKmOq3t_fsNkzza6o"}
+did:jwk:eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6Ims2TzdjaVFrbXBodUVFdDFpM3lBaW1KSldlR0ttT3EzdF9mc05renphNm8ifQ
+```
+
+The DID URL fragment for the single verification method of a `did:jwk` document is always `#0`.
 
 ### 5.2 Execution Payload
 
@@ -2624,7 +2647,7 @@ All standalone schemas use `$ref` to definitions. The combined `mpas-base-0.2.sc
   "version": "1",
   "type": "ActionEnvelope",
   "proposer": {
-    "did": "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK"
+    "did": "did:jwk:eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6Ims2TzdjaVFrbXBodUVFdDFpM3lBaW1KSldlR0ttT3EzdF9mc05renphNm8ifQ"
   },
   "target": {
     "applicationDid": "did:web:vault.acme.corp",
@@ -2648,7 +2671,7 @@ All standalone schemas use `$ref` to definitions. The combined `mpas-base-0.2.sc
 }
 ```
 
-**Why it passes:** All required fields present. `target` includes profile-specific `chainId` — allowed because `target` does not have `additionalProperties: false`. Uses `did:key` (matches DID pattern). Includes optional `format` and scoped `actionId`.
+**Why it passes:** All required fields present. `target` includes profile-specific `chainId` — allowed because `target` does not have `additionalProperties: false`. Uses `did:jwk` (matches DID pattern). Includes optional `format` and scoped `actionId`.
 
 ---
 

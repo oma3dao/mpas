@@ -2,11 +2,11 @@
   "version": "1",
   "type": "ActionResponse",
   "verifier": {
-    "did": "did:key:z6MkjNteHVrscbEvtZ11x56uSdCNjAGL1rWpTrcXAPRky6vm"
+    "did": "did:jwk:eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6IlNTdnBpcVdXb1BFQXR1TWhCMEd4Z0NtLU44QUdIdS1feDlxR2JSaDB0MUkifQ"
   },
   "actionEnvelopeHash": {
     "alg": "sha-256",
-    "value": "S-jITTJ-H0Kb8JOOctloSCCuOWVXXAuZimnDrmBKfm0"
+    "value": "a5V5N37fJgtrwdXsPrO6XryizbmQaP-HGdrRe9_ZCP4"
   },
   "result": "additionalApprovalsRequired",
   "authorizationRequirements": {
@@ -14,11 +14,11 @@
     "type": "AuthorizationRequirements",
     "actionEnvelopeHash": {
       "alg": "sha-256",
-      "value": "S-jITTJ-H0Kb8JOOctloSCCuOWVXXAuZimnDrmBKfm0"
+      "value": "a5V5N37fJgtrwdXsPrO6XryizbmQaP-HGdrRe9_ZCP4"
     },
     "result": "additionalApprovalsRequired",
     "verifier": {
-      "did": "did:key:z6MkjNteHVrscbEvtZ11x56uSdCNjAGL1rWpTrcXAPRky6vm"
+      "did": "did:jwk:eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6IlNTdnBpcVdXb1BFQXR1TWhCMEd4Z0NtLU44QUdIdS1feDlxR2JSaDB0MUkifQ"
     },
     "approvalRequirements": {
       "anyOf": [
@@ -26,7 +26,7 @@
           "type": "threshold",
           "threshold": 1,
           "eligibleSigners": [
-            "did:key:z6MkvnsFe1agZ33u5c9JuDkRxKRqupn3qbmPd2cjZ5rmerJi"
+            "did:jwk:eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6IjhzRFY3NmI4aUY3NlBJbUF3NUk5V3ZlanNfOGJTOE4xMld2SHpQYTVWdzgifQ"
           ],
           "decision": "approve",
           "description": "Maintainer approval required."

@@ -16,7 +16,7 @@
     "version": "1",
     "type": "ActionEnvelope",
     "proposer": {
-      "did": "did:key:z6MkpPanM5XyyGcp6HAwJSm7SmWmmb4MpfmBfgRSq4t7GokV"
+      "did": "did:jwk:eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6Ims2TzdjaVFrbXBodUVFdDFpM3lBaW1KSldlR0ttT3EzdF9mc05renphNm8ifQ"
     },
     "target": {
       "applicationDid": "did:web:github.example",
@@ -41,7 +41,7 @@
     "type": "ApprovalBundle",
     "actionEnvelopeHash": {
       "alg": "sha-256",
-      "value": "hE69UzxNH6mceh1DtmIE9G59jikRRW4Rg4n9LilU_lc"
+      "value": "6-Jwy5QJ5YRcskjUMZy_P8eXXP_ZMf2AlqP8QmJIt88"
     },
     "approvals": [
       {
@@ -49,12 +49,12 @@
         "type": "Approval",
         "actionEnvelopeHash": {
           "alg": "sha-256",
-          "value": "hE69UzxNH6mceh1DtmIE9G59jikRRW4Rg4n9LilU_lc"
+          "value": "6-Jwy5QJ5YRcskjUMZy_P8eXXP_ZMf2AlqP8QmJIt88"
         },
         "decision": "propose",
         "signature": {
           "format": "jws",
-          "value": "eyJhbGciOiJFZERTQSIsImtpZCI6ImRpZDprZXk6ejZNa3BQYW5NNVh5eUdjcDZIQXdKU203U21XbW1iNE1wZm1CZmdSU3E0dDdHb2tWI3o2TWtwUGFuTTVYeXlHY3A2SEF3SlNtN1NtV21tYjRNcGZtQmZnUlNxNHQ3R29rViJ9.eyJhY3Rpb25FbnZlbG9wZUhhc2giOnsiYWxnIjoic2hhLTI1NiIsInZhbHVlIjoiaEU2OVV6eE5INm1jZWgxRHRtSUU5RzU5amlrUlJXNFJnNG45TGlsVV9sYyJ9LCJjcmVhdGVkQXQiOiIyMDI2LTA2LTA1VDE4OjAxOjAwLjAwMFoiLCJkZWNpc2lvbiI6InByb3Bvc2UiLCJzaWduZXJEaWQiOiJkaWQ6a2V5Ono2TWtwUGFuTTVYeXlHY3A2SEF3SlNtN1NtV21tYjRNcGZtQmZnUlNxNHQ3R29rViIsInR5cGUiOiJBcHByb3ZhbFBheWxvYWQifQ.yiRTsXXjyNjX6fDuRG-aox9U2N4UjWf9Nx2Tg6n1zPdd54_9_8v954G_spA-A-qiWW1JzbDhI1TXQ0mf3-1CBQ"
+          "value": "eyJhbGciOiJFZERTQSIsImtpZCI6ImRpZDpqd2s6ZXlKamNuWWlPaUpGWkRJMU5URTVJaXdpYTNSNUlqb2lUMHRRSWl3aWVDSTZJbXMyVHpkamFWRnJiWEJvZFVWRmRERnBNM2xCYVcxS1NsZGxSMHR0VDNFemRGOW1jMDVyZW5waE5tOGlmUSMwIn0.eyJhY3Rpb25FbnZlbG9wZUhhc2giOnsiYWxnIjoic2hhLTI1NiIsInZhbHVlIjoiNi1Kd3k1UUo1WVJjc2tqVU1aeV9QOGVYWFBfWk1mMkFscVA4UW1KSXQ4OCJ9LCJjcmVhdGVkQXQiOiIyMDI2LTA2LTA1VDE4OjAxOjAwLjAwMFoiLCJkZWNpc2lvbiI6InByb3Bvc2UiLCJzaWduZXJEaWQiOiJkaWQ6andrOmV5SmpjbllpT2lKRlpESTFOVEU1SWl3aWEzUjVJam9pVDB0UUlpd2llQ0k2SW1zMlR6ZGphVkZyYlhCb2RVVkZkREZwTTNsQmFXMUtTbGRsUjB0dFQzRXpkRjltYzA1cmVucGhObThpZlEiLCJ0eXBlIjoiQXBwcm92YWxQYXlsb2FkIn0.XikXQ5LoCh6TJ_l9ryYxDCK9GQ8RWbsLBabR0calHZK6-95bcV7nNDTGdyYBcrDB-HGi1uoY4vbXbKlqc0XiDw"
         },
         "createdAt": "2026-06-05T18:01:00.000Z"
       },
@@ -63,12 +63,12 @@
         "type": "Approval",
         "actionEnvelopeHash": {
           "alg": "sha-256",
-          "value": "hE69UzxNH6mceh1DtmIE9G59jikRRW4Rg4n9LilU_lc"
+          "value": "6-Jwy5QJ5YRcskjUMZy_P8eXXP_ZMf2AlqP8QmJIt88"
         },
         "decision": "approve",
         "signature": {
           "format": "jws",
-          "value": "eyJhbGciOiJFZERTQSIsImtpZCI6ImRpZDprZXk6ejZNa3Zuc0ZlMWFnWjMzdTVjOUp1RGtSeEtScXVwbjNxYm1QZDJjalo1cm1lckppI3o2TWt2bnNGZTFhZ1ozM3U1YzlKdURrUnhLUnF1cG4zcWJtUGQyY2paNXJtZXJKaSJ9.eyJhY3Rpb25FbnZlbG9wZUhhc2giOnsiYWxnIjoic2hhLTI1NiIsInZhbHVlIjoiaEU2OVV6eE5INm1jZWgxRHRtSUU5RzU5amlrUlJXNFJnNG45TGlsVV9sYyJ9LCJjcmVhdGVkQXQiOiIyMDI2LTA2LTA1VDE4OjAyOjAwLjAwMFoiLCJkZWNpc2lvbiI6ImFwcHJvdmUiLCJzaWduZXJEaWQiOiJkaWQ6a2V5Ono2TWt2bnNGZTFhZ1ozM3U1YzlKdURrUnhLUnF1cG4zcWJtUGQyY2paNXJtZXJKaSIsInR5cGUiOiJBcHByb3ZhbFBheWxvYWQifQ.KhFPhW_WC54OMbm6ivXB4T5HDn2Avmw0Tp8Cg_QLwGy5wVyvVwT0iz5HB4u7qPXbHf5TvVkbrnG5A52IWD8_Bw"
+          "value": "eyJhbGciOiJFZERTQSIsImtpZCI6ImRpZDpqd2s6ZXlKamNuWWlPaUpGWkRJMU5URTVJaXdpYTNSNUlqb2lUMHRRSWl3aWVDSTZJamh6UkZZM05tSTRhVVkzTmxCSmJVRjNOVWs1VjNabGFuTmZPR0pUT0U0eE1sZDJTSHBRWVRWV2R6Z2lmUSMwIn0.eyJhY3Rpb25FbnZlbG9wZUhhc2giOnsiYWxnIjoic2hhLTI1NiIsInZhbHVlIjoiNi1Kd3k1UUo1WVJjc2tqVU1aeV9QOGVYWFBfWk1mMkFscVA4UW1KSXQ4OCJ9LCJjcmVhdGVkQXQiOiIyMDI2LTA2LTA1VDE4OjAyOjAwLjAwMFoiLCJkZWNpc2lvbiI6ImFwcHJvdmUiLCJzaWduZXJEaWQiOiJkaWQ6andrOmV5SmpjbllpT2lKRlpESTFOVEU1SWl3aWEzUjVJam9pVDB0UUlpd2llQ0k2SWpoelJGWTNObUk0YVVZM05sQkpiVUYzTlVrNVYzWmxhbk5mT0dKVE9FNHhNbGQyU0hwUVlUVldkemdpZlEiLCJ0eXBlIjoiQXBwcm92YWxQYXlsb2FkIn0.z70ubVB2tpz_yWjFJ_7mFRSt_0pp7WjJs5OghMThDnIzIkLTqlMdkDaODHD52FU_l4SUR3u3SWEI8g7INtOXCA"
         },
         "createdAt": "2026-06-05T18:02:00.000Z"
       },
@@ -77,17 +77,17 @@
         "type": "Approval",
         "actionEnvelopeHash": {
           "alg": "sha-256",
-          "value": "hE69UzxNH6mceh1DtmIE9G59jikRRW4Rg4n9LilU_lc"
+          "value": "6-Jwy5QJ5YRcskjUMZy_P8eXXP_ZMf2AlqP8QmJIt88"
         },
         "decision": "approve",
         "signature": {
           "format": "jws",
-          "value": "eyJhbGciOiJFZERTQSIsImtpZCI6ImRpZDprZXk6ejZNa3VqTXFRc210VXBqdEFBSlF3Nno4Q0RNaDlHRGRoNmdtV29nWXdZcXhBRlY4I3o2TWt1ak1xUXNtdFVwanRBQUpRdzZ6OENETWg5R0RkaDZnbVdvZ1l3WXF4QUZWOCJ9.eyJhY3Rpb25FbnZlbG9wZUhhc2giOnsiYWxnIjoic2hhLTI1NiIsInZhbHVlIjoiaEU2OVV6eE5INm1jZWgxRHRtSUU5RzU5amlrUlJXNFJnNG45TGlsVV9sYyJ9LCJjcmVhdGVkQXQiOiIyMDI2LTA2LTA1VDE4OjAzOjAwLjAwMFoiLCJkZWNpc2lvbiI6ImFwcHJvdmUiLCJzaWduZXJEaWQiOiJkaWQ6a2V5Ono2TWt1ak1xUXNtdFVwanRBQUpRdzZ6OENETWg5R0RkaDZnbVdvZ1l3WXF4QUZWOCIsInR5cGUiOiJBcHByb3ZhbFBheWxvYWQifQ.-xqF-yXVCivCugKL2LrIaWTHXnRTjuAM403J-VHx0-anmZnbEOki0PCfpKV_Mk4szeIeUiZyrLFYvbdYsDR5DA"
+          "value": "eyJhbGciOiJFZERTQSIsImtpZCI6ImRpZDpqd2s6ZXlKamNuWWlPaUpGWkRJMU5URTVJaXdpYTNSNUlqb2lUMHRRSWl3aWVDSTZJalIyT0d0NFdFcHBSbkJEU0hCV2VGZDRTRkpSVEV4eE1HSnFTV3hWUmkxelJURlZTVTV2ZVRVd0xUZ2lmUSMwIn0.eyJhY3Rpb25FbnZlbG9wZUhhc2giOnsiYWxnIjoic2hhLTI1NiIsInZhbHVlIjoiNi1Kd3k1UUo1WVJjc2tqVU1aeV9QOGVYWFBfWk1mMkFscVA4UW1KSXQ4OCJ9LCJjcmVhdGVkQXQiOiIyMDI2LTA2LTA1VDE4OjAzOjAwLjAwMFoiLCJkZWNpc2lvbiI6ImFwcHJvdmUiLCJzaWduZXJEaWQiOiJkaWQ6andrOmV5SmpjbllpT2lKRlpESTFOVEU1SWl3aWEzUjVJam9pVDB0UUlpd2llQ0k2SWpSMk9HdDRXRXBwUm5CRFNIQldlRmQ0U0ZKUlRFeHhNR0pxU1d4VlJpMXpSVEZWU1U1dmVUVXdMVGdpZlEiLCJ0eXBlIjoiQXBwcm92YWxQYXlsb2FkIn0.EvyMMmHIrpFatpFSewtwvV2bDeYa_0-z9A5-wDoDICmAHxIB0K2KnlSAMDAdjXQHITFxzgsubV090KKmdpnqBw"
         },
         "createdAt": "2026-06-05T18:03:00.000Z"
       }
     ],
-    "assembledBy": "did:key:z6MkpPanM5XyyGcp6HAwJSm7SmWmmb4MpfmBfgRSq4t7GokV",
+    "assembledBy": "did:jwk:eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6Ims2TzdjaVFrbXBodUVFdDFpM3lBaW1KSldlR0ttT3EzdF9mc05renphNm8ifQ",
     "createdAt": "2026-06-05T18:10:00.000Z"
   },
   "createdAt": "2026-06-05T18:10:00.000Z"

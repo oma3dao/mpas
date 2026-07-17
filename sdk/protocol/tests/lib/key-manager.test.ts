@@ -19,7 +19,7 @@ async function readJson<T>(path: string): Promise<T> {
 }
 
 describe("KeyManager", () => {
-  it("loads fixture keys and derives their did:key identifiers", async () => {
+  it("loads fixture keys and derives their did:jwk identifiers", async () => {
     for (const file of ["proposer.json", "maintainer-a.json", "maintainer-b.json", "adapter.json"]) {
       const fixture = await readJson<KeyFixture>(join(fixturesDir, "keys", file));
       const keyManager = await KeyManager.fromFile(join(fixturesDir, "keys", file));
@@ -50,7 +50,7 @@ describe("KeyManager", () => {
     expect(() => KeyManager.fromJwk({ kty: "EC", crv: "P-256", x: "x", y: "y" })).toThrow('kty "OKP"');
 
     const fixture = await readJson<KeyFixture>(join(fixturesDir, "keys", "proposer.json"));
-    const mismatched = { did: "did:key:z6Mkmismatch", privateJwk: fixture.privateJwk };
+    const mismatched = { did: "did:jwk:bWlzbWF0Y2g", privateJwk: fixture.privateJwk };
     const path = join(fixturesDir, "keys", "mismatched.tmp.json");
     await import("node:fs/promises").then(({ writeFile, rm }) =>
       writeFile(path, JSON.stringify(mismatched)).then(async () => {

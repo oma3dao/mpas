@@ -2,7 +2,7 @@
   "version": "1",
   "type": "ActionResponse",
   "verifier": {
-    "did": "did:key:z6MkjNteHVrscbEvtZ11x56uSdCNjAGL1rWpTrcXAPRky6vm"
+    "did": "did:jwk:eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6IlNTdnBpcVdXb1BFQXR1TWhCMEd4Z0NtLU44QUdIdS1feDlxR2JSaDB0MUkifQ"
   },
   "result": "malformed",
   "error": {

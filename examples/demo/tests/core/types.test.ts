@@ -19,7 +19,7 @@ describe("MPAS Core types", () => {
         version: "1",
         type: "ActionEnvelope",
         proposer: {
-          did: "did:key:z6Mkproposer",
+          did: "did:web:agents.example:proposer",
         },
         target: {
           applicationDid: "did:web:github.example",

@@ -254,9 +254,10 @@ function evaluateThreshold(
 
   const decision = requirement.decision ?? "approve";
   const eligibleSigners = resolveEligibleSigners(requirement, policy);
-  const eligibleSet = eligibleSigners.length > 0
-    ? new Set(eligibleSigners.map((d) => d.toLowerCase()))
-    : null;
+  // DID comparison is exact string match on canonical form (DID Core: the
+  // method-specific identifier is case-sensitive). Normalization, if any, is
+  // an ingest concern — never a comparison-time concern.
+  const eligibleSet = eligibleSigners.length > 0 ? new Set<string>(eligibleSigners) : null;
 
   const found = verifiedApprovals.approvals.filter((approval) => {
     // Never count the proposer's own approval.
@@ -265,11 +266,7 @@ function evaluateThreshold(
     if (approval.decision !== decision) return false;
 
     // Check DID membership in eligible set.
-    if (eligibleSet && eligibleSet.has(approval.signerDid.toLowerCase())) {
-      return true;
-    }
-
-    return false;
+    return eligibleSet !== null && eligibleSet.has(approval.signerDid);
   }).length;
 
   if (found >= requirement.threshold) {

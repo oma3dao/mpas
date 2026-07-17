@@ -13,7 +13,7 @@
     "version": "1",
     "type": "ActionEnvelope",
     "proposer": {
-      "did": "did:key:z6MkpPanM5XyyGcp6HAwJSm7SmWmmb4MpfmBfgRSq4t7GokV"
+      "did": "did:jwk:eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6Ims2TzdjaVFrbXBodUVFdDFpM3lBaW1KSldlR0ttT3EzdF9mc05renphNm8ifQ"
     },
     "target": {
       "applicationDid": "did:web:github.example",
@@ -38,7 +38,7 @@
     "type": "ApprovalBundle",
     "actionEnvelopeHash": {
       "alg": "sha-256",
-      "value": "drtlHVXcJi2vWDgv5yzcYVQnMhJvHyFtY7vQTpnz1XY"
+      "value": "K60xYh-SOsA_1Ay89FW5qRLSdWe_McRk7z14VvQyAHw"
     },
     "approvals": [
       {
@@ -46,12 +46,12 @@
         "type": "Approval",
         "actionEnvelopeHash": {
           "alg": "sha-256",
-          "value": "drtlHVXcJi2vWDgv5yzcYVQnMhJvHyFtY7vQTpnz1XY"
+          "value": "K60xYh-SOsA_1Ay89FW5qRLSdWe_McRk7z14VvQyAHw"
         },
         "decision": "propose",
         "signature": {
           "format": "jws",
-          "value": "eyJhbGciOiJFZERTQSIsImtpZCI6ImRpZDprZXk6ejZNa3BQYW5NNVh5eUdjcDZIQXdKU203U21XbW1iNE1wZm1CZmdSU3E0dDdHb2tWI3o2TWtwUGFuTTVYeXlHY3A2SEF3SlNtN1NtV21tYjRNcGZtQmZnUlNxNHQ3R29rViJ9.eyJhY3Rpb25FbnZlbG9wZUhhc2giOnsiYWxnIjoic2hhLTI1NiIsInZhbHVlIjoiZHJ0bEhWWGNKaTJ2V0RndjV5emNZVlFuTWhKdkh5RnRZN3ZRVHBuejFYWSJ9LCJjcmVhdGVkQXQiOiIyMDI2LTA2LTA1VDE4OjAxOjAwWiIsImRlY2lzaW9uIjoicHJvcG9zZSIsInNpZ25lckRpZCI6ImRpZDprZXk6ejZNa3BQYW5NNVh5eUdjcDZIQXdKU203U21XbW1iNE1wZm1CZmdSU3E0dDdHb2tWIiwidHlwZSI6IkFwcHJvdmFsUGF5bG9hZCJ9.XgEX_bf5O4g751N3I9bf1lvxejun1Ft2WzhKf-in7Bg5IURpL83bzvDjLqOfrI5oEqQP3Zi2BhAZYkOer-14Dw"
+          "value": "eyJhbGciOiJFZERTQSIsImtpZCI6ImRpZDpqd2s6ZXlKamNuWWlPaUpGWkRJMU5URTVJaXdpYTNSNUlqb2lUMHRRSWl3aWVDSTZJbXMyVHpkamFWRnJiWEJvZFVWRmRERnBNM2xCYVcxS1NsZGxSMHR0VDNFemRGOW1jMDVyZW5waE5tOGlmUSMwIn0.eyJhY3Rpb25FbnZlbG9wZUhhc2giOnsiYWxnIjoic2hhLTI1NiIsInZhbHVlIjoiSzYweFloLVNPc0FfMUF5ODlGVzVxUkxTZFdlX01jUms3ejE0VnZReUFIdyJ9LCJjcmVhdGVkQXQiOiIyMDI2LTA2LTA1VDE4OjAxOjAwWiIsImRlY2lzaW9uIjoicHJvcG9zZSIsInNpZ25lckRpZCI6ImRpZDpqd2s6ZXlKamNuWWlPaUpGWkRJMU5URTVJaXdpYTNSNUlqb2lUMHRRSWl3aWVDSTZJbXMyVHpkamFWRnJiWEJvZFVWRmRERnBNM2xCYVcxS1NsZGxSMHR0VDNFemRGOW1jMDVyZW5waE5tOGlmUSIsInR5cGUiOiJBcHByb3ZhbFBheWxvYWQifQ._m_ITgBvRjSIpKxdsoShgPgizU9P4ig5ge-XKv8_Z-tGA5EVOZ_YWZe1XgnsTA7P0ALMGaBC28xbGIEqO7LuCg"
         },
         "createdAt": "2026-06-05T18:01:00Z"
       },
@@ -60,17 +60,17 @@
         "type": "Approval",
         "actionEnvelopeHash": {
           "alg": "sha-256",
-          "value": "drtlHVXcJi2vWDgv5yzcYVQnMhJvHyFtY7vQTpnz1XY"
+          "value": "K60xYh-SOsA_1Ay89FW5qRLSdWe_McRk7z14VvQyAHw"
         },
         "decision": "approve",
         "signature": {
           "format": "jws",
-          "value": "eyJhbGciOiJFZERTQSIsImtpZCI6ImRpZDprZXk6ejZNa3Zuc0ZlMWFnWjMzdTVjOUp1RGtSeEtScXVwbjNxYm1QZDJjalo1cm1lckppI3o2TWt2bnNGZTFhZ1ozM3U1YzlKdURrUnhLUnF1cG4zcWJtUGQyY2paNXJtZXJKaSJ9.eyJhY3Rpb25FbnZlbG9wZUhhc2giOnsiYWxnIjoic2hhLTI1NiIsInZhbHVlIjoiZHJ0bEhWWGNKaTJ2V0RndjV5emNZVlFuTWhKdkh5RnRZN3ZRVHBuejFYWSJ9LCJjcmVhdGVkQXQiOiIyMDI2LTA2LTA1VDE4OjAyOjAwWiIsImRlY2lzaW9uIjoiYXBwcm92ZSIsInNpZ25lckRpZCI6ImRpZDprZXk6ejZNa3Zuc0ZlMWFnWjMzdTVjOUp1RGtSeEtScXVwbjNxYm1QZDJjalo1cm1lckppIiwidHlwZSI6IkFwcHJvdmFsUGF5bG9hZCJ9.C34Tq0Kg6RcX3RzMJreOqB4NEcu4q3rLR2oHsuGrpl2fFNfvsQIJ4Wvbe6KeFkP_kkkLwSEI04XnZOGNsR6OAg"
+          "value": "eyJhbGciOiJFZERTQSIsImtpZCI6ImRpZDpqd2s6ZXlKamNuWWlPaUpGWkRJMU5URTVJaXdpYTNSNUlqb2lUMHRRSWl3aWVDSTZJamh6UkZZM05tSTRhVVkzTmxCSmJVRjNOVWs1VjNabGFuTmZPR0pUT0U0eE1sZDJTSHBRWVRWV2R6Z2lmUSMwIn0.eyJhY3Rpb25FbnZlbG9wZUhhc2giOnsiYWxnIjoic2hhLTI1NiIsInZhbHVlIjoiSzYweFloLVNPc0FfMUF5ODlGVzVxUkxTZFdlX01jUms3ejE0VnZReUFIdyJ9LCJjcmVhdGVkQXQiOiIyMDI2LTA2LTA1VDE4OjAyOjAwWiIsImRlY2lzaW9uIjoiYXBwcm92ZSIsInNpZ25lckRpZCI6ImRpZDpqd2s6ZXlKamNuWWlPaUpGWkRJMU5URTVJaXdpYTNSNUlqb2lUMHRRSWl3aWVDSTZJamh6UkZZM05tSTRhVVkzTmxCSmJVRjNOVWs1VjNabGFuTmZPR0pUT0U0eE1sZDJTSHBRWVRWV2R6Z2lmUSIsInR5cGUiOiJBcHByb3ZhbFBheWxvYWQifQ.HGJ1egkSfWPHtETiaDDxSycOAwqF1jDC3I-zyIFDQEED3wwV4n2E6WQN4XrvtZzMm_oGL270gXoE7yGCWLHaBg"
         },
         "createdAt": "2026-06-05T18:02:00Z"
       }
     ],
-    "assembledBy": "did:key:z6MkpPanM5XyyGcp6HAwJSm7SmWmmb4MpfmBfgRSq4t7GokV",
+    "assembledBy": "did:jwk:eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6Ims2TzdjaVFrbXBodUVFdDFpM3lBaW1KSldlR0ttT3EzdF9mc05renphNm8ifQ",
     "createdAt": "2026-06-05T18:10:00Z"
   },
   "createdAt": "2026-06-05T18:10:00Z"

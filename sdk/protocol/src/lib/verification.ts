@@ -1,4 +1,5 @@
 import { compactVerify, decodeProtectedHeader, importJWK, type JWK } from "jose";
+import { didJwkToJwk, isDidJwk } from "./did-jwk.js";
 import type { ActionEnvelope, ActionPackage, Approval, CanonicalApprovalPayload, Did } from "../types/mpas.js";
 import type { ExecutionPayload, Hash } from "../types/mpas.js";
 import type { VerificationTraceCallback } from "./trace.js";
@@ -33,7 +34,30 @@ export interface ValidationError {
 export interface TrustedSigner {
   did: Did;
   label?: string;
-  publicJwk: JWK;
+  /**
+   * Verification key for the signer. Optional when `did` is a did:jwk — the
+   * DID itself embeds the key and is the source of truth; a configured
+   * publicJwk is then ignored in favor of the key decoded from the DID.
+   * Required for all other DID methods.
+   */
+  publicJwk?: JWK;
+}
+
+/**
+ * Resolves the effective verification JWK for a trusted signer. For did:jwk
+ * identities the key embedded in the DID is authoritative; otherwise the
+ * configured publicJwk is used. Returns undefined when no key can be resolved.
+ */
+export function resolveTrustedSignerJwk(signer: TrustedSigner): JWK | undefined {
+  if (isDidJwk(signer.did)) {
+    try {
+      return didJwkToJwk(signer.did);
+    } catch {
+      return undefined;
+    }
+  }
+
+  return signer.publicJwk;
 }
 
 export interface VerifiedApproval {
@@ -309,11 +333,20 @@ export async function verifyApprovalBundle(
       return approvalBundleError("UNTRUSTED_SIGNER", "Approval signer is not trusted.", `${path}.signature`);
     }
 
-    if (!(await verifyApprovalSignature(approval, trustedSigner.publicJwk))) {
+    const signerJwk = resolveTrustedSignerJwk(trustedSigner);
+    if (!signerJwk) {
+      return approvalBundleError(
+        "UNTRUSTED_SIGNER",
+        "No verification key could be resolved for the trusted signer.",
+        `${path}.signature`,
+      );
+    }
+
+    if (!(await verifyApprovalSignature(approval, signerJwk))) {
       return approvalBundleError("INVALID_SIGNATURE", "Approval signature could not be verified.", `${path}.signature`);
     }
 
-    const verifiedPayload = await verifiedApprovalPayload(approval, trustedSigner.publicJwk);
+    const verifiedPayload = await verifiedApprovalPayload(approval, signerJwk);
     if (
       !hashesEqual(verifiedPayload.actionEnvelopeHash, approval.actionEnvelopeHash) ||
       verifiedPayload.decision !== approval.decision ||

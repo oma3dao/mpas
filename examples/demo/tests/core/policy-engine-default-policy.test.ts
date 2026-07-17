@@ -16,7 +16,7 @@ function makeActionPackage(operationName: string, extraArgs: Record<string, unkn
     actionEnvelope: {
       version: "1",
       type: "ActionEnvelope",
-      proposer: { did: "did:key:z6MkProposer" as Did },
+      proposer: { did: "did:web:agents.example:proposer" as Did },
       target: { applicationDid: "did:web:github.example" as Did },
       executionProfile: { id: "did:web:profiles.oma3.org:mcp" as Did, format: "mcp.toolsCall" },
       executionPayloadHash: { alg: "sha-256", value: "fake-hash" },
@@ -38,9 +38,9 @@ function makeApprovals(count: number, signerGroupDids: Did[], decision: Decision
   return { actionEnvelopeHash: { alg: "sha-256" as const, value: "fake-hash" }, approvals };
 }
 
-const MAINTAINER_A: Did = "did:key:z6MkMaintainerA";
-const MAINTAINER_B: Did = "did:key:z6MkMaintainerB";
-const SEC_REVIEWER: Did = "did:key:z6MkSecReviewer";
+const MAINTAINER_A: Did = "did:web:agents.example:maintainera";
+const MAINTAINER_B: Did = "did:web:agents.example:maintainerb";
+const SEC_REVIEWER: Did = "did:web:agents.example:secreviewer";
 
 // Policy: default requires 1 maintainer approval. Action-keyed policies override the default.
 const policyWithDefaultRequirement: PolicyConfig = {
@@ -244,8 +244,8 @@ describe("evaluatePolicy — allOf and anyOf requirements", () => {
         ],
       },
       signerGroups: {
-        agents: ["did:key:z6MkAgent0" as Did, "did:key:z6MkAgent1" as Did],
-        humans: ["did:key:z6MkHuman0" as Did],
+        agents: ["did:web:agents.example:agent0" as Did, "did:web:agents.example:agent1" as Did],
+        humans: ["did:web:agents.example:human0" as Did],
       },
     };
 
@@ -267,8 +267,8 @@ describe("evaluatePolicy — allOf and anyOf requirements", () => {
         ],
       },
       signerGroups: {
-        agents: ["did:key:z6MkAgent0" as Did, "did:key:z6MkAgent1" as Did],
-        humans: ["did:key:z6MkHuman0" as Did],
+        agents: ["did:web:agents.example:agent0" as Did, "did:web:agents.example:agent1" as Did],
+        humans: ["did:web:agents.example:human0" as Did],
       },
     };
 
@@ -276,7 +276,7 @@ describe("evaluatePolicy — allOf and anyOf requirements", () => {
     const approvals: VerifiedApprovals = {
       actionEnvelopeHash: { alg: "sha-256", value: "fake-hash" },
       approvals: [
-        { approval: {} as never, signerDid: "did:key:z6MkHuman0" as Did, decision: "approve" as Decision, createdAt: "2026-06-01T00:00:00.000Z" },
+        { approval: {} as never, signerDid: "did:web:agents.example:human0" as Did, decision: "approve" as Decision, createdAt: "2026-06-01T00:00:00.000Z" },
       ],
     };
 
@@ -294,8 +294,8 @@ describe("evaluatePolicy — allOf and anyOf requirements", () => {
         ],
       },
       signerGroups: {
-        agents: ["did:key:z6MkAgent0" as Did, "did:key:z6MkAgent1" as Did],
-        humans: ["did:key:z6MkHuman0" as Did],
+        agents: ["did:web:agents.example:agent0" as Did, "did:web:agents.example:agent1" as Did],
+        humans: ["did:web:agents.example:human0" as Did],
       },
     };
 
@@ -303,7 +303,7 @@ describe("evaluatePolicy — allOf and anyOf requirements", () => {
     const approvals: VerifiedApprovals = {
       actionEnvelopeHash: { alg: "sha-256", value: "fake-hash" },
       approvals: [
-        { approval: {} as never, signerDid: "did:key:z6MkAgent0" as Did, decision: "approve" as Decision, createdAt: "2026-06-01T00:00:00.000Z" },
+        { approval: {} as never, signerDid: "did:web:agents.example:agent0" as Did, decision: "approve" as Decision, createdAt: "2026-06-01T00:00:00.000Z" },
       ],
     };
     const result = evaluatePolicy(makeActionPackage("anything"), approvals, policy);
@@ -337,7 +337,7 @@ describe("evaluatePolicy — condition operators", () => {
         },
       ],
     },
-    signerGroups: { admins: ["did:key:z6MkAdmin" as Did] },
+    signerGroups: { admins: ["did:web:agents.example:admin" as Did] },
   };
 
   it("gt operator matches when actual > expected", () => {
@@ -372,7 +372,7 @@ describe("evaluatePolicy — signerGroups", () => {
         decision: "approve",
       },
       signerGroups: {
-        treasuryOperators: ["did:key:z6MkAlice" as Did, "did:key:z6MkBob" as Did],
+        treasuryOperators: ["did:web:agents.example:alice" as Did, "did:web:agents.example:bob" as Did],
       },
     };
 
@@ -380,7 +380,7 @@ describe("evaluatePolicy — signerGroups", () => {
     const approvals: VerifiedApprovals = {
       actionEnvelopeHash: { alg: "sha-256", value: "fake-hash" },
       approvals: [
-        { approval: {} as never, signerDid: "did:key:z6MkAlice" as Did, decision: "approve" as Decision, createdAt: "2026-06-01T00:00:00.000Z" },
+        { approval: {} as never, signerDid: "did:web:agents.example:alice" as Did, decision: "approve" as Decision, createdAt: "2026-06-01T00:00:00.000Z" },
       ],
     };
 
@@ -397,7 +397,7 @@ describe("evaluatePolicy — signerGroups", () => {
         decision: "approve",
       },
       signerGroups: {
-        treasuryOperators: ["did:key:z6MkAlice" as Did, "did:key:z6MkBob" as Did],
+        treasuryOperators: ["did:web:agents.example:alice" as Did, "did:web:agents.example:bob" as Did],
       },
     };
 
@@ -405,7 +405,7 @@ describe("evaluatePolicy — signerGroups", () => {
     const approvals: VerifiedApprovals = {
       actionEnvelopeHash: { alg: "sha-256", value: "fake-hash" },
       approvals: [
-        { approval: {} as never, signerDid: "did:key:z6MkEve" as Did, decision: "approve" as Decision, createdAt: "2026-06-01T00:00:00.000Z" },
+        { approval: {} as never, signerDid: "did:web:agents.example:eve" as Did, decision: "approve" as Decision, createdAt: "2026-06-01T00:00:00.000Z" },
       ],
     };
 

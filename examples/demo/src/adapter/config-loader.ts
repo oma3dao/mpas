@@ -15,11 +15,13 @@ import { canTrust, type TrustContext, type TrustVerdict } from "./trust.js";
 import { promptOperator, displayTrusted, promptNetworkUnavailable } from "./trust-prompt.js";
 
 import type { JWK } from "jose";
+import { didJwkToJwk, isDidJwk } from "@oma3/mpas";
 
 export interface SignerKey {
   did: Did;
   label?: string;
-  publicJwk: JWK;
+  /** Optional when `did` is a did:jwk — the DID embeds the key and is the source of truth. */
+  publicJwk?: JWK;
 }
 
 export interface MpasApplicationPolicy {
@@ -175,7 +177,7 @@ const deploymentConfigSchema = {
       type: "array",
       items: {
         type: "object",
-        required: ["did", "publicJwk"],
+        required: ["did"],
         properties: {
           did: { type: "string", pattern: "^did:[a-z0-9]+:.+" },
           label: { type: "string" },
@@ -259,6 +261,34 @@ async function loadDeploymentConfigFile(
   }
 
   const config = parsed as unknown as DeploymentConfig;
+
+  // Signer key validation. For did:jwk identities the DID is the source of
+  // truth: a configured publicJwk must match the key embedded in the DID.
+  // For other DID methods a publicJwk is required.
+  for (const signer of config.signerKeys) {
+    if (isDidJwk(signer.did)) {
+      let embedded: JWK;
+      try {
+        embedded = didJwkToJwk(signer.did);
+      } catch (error) {
+        return loadError("CONFIG_SCHEMA_INVALID", `signerKeys: invalid did:jwk for ${signer.label ?? signer.did}: ${error instanceof Error ? error.message : String(error)}`, filePath);
+      }
+      if (signer.publicJwk && signer.publicJwk.x !== embedded.x) {
+        return loadError(
+          "CONFIG_SCHEMA_INVALID",
+          `signerKeys: publicJwk does not match the key embedded in did:jwk for ${signer.label ?? signer.did}. The DID is the source of truth; remove or correct publicJwk.`,
+          filePath,
+        );
+      }
+    } else if (!signer.publicJwk) {
+      return loadError(
+        "CONFIG_SCHEMA_INVALID",
+        `signerKeys: publicJwk is required for non-did:jwk DID ${signer.did}.`,
+        filePath,
+      );
+    }
+  }
+
   const pluginPath = resolve(configDir, config.plugin.path);
   const pluginResult = await loadPlugin(pluginPath);
   if (!pluginResult.ok) {

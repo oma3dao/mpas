@@ -18,7 +18,7 @@ describe("MPAS Bridge types", () => {
         version: "1",
         type: "ActionEnvelope",
         proposer: {
-          did: "did:key:z6Mkproposer",
+          did: "did:web:agents.example:proposer",
         },
         target: {
           applicationDid: "did:web:github.example",
@@ -61,7 +61,7 @@ describe("MPAS Bridge types", () => {
             createdAt: "2026-06-05T18:01:00Z",
           },
         ],
-        assembledBy: "did:key:z6Mkproposer",
+        assembledBy: "did:web:agents.example:proposer",
         createdAt: "2026-06-05T18:10:00Z",
       },
       createdAt: "2026-06-05T18:10:00Z",
@@ -96,14 +96,14 @@ describe("MPAS Bridge types", () => {
         },
         result: "additionalApprovalsRequired",
         verifier: {
-          did: "did:key:z6Mkadapter",
+          did: "did:web:agents.example:adapter",
         },
         approvalRequirements: {
           anyOf: [
             {
               type: "threshold",
               threshold: 1,
-              eligibleSigners: ["did:key:z6Mksigner"],
+              eligibleSigners: ["did:web:agents.example:signer"],
               decision: "approve",
             },
           ],

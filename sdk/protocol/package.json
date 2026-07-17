@@ -29,9 +29,9 @@
       "types": "./dist/lib/auth-requirements-builder.d.ts",
       "default": "./dist/lib/auth-requirements-builder.js"
     },
-    "./did-key": {
-      "types": "./dist/lib/did-key.d.ts",
-      "default": "./dist/lib/did-key.js"
+    "./did-jwk": {
+      "types": "./dist/lib/did-jwk.d.ts",
+      "default": "./dist/lib/did-jwk.js"
     },
     "./trace": {
       "types": "./dist/lib/trace.d.ts",

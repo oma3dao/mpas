@@ -233,7 +233,7 @@ async function writeResponseFixtures(actionPackage: ActionPackage, adapter: KeyF
           {
             type: "threshold",
             threshold: 1,
-            eligibleSigners: ["did:key:z6MkvnsFe1agZ33u5c9JuDkRxKRqupn3qbmPd2cjZ5rmerJi"],
+            eligibleSigners: ["did:jwk:eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6IjhzRFY3NmI4aUY3NlBJbUF3NUk5V3ZlanNfOGJTOE4xMld2SHpQYTVWdzgifQ"],
             decision: "approve",
             description: "Maintainer approval required.",
           },
@@ -288,7 +288,7 @@ async function writeResponseFixtures(actionPackage: ActionPackage, adapter: KeyF
           {
             type: "threshold",
             threshold: 1,
-            eligibleSigners: ["did:key:z6MkvnsFe1agZ33u5c9JuDkRxKRqupn3qbmPd2cjZ5rmerJi"],
+            eligibleSigners: ["did:jwk:eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6IjhzRFY3NmI4aUY3NlBJbUF3NUk5V3ZlanNfOGJTOE4xMld2SHpQYTVWdzgifQ"],
             decision: "approve",
           },
         ],

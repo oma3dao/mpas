@@ -53,7 +53,7 @@ Evaluate JSON policy configurations per the MPAS Policy Profile:
 
 ### Key Management (`lib/key-manager.ts`, `lib/did-key.ts`)
 
-- `KeyManager` — load Ed25519 keys from file, derive `did:key`, sign/verify JWS
+- `KeyManager` — load Ed25519 keys from file, derive `did:jwk`, sign/verify JWS
 - `deriveDidKey`, `generateEd25519Key`, `didKeyToKid` — DID utilities
 
 ### Bridge Generation

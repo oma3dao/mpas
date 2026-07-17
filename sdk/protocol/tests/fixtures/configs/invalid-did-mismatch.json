@@ -5,7 +5,7 @@
     "url": "http://127.0.0.1:1"
   },
   "agent": {
-    "did": "did:key:z6Mkmismatch",
+    "did": "did:jwk:bWlzbWF0Y2g",
     "keyFile": "../keys/proposer.json"
   },
   "target": {
