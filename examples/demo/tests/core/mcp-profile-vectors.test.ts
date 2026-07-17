@@ -10,7 +10,7 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { canonicalize } from "json-canonicalize";
-import { DuplicateJsonKeyError, strictJsonParse, validateMcpPayloadStructure } from "@oma3/mpas";
+import { DuplicateJsonKeyError, strictJsonParse, validateMcpPayloadStructure, validatePayloadAgainstPlugin } from "@oma3/mpas";
 import { computeJsonHash } from "../../src/core/verification.js";
 
 function canonicalBytes(value: unknown): Buffer {
@@ -172,18 +172,39 @@ describe("MCP Execution Profile — Appendix A test vectors", () => {
       expect(() => strictJsonParse(raw)).toThrow(DuplicateJsonKeyError);
     });
 
-    it("unknown argument member rejected when schema silent on additionalProperties", () => {
-      // Fail-closed semantics for schemas that are silent on additionalProperties
-      // are covered by plugin-payload-validation.test.ts (§5 step 3).
-      const silentSchema = {
-        type: "object",
-        required: ["name", "arguments"],
-        properties: {
-          name: { const: "x" },
-          arguments: { type: "object", properties: { known: { type: "string" } } },
+    it("unknown argument member rejected when schema silent on additionalProperties (§5 step 3)", () => {
+      const plugin = {
+        version: "1",
+        type: "MpasApplicationPlugin",
+        pluginDid: "did:web:plugins.example:x",
+        pluginVersion: "1.0.0",
+        publisherDid: "did:web:publisher.example",
+        applicationDid: "did:web:app.example",
+        executionProfile: { id: "did:web:profiles.oma3.org:mcp", format: "mcp.toolsCall" },
+        operations: {
+          x: {
+            description: "silent schema",
+            executionPayloadSchema: {
+              type: "object",
+              required: ["name", "arguments"],
+              properties: {
+                name: { const: "x" },
+                // Deliberately silent on additionalProperties at both levels.
+                arguments: { type: "object", properties: { known: { type: "string" } } },
+              },
+            },
+          },
         },
-      };
-      expect(silentSchema.properties.arguments).not.toHaveProperty("additionalProperties");
+      } as unknown as Parameters<typeof validatePayloadAgainstPlugin>[1];
+
+      const valid = validatePayloadAgainstPlugin({ name: "x", arguments: { known: "a" } }, plugin);
+      expect(valid.ok).toBe(true);
+
+      const smuggled = validatePayloadAgainstPlugin({ name: "x", arguments: { known: "a", unknown: "b" } }, plugin);
+      expect(smuggled.ok).toBe(false);
+      if (!smuggled.ok) {
+        expect(smuggled.error.code).toBe("PAYLOAD_SCHEMA_INVALID");
+      }
     });
   });
 });

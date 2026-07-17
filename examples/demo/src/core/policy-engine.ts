@@ -4,9 +4,11 @@
  */
 export {
   evaluatePolicy,
+  checkProposerAuthorization,
 } from "@oma3/mpas/policy-engine";
 
 export type {
+  ProposerGateResult,
   PolicyConfig,
   PolicyEntry,
   PolicyCondition,

@@ -114,6 +114,37 @@ export type PolicyResult =
 // Evaluation
 // ---------------------------------------------------------------------------
 
+export type ProposerGateResult =
+  | { allowed: true }
+  | { allowed: false; code: "PROPOSER_NOT_AUTHORIZED"; message: string };
+
+/**
+ * Proposer gating (JSON Verifier Policy Profile): the Verifier MUST reject any
+ * Action Package whose proposer DID is not recognized. If `signerGroups`
+ * contains a `proposers` group, only those DIDs may submit; otherwise
+ * `signerGroups.all` is the allowed proposer set. Gating always occurs before
+ * policy evaluation and applies to every operation, including pass-through.
+ */
+export function checkProposerAuthorization(proposerDid: Did, policy: PolicyConfig): ProposerGateResult {
+  const allowedProposers = policy.signerGroups?.proposers ?? policy.signerGroups?.all;
+  if (!allowedProposers || allowedProposers.length === 0) {
+    return {
+      allowed: false,
+      code: "PROPOSER_NOT_AUTHORIZED",
+      message: "Policy defines no allowed proposer set (signerGroups.proposers or signerGroups.all).",
+    };
+  }
+  if (!allowedProposers.includes(proposerDid)) {
+    return {
+      allowed: false,
+      code: "PROPOSER_NOT_AUTHORIZED",
+      message: `Proposer ${proposerDid} is not in the allowed proposer set.`,
+    };
+  }
+
+  return { allowed: true };
+}
+
 export function evaluatePolicy(
   actionPackage: ActionPackage,
   verifiedApprovals: VerifiedApprovals,

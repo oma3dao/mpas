@@ -193,4 +193,65 @@ describe("HTTP endpoint", () => {
       error: { code: "artifact_malformed" },
     });
   });
+
+  it("rejects a body with duplicate JSON member names as a 400 MpasHttpError (Core §5.1.2)", async () => {
+    const app = await makeApp();
+    const response = await app.inject({
+      method: "POST",
+      url: "/mpas/v1/action",
+      headers: { "content-type": "application/mpas+json" },
+      payload: '{"version":"1","type":"ActionRequest","actionPackage":{"a":1,"a":2}}',
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({
+      type: "MpasHttpError",
+      error: { code: "artifact_malformed" },
+    });
+  });
+
+  it("resolves an unsupported execution profile as notSupported (MCP profile §2)", async () => {
+    const app = await makeApp(await makeAutoApproveConfigDir());
+    const actionPackage = JSON.parse(
+      await readFile(join(fixturesDir, "core", "valid-no-approval-required.json"), "utf8"),
+    ) as { actionEnvelope: { executionProfile: { id: string } } };
+    actionPackage.actionEnvelope.executionProfile.id = "did:web:profiles.example:other";
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/mpas/v1/action",
+      headers: { "content-type": "application/mpas+json" },
+      payload: JSON.stringify({ version: "1", type: "ActionRequest", actionPackage }),
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      result: "notSupported",
+      error: { code: "UNSUPPORTED_EXECUTION_PROFILE" },
+    });
+  });
+
+  it("rejects a proposer outside the allowed proposer set (proposer gating)", async () => {
+    // Config identical to auto-approve, but the proposers group excludes the
+    // fixture proposer (maintainers only). The package still verifies
+    // cryptographically; gating must reject it before policy evaluation.
+    const dir = await mkdtemp(join(tmpdir(), "mpas-http-configs-gating-"));
+    const config = await readJson<Record<string, unknown>>(join(fixturesDir, "configs", "github-auto-approve.json"));
+    config.plugin = {
+      ...(config.plugin as Record<string, unknown>),
+      path: join(fixturesDir, "plugins", "github-demo-plugin.json"),
+    };
+    const policy = config.policy as { signerGroups: Record<string, string[]> };
+    policy.signerGroups.proposers = policy.signerGroups.maintainers;
+    await writeFile(join(dir, "github-gating.json"), `${JSON.stringify(config, null, 2)}\n`);
+
+    const app = await makeApp(dir);
+    const response = await submitFixture(app, "valid-no-approval-required.json");
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      result: "rejected",
+      error: { code: "PROPOSER_NOT_AUTHORIZED" },
+    });
+  });
 });

@@ -2,7 +2,7 @@ import Fastify, { type FastifyInstance, type FastifyReply } from "fastify";
 import type { JWK } from "jose";
 import { strictJsonParse, validateMcpPayloadStructure } from "@oma3/mpas";
 import { buildAuthorizationRequirements } from "../core/auth-requirements-builder.js";
-import { evaluatePolicy, type PolicyConfig } from "../core/policy-engine.js";
+import { checkProposerAuthorization, evaluatePolicy, type PolicyConfig } from "../core/policy-engine.js";
 import { validatePayloadAgainstPlugin } from "../core/plugin-loader.js";
 import { buildAndSignReceipt } from "../core/receipt-builder.js";
 import type { ActionPackage, Did, ExecutionReceipt, Hash, ReceiptResult } from "../core/types.js";
@@ -133,6 +133,27 @@ export function createAdapterApiServer(options: HttpEndpointOptions): FastifyIns
     }
     trace.emit("verification_step", { actionId, step: "expiry_check", passed: true });
 
+    // MCP Execution Profile §2: a Verifier that does not implement the declared
+    // execution profile MUST NOT attempt to validate or execute the payload and
+    // resolves the action as notSupported. This deployment implements exactly
+    // the profile declared by the installed plugin.
+    const supportedProfileId = loadedConfig.plugin.executionProfile.id;
+    const supportedFormat = loadedConfig.plugin.executionProfile.format ?? "mcp.toolsCall";
+    const declaredProfileId = pkg.actionEnvelope.executionProfile.id;
+    const declaredFormat = pkg.actionEnvelope.executionProfile.format ?? "mcp.toolsCall";
+    if (declaredProfileId !== supportedProfileId || declaredFormat !== supportedFormat) {
+      trace.emit("verification_step", { actionId, step: "execution_profile_check", passed: false, declaredProfileId, declaredFormat });
+      return actionResponse(options, {
+        result: "notSupported",
+        actionEnvelopeHash: envelopeHash,
+        error: {
+          code: "UNSUPPORTED_EXECUTION_PROFILE",
+          message: `This Verifier supports ${supportedProfileId} (${supportedFormat}); the Action Envelope declares ${declaredProfileId} (${declaredFormat}).`,
+        },
+      });
+    }
+    trace.emit("verification_step", { actionId, step: "execution_profile_check", passed: true });
+
     if (exceedsMaxEnvelopeValidity(pkg.actionEnvelope, maxEnvelopeValidityMs)) {
       trace.emit("verification_step", { actionId, step: "max_validity_check", passed: false });
       return actionResponse(options, {
@@ -179,6 +200,18 @@ export function createAdapterApiServer(options: HttpEndpointOptions): FastifyIns
       });
     }
     trace.emit("verification_step", { actionId, step: "payload_structure", passed: true });
+
+    // Proposer gating (JSON Verifier Policy Profile): occurs before policy
+    // evaluation and applies to every operation, including pass-through.
+    const proposerGate = checkProposerAuthorization(
+      pkg.actionEnvelope.proposer.did,
+      policyFromLoadedConfig(loadedConfig),
+    );
+    if (!proposerGate.allowed) {
+      trace.emit("verification_step", { actionId, step: "proposer_gating", passed: false, code: proposerGate.code });
+      return rejection(pkg, options, envelopeHash, "rejected", proposerGate.code, proposerGate.message);
+    }
+    trace.emit("verification_step", { actionId, step: "proposer_gating", passed: true });
 
     const payloadValidation = validatePayloadAgainstPlugin(pkg.executionPayload, loadedConfig.plugin);
     const opName = operationName(pkg);

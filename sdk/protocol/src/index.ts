@@ -19,6 +19,8 @@ export * from "./lib/verification.js";
 export * from "./lib/mcp-payload.js";
 export {
   evaluatePolicy,
+  checkProposerAuthorization,
+  type ProposerGateResult,
   type PolicyConfig,
   type PolicyEntry,
   type PolicyCondition,
@@ -34,6 +36,7 @@ export {
 export {
   loadPlugin,
   validatePayloadAgainstPlugin,
+  applyFailClosedDefaults,
   type LoadError,
   type LoadPluginResult,
   type OperationMatch,
