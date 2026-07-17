@@ -98,8 +98,9 @@ describe("proposer flow integration", () => {
           type: "AuthorizationRequirements",
           result: "additionalApprovalsRequired",
         });
-        if (response.authorizationRequirements.result === "additionalApprovalsRequired") {
-          expect(response.authorizationRequirements.approvalRequirements.anyOf?.[0]?.threshold).toBe(1);
+        const authz = response.authorizationRequirements;
+        if (authz?.result === "additionalApprovalsRequired") {
+          expect(authz.approvalRequirements.anyOf?.[0]?.threshold).toBe(1);
         }
       }
     } finally {

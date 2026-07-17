@@ -56,8 +56,8 @@
   },
   "types": "./dist/index.d.ts",
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
-    "test": "node scripts/run-tests.mjs"
+    "build": "rm -rf dist && tsc -p tsconfig.build.json",
+    "test": "node tests/scripts/run-tests.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.13.0",

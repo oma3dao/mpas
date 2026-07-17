@@ -16,10 +16,11 @@ This initial version is MIT-licensed to maximize transparency and adoption. OMA3
 This repository is the OMA3-owned home of the MPAS standard:
 
 - **Specifications** — the MPAS protocol documents (core, profiles, schemas)
-- **SDK** — `@oma3/mpas` protocol library (types, verification, policy engine, receipts, proposer primitives, MCP bridge)
+- **Bridge generator** — development-time tool that generates a static MCP bridge (and plugin scaffold) from a running MCP server
+- **SDK** — `@oma3/mpas` protocol library (types, verification, policy engine, receipts, proposer primitives, protocol clients)
 - **Example implementation** — a working implementation demonstrating the full MPAS flow (propose → approve → dispatch)
 - **Application registry** — per-application descriptors referencing known implementations
-- **Conformance tools** — official test tools for validating MPAS implementations
+- **Conformance model** — the conformance roles and test model (official test tools planned; see `conformance/`)
 - **Documentation** — developer guides, architecture docs, and website content
 
 ## What This Repository Does Not Contain
@@ -27,7 +28,7 @@ This repository is the OMA3-owned home of the MPAS standard:
 - Production implementations (these belong to implementation providers)
 - Production bridges or plugins
 - Enterprise features
-- Autonomous bridge/plugin generation tooling
+- Runtime/autonomous bridge or plugin generation (the `bridge-generator/` tool is development-time only: it emits static, reviewable code that is checked in before use)
 - Anything beyond the example path demonstrating the full MPAS protocol flow
 
 The example credential adapter uses a JSON policy format as a pragmatic choice for demonstration. Production implementations may use OPA, Cedar, or any other policy engine that satisfies the MPAS specification requirements.
@@ -91,10 +92,11 @@ The Application Plugin plus the deployment policy define the **governed set** of
 
 ```
 specs/                          MPAS specification documents
+bridge-generator/               Dev-time generator for static MCP bridge servers
 sdk/
   protocol/                     @oma3/mpas — protocol SDK (types, verification,
                                 policy engine, receipts, proposer primitives,
-                                protocol clients, MCP bridge)
+                                protocol clients)
 examples/
   demo/                         Reference implementation of the full MPAS flow
     src/
@@ -103,16 +105,14 @@ examples/
       signer-server/            MPAS Signer MCP Server (standalone, per-agent)
       core/                     Re-exports from @oma3/mpas (thin barrel files)
       cli/                      CLI commands (daemon management, trace inspection)
-    tests/                      213+ tests (unit, integration, e2e)
+    tests/                      280+ tests (unit, integration, e2e)
 application-registry/
-  applications/                 One JSON file per application
+  *.json                        One JSON file per application
 conformance/
-  README.md                     Conformance model and test roles
+  README.md                     Conformance model and test roles (tools planned)
 docs/
   README.md                     Describes the docs subfolders
   features/                     Per-feature specs and implementation notes
-  setup/                        Getting started and build guides
-  site/                         Documentation website content
 ```
 
 Each example in `examples/` is self-contained with its own build tooling. The demo depends on the SDK via `"@oma3/mpas": "file:../../sdk/protocol"`.
@@ -121,8 +121,7 @@ Each example in `examples/` is self-contained with its own build tooling. The de
 
 - Specifications: `specs/`
 - Feature documentation: `docs/features/`
-- Setup guides: `docs/setup/`
-- Website content: `docs/site/`
+- Demo setup guide: `examples/demo/guides/`
 - Application registry: `application-registry/`
 
 ## License and Participation

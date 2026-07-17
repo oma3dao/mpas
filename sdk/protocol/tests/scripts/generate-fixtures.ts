@@ -18,7 +18,7 @@ import type {
   HashObject,
   ReceiptPayload,
   SignerReviewSet,
-} from "../src/index.js";
+} from "../../src/index.js";
 
 interface KeyFixture {
   label: string;
@@ -39,7 +39,7 @@ interface ActionFixtureSpec {
   }>;
 }
 
-const fixturesDir = fileURLToPath(new URL("../tests/fixtures/", import.meta.url));
+const fixturesDir = fileURLToPath(new URL("../fixtures/", import.meta.url));
 const createdAt = "2026-06-05T18:00:00Z";
 const expiresAt = "2030-01-01T00:00:00Z";
 const assembledAt = "2026-06-05T18:10:00Z";

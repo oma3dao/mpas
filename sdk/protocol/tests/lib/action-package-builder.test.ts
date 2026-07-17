@@ -103,7 +103,7 @@ describe("ActionPackageBuilder", () => {
     const approval = await builder.signProposerApproval(envelope);
     const actionPackage = builder.assemblePackage(payload, envelope, approval);
 
-    expect(actionPackage.executionPayload.name).toBe("delete_branch");
+    expect((actionPackage.executionPayload as { name?: string }).name).toBe("delete_branch");
     expect(actionPackage.actionEnvelope.executionPayloadHash).toEqual(computeHash(payload));
     expect(actionPackage.approvalBundle.approvals[0]?.signature.value).toEqual(approval.signature.value);
   });

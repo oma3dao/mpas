@@ -5,7 +5,7 @@ import type { VerifiedApprovals } from "../../src/lib/verification.js";
 
 const proposerDid = "did:web:agents.example:proposer" as Did;
 
-function pkg(payloadArguments: Record<string, unknown>): ActionPackage {
+function pkg(payloadArguments: Record<string, string | number>): ActionPackage {
   return {
     version: "1",
     type: "ActionPackage",

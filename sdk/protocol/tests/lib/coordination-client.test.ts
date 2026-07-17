@@ -31,9 +31,7 @@ describe("CoordinationClient", () => {
       join(fixturesDir, "responses", "coordination-pending-actions.json"),
     );
     const approval = actionPackage.approvalBundle.approvals[0] as Approval;
-    const authorizationRequirements = (
-      needsApprovals as Extract<AdapterResponse, { result: "additionalApprovalsRequired" }>
-    ).authorizationRequirements;
+    const authorizationRequirements = needsApprovals.authorizationRequirements!;
     const requests: Array<{ url?: string; body: unknown }> = [];
     const server = await startMockCoordination(async (request, response) => {
       const body = await readRequestBody(request);

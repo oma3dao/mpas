@@ -23,6 +23,8 @@ npm test
 | `tests/coordination/` | Local Coordination Service fixtures, store state machine, HTTP endpoints, daemon startup, approvals, cancellation, and completed Action Package assembly. |
 | `tests/cli/` | CLI daemon, validation, plugin, credential, and config management commands. |
 | `tests/fixtures/` | Fixture contract tests plus reusable keys, plugins, configs, Action Packages, and mock MCP servers. |
+
+> **TEST KEYS ONLY.** The private keys committed under `tests/fixtures/test-keys/` exist so signed fixtures are reproducible. They are public by definition and must never be used outside tests.
 | `tests/e2e/` | Local stack tests that run the Credential Adapter, Coordination Service, and MCP bridge together. |
 
 ## Normal Test Commands

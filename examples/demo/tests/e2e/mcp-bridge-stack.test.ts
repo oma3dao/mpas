@@ -275,7 +275,7 @@ async function loadBridgeModule(): Promise<BridgeModule> {
     ActionPackageBuilder: mpas.ActionPackageBuilder,
     KeyManager: mpas.KeyManager,
     AdapterClient: mpas.AdapterClient,
-  } as BridgeModule;
+  } as unknown as BridgeModule;
 }
 
 async function credentialDir() {

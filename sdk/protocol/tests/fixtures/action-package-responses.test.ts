@@ -107,8 +107,8 @@ describe("Action Package and response fixtures", () => {
 
     expect(needsApprovals.result).toBe("additionalApprovalsRequired");
     if (needsApprovals.result === "additionalApprovalsRequired") {
-      expect(needsApprovals.authorizationRequirements.result).toBe("additionalApprovalsRequired");
-      expectHashEqual(needsApprovals.authorizationRequirements.actionEnvelopeHash, computeHash(createIssuePackage.actionEnvelope));
+      expect(needsApprovals.authorizationRequirements?.result).toBe("additionalApprovalsRequired");
+      expectHashEqual(needsApprovals.authorizationRequirements!.actionEnvelopeHash, computeHash(createIssuePackage.actionEnvelope));
     }
 
     expect(rejected.result).toBe("rejected");

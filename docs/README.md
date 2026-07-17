@@ -10,15 +10,15 @@ Per-feature specifications, architecture documents, and implementation plans. Ea
 
 Audience: contributors and implementers.
 
-### setup/
+### setup/ (planned)
 
-Getting started guides, build instructions, environment setup, and migration guides.
+Getting started guides, build instructions, environment setup, and migration guides. Not yet populated — see `examples/demo/guides/` for the current setup guide.
 
 Audience: developers setting up MPAS locally or deploying components.
 
-### site/
+### site/ (planned)
 
-Content root for the MPAS documentation website. A static site generator (Docusaurus, VitePress, etc.) points at this folder as its source.
+Content root for the MPAS documentation website. A static site generator (Docusaurus, VitePress, etc.) will point at this folder as its source. Not yet populated.
 
 Audience: adopters and ecosystem participants.
 

@@ -67,7 +67,7 @@ describe("MPAS Bridge types", () => {
       createdAt: "2026-06-05T18:10:00Z",
     };
 
-    expect(actionPackage.executionPayload.name).toBe("create_issue");
+    expect((actionPackage.executionPayload as { name?: string }).name).toBe("create_issue");
   });
 
   it("models adapter responses and MCP tool definitions", () => {
@@ -86,6 +86,8 @@ describe("MPAS Bridge types", () => {
     };
 
     const response: AdapterResponse = {
+      version: "1",
+      type: "ActionResponse",
       result: "additionalApprovalsRequired",
       authorizationRequirements: {
         version: "1",
