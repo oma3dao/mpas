@@ -60,7 +60,7 @@
       }
     },
     "merge_pull_request": {
-      "description": "Merge a pull request.",
+      "description": "Merge a pull request into its base branch.",
       "impact": "high",
       "executionPayloadSchema": {
         "type": "object",
