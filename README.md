@@ -86,7 +86,7 @@ Production implementations are maintained independently. See the application reg
 
 ### The Governance Boundary
 
-The Application Plugin plus the deployment policy define the **governed set** of operations. An operation in that set gets schema validation and policy evaluation (thresholds, signer groups, `defaultRequirement`). An operation outside that set is routed as **pass-through**: after proposer gating and signature verification it executes with the adapter's credential on the proposer's signature alone — `defaultRequirement` does not apply to it. This is a deliberate local trust decision. If you care about an operation, put it in the plugin or give it a policy entry; if you want unlisted operations refused entirely, set `passThrough: "deny"` in the deployment config.
+The Application Plugin plus the deployment policy define the **governed set** of operations. An operation in that set gets schema validation and policy evaluation (thresholds, signer groups, `defaultRequirement`). An operation outside that set is routed as **pass-through**: after proposer gating and signature verification it executes with the adapter's credential on the proposer's signature alone — `defaultRequirement` does not apply to it. This reflects the plugin-anchored trust model: the plugin publisher — typically the party that knows the target API best, attested via OMATrust — decides which operations need governance, and operators ratify that decision by trusting the publisher. If you care about an operation, put it in the plugin or give it a policy entry; power users who want unlisted operations refused entirely can set `passThrough: "deny"` in the deployment config.
 
 ## Repository Layout
 

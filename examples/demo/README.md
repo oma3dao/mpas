@@ -241,7 +241,7 @@ You do not edit the plugin directly. Its integrity is verified via `artifactDid`
 
 **Relationship between plugin and policy:** The plugin describes what operations exist and their payload schemas. The `policy` object (an embedded `MpasApplicationPolicy`) defines who can propose, who can approve, and what thresholds apply. An operation is governed if it's in the plugin's `operations` OR has an entry in `policy.policies`.
 
-**The governance boundary:** anything outside the governed set is routed as pass-through — after proposer gating and signature verification it executes with the adapter's credential on the proposer's signature alone, and `defaultRequirement` does not apply. The demo exposes `create_issue` this way on purpose to demonstrate the boundary. If you care about an operation, put it in the plugin or give it a policy entry; to refuse ungoverned operations entirely, set `passThrough: "deny"`.
+**The governance boundary:** anything outside the governed set is routed as pass-through — after proposer gating and signature verification it executes with the adapter's credential on the proposer's signature alone, and `defaultRequirement` does not apply. This is the plugin-anchored trust model: the plugin publisher decides which operations need governance, and trusting the plugin (via OMATrust publisher attestation) is what makes pass-through safe. The demo exposes `create_issue` this way on purpose to demonstrate the boundary. If you care about an operation, put it in the plugin or give it a policy entry; power users can refuse ungoverned operations entirely with `passThrough: "deny"`.
 
 ### Bridge Config
 

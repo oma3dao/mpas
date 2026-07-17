@@ -255,10 +255,11 @@ export function createAdapterApiServer(options: HttpEndpointOptions): FastifyIns
       trace.emit("verification_step", { actionId, step: "policy_evaluation", passed: true, policyStatus: policyResult.status });
     } else {
       // Pass-through path: operation is not in the plugin and has no policy
-      // entry. This is an explicit local trust decision — the operation
-      // executes with the adapter's credential on the proposer's signature
-      // alone, and defaultRequirement does NOT apply. Operators who want to
-      // fail closed instead set passThrough: "deny" in the deployment config.
+      // entry. Under the plugin-anchored trust model the plugin publisher
+      // defines the governed surface; ungoverned operations execute with the
+      // adapter's credential on the proposer's signature alone, and
+      // defaultRequirement does NOT apply. Power users who want a closed
+      // world instead set passThrough: "deny" in the deployment config.
       if (loadedConfig.config.passThrough === "deny") {
         trace.emit("verification_step", { actionId, step: "routing_decision", passed: false, path: "pass-through", operation: operationName(pkg) });
         return rejection(
