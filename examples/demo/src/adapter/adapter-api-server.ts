@@ -1,5 +1,6 @@
 import Fastify, { type FastifyInstance, type FastifyReply } from "fastify";
 import type { JWK } from "jose";
+import { strictJsonParse, validateMcpPayloadStructure } from "@oma3/mpas";
 import { buildAuthorizationRequirements } from "../core/auth-requirements-builder.js";
 import { evaluatePolicy, type PolicyConfig } from "../core/policy-engine.js";
 import { validatePayloadAgainstPlugin } from "../core/plugin-loader.js";
@@ -38,12 +39,33 @@ export function createAdapterApiServer(options: HttpEndpointOptions): FastifyIns
   const trace = options.traceLogger ?? new TraceLogger("adapter");
 
   // Accept the canonical MPAS media type as well as application/json (profile MAY).
-  app.addContentTypeParser("application/mpas+json", { parseAs: "string" }, (_request, body, done) => {
+  // Both use strict parsing: duplicate JSON member names are malformed per MPAS
+  // Core §5.1.2 and must be rejected before hashing (JSON.parse is last-write-wins).
+  const strictBodyParser = (_request: unknown, body: string | Buffer, done: (error: Error | null, value?: unknown) => void) => {
     try {
-      done(null, body === "" ? undefined : JSON.parse(body as string));
+      const text = typeof body === "string" ? body : body.toString("utf8");
+      done(null, text === "" ? undefined : strictJsonParse(text));
     } catch (error) {
-      done(error as Error, undefined);
+      const wrapped = error instanceof Error ? error : new Error(String(error));
+      (wrapped as Error & { statusCode?: number }).statusCode = 400;
+      done(wrapped, undefined);
     }
+  };
+  app.addContentTypeParser("application/mpas+json", { parseAs: "string" }, strictBodyParser);
+  app.removeContentTypeParser("application/json");
+  app.addContentTypeParser("application/json", { parseAs: "string" }, strictBodyParser);
+
+  app.setErrorHandler((error: Error & { statusCode?: number }, _request, reply) => {
+    const statusCode = typeof error.statusCode === "number" && error.statusCode >= 400 ? error.statusCode : 500;
+    reply.code(statusCode).send({
+      version: "1",
+      type: "MpasHttpError",
+      error: {
+        code: statusCode === 400 ? "artifact_malformed" : "internal_error",
+        message: error.message,
+        retryable: statusCode >= 500,
+      },
+    });
   });
 
   app.get("/mpas/v1/health", async () => ({
@@ -129,10 +151,34 @@ export function createAdapterApiServer(options: HttpEndpointOptions): FastifyIns
       },
     });
     if (verification.status !== "verified") {
+      // A structurally malformed bundle is a `malformed` result (no receipt),
+      // matching the structural-envelope path above.
+      if (verification.code === "MALFORMED_APPROVAL_BUNDLE") {
+        trace.emit("dispatch", { actionId, result: "malformed", code: verification.code });
+        return actionResponse(options, {
+          result: "malformed",
+          actionEnvelopeHash: envelopeHash,
+          error: { code: verification.code, message: verification.message },
+        });
+      }
       trace.emit("dispatch", { actionId, result: "rejected", code: verification.code });
       const result: ReceiptResult = verification.code === "EXPIRED_ACTION_ENVELOPE" ? "expired" : "rejected";
       return rejection(pkg, options, envelopeHash, result, verification.code, verification.message);
     }
+
+    // MCP Execution Profile §5 step 1: the payload must be exactly
+    // { name: string, arguments: object }. This is profile-structural and applies
+    // to every payload, including pass-through operations.
+    const payloadStructure = validateMcpPayloadStructure(pkg.executionPayload);
+    if (!payloadStructure.ok) {
+      trace.emit("verification_step", { actionId, step: "payload_structure", passed: false, code: payloadStructure.error.code });
+      return actionResponse(options, {
+        result: "malformed",
+        actionEnvelopeHash: envelopeHash,
+        error: { code: payloadStructure.error.code, message: payloadStructure.error.message },
+      });
+    }
+    trace.emit("verification_step", { actionId, step: "payload_structure", passed: true });
 
     const payloadValidation = validatePayloadAgainstPlugin(pkg.executionPayload, loadedConfig.plugin);
     const opName = operationName(pkg);
@@ -217,8 +263,9 @@ export function createAdapterApiServer(options: HttpEndpointOptions): FastifyIns
       return rejection(pkg, options, envelopeHash, "rejected", authorize.code, authorize.message);
     }
 
-    const mcpOperation = operationName(pkg);
-    const mcpArguments = argumentsObject(pkg);
+    // Structure was validated above; dispatch exactly what was signed.
+    const mcpOperation = payloadStructure.name;
+    const mcpArguments = payloadStructure.arguments;
     trace.emit("mcp_call", {
       actionId,
       operation: mcpOperation,
@@ -370,15 +417,6 @@ function operationName(actionPackage: ActionPackage): string {
   }
 
   return "";
-}
-
-function argumentsObject(actionPackage: ActionPackage): object {
-  const payload = actionPackage.executionPayload;
-  if (isRecord(payload) && isRecord(payload.arguments)) {
-    return payload.arguments;
-  }
-
-  return {};
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

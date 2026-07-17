@@ -5,6 +5,7 @@ export * from "./types/mpas.js";
 
 // Utilities
 export * from "./utils/hash.js";
+export * from "./utils/strict-json.js";
 
 // Protocol primitives — Proposer side
 export * from "./lib/action-package-builder.js";
@@ -15,6 +16,7 @@ export * from "./lib/key-manager.js";
 
 // Protocol primitives — Verifier side
 export * from "./lib/verification.js";
+export * from "./lib/mcp-payload.js";
 export {
   evaluatePolicy,
   type PolicyConfig,

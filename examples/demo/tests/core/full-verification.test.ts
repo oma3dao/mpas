@@ -96,4 +96,55 @@ describe("verifyActionPackage", () => {
       code,
     });
   });
+
+  it("rejects an empty approvals array as MALFORMED_APPROVAL_BUNDLE", async () => {
+    const pkg = await parseFixture("valid-two-approvals.json");
+    const stripped = { ...pkg, approvalBundle: { ...pkg.approvalBundle, approvals: [] } };
+
+    const result = await verifyActionPackage(stripped, await verificationConfig());
+
+    expect(result).toMatchObject({ status: "rejected", code: "MALFORMED_APPROVAL_BUNDLE" });
+  });
+
+  it("rejects a missing approvals array as MALFORMED_APPROVAL_BUNDLE instead of throwing", async () => {
+    const pkg = await parseFixture("valid-two-approvals.json");
+    const bundle = { ...pkg.approvalBundle } as Record<string, unknown>;
+    delete bundle.approvals;
+    const stripped = { ...pkg, approvalBundle: bundle as unknown as ActionPackage["approvalBundle"] };
+
+    const result = await verifyActionPackage(stripped, await verificationConfig());
+
+    expect(result).toMatchObject({ status: "rejected", code: "MALFORMED_APPROVAL_BUNDLE" });
+  });
+
+  it("rejects a bundle whose propose approval is missing (only maintainer approvals present)", async () => {
+    const pkg = await parseFixture("valid-two-approvals.json");
+    const withoutPropose = {
+      ...pkg,
+      approvalBundle: {
+        ...pkg.approvalBundle,
+        approvals: pkg.approvalBundle.approvals.filter((approval) => approval.decision !== "propose"),
+      },
+    };
+
+    const result = await verifyActionPackage(withoutPropose, await verificationConfig());
+
+    expect(result).toMatchObject({ status: "rejected", code: "MISSING_PROPOSER_APPROVAL" });
+  });
+
+  it("rejects a package whose envelope declares a proposer that did not sign the propose approval", async () => {
+    const pkg = await parseFixture("valid-two-approvals.json");
+    const maintainerA = await readJson<KeyFixture>(join(fixturesDir, "test-keys", "maintainer-a.json"));
+    // Claim a different (trusted) DID as proposer without re-signing anything.
+    const impersonated = {
+      ...pkg,
+      actionEnvelope: { ...pkg.actionEnvelope, proposer: { did: maintainerA.did } },
+    };
+
+    const result = await verifyActionPackage(impersonated, await verificationConfig());
+
+    // Mutating the envelope breaks the envelope-hash binding first; either way
+    // the impersonation must be rejected, never verified.
+    expect(result.status).toBe("rejected");
+  });
 });

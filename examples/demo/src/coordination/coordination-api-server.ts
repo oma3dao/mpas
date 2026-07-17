@@ -1,4 +1,5 @@
 import Fastify, { type FastifyInstance, type FastifyReply } from "fastify";
+import { strictJsonParse } from "@oma3/mpas";
 import { CoordinationStore, CoordinationStoreError } from "./store.js";
 import { TraceLogger } from "../core/trace.js";
 import type {
@@ -17,6 +18,22 @@ export function createCoordinationApiServer(options: CoordinationHttpEndpointOpt
   const app = Fastify({ logger: false });
   const store = options.store ?? new CoordinationStore();
   const trace = options.traceLogger ?? new TraceLogger("coordination");
+
+  // Strict parsing: duplicate JSON member names in signed artifacts are malformed
+  // per MPAS Core §5.1.2 (JSON.parse silently keeps the last value).
+  const strictBodyParser = (_request: unknown, body: string | Buffer, done: (error: Error | null, value?: unknown) => void) => {
+    try {
+      const text = typeof body === "string" ? body : body.toString("utf8");
+      done(null, text === "" ? undefined : strictJsonParse(text));
+    } catch (error) {
+      const wrapped = error instanceof Error ? error : new Error(String(error));
+      (wrapped as Error & { statusCode?: number }).statusCode = 400;
+      done(wrapped, undefined);
+    }
+  };
+  app.removeContentTypeParser("application/json");
+  app.addContentTypeParser("application/json", { parseAs: "string" }, strictBodyParser);
+  app.addContentTypeParser("application/mpas+json", { parseAs: "string" }, strictBodyParser);
 
   app.get("/mpas/v1/coordination/health", async () => ({
     status: "ok",

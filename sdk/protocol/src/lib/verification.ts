@@ -82,6 +82,8 @@ export type VerificationFailureCode =
   | "EXPIRED_ACTION_ENVELOPE"
   | "PAYLOAD_HASH_MISMATCH"
   | "APPROVAL_BUNDLE_INVALID"
+  | "MALFORMED_APPROVAL_BUNDLE"
+  | "MISSING_PROPOSER_APPROVAL"
   | "UNKNOWN_APPLICATION";
 
 export type VerificationResult =
@@ -406,6 +408,18 @@ export async function verifyActionPackage(
   }
   onStep?.("payload_hash_binding", true);
 
+  const bundleStructure = validateApprovalBundleStructure(actionPackage.approvalBundle);
+  if (!bundleStructure.ok) {
+    onStep?.("approval_bundle_structure", false, { message: bundleStructure.message });
+    return {
+      status: "rejected",
+      code: "MALFORMED_APPROVAL_BUNDLE",
+      message: bundleStructure.message,
+      path: bundleStructure.path,
+    };
+  }
+  onStep?.("approval_bundle_structure", true);
+
   const bundleResult = await verifyApprovalBundle(
     actionPackage.approvalBundle,
     computeJsonHash(actionPackage.actionEnvelope),
@@ -422,6 +436,25 @@ export async function verifyActionPackage(
   }
   onStep?.("approval_bundle_verification", true, { approvalCount: bundleResult.verifiedApprovals.approvals.length });
 
+  // The Approval Bundle MUST contain a verified `propose` Approval signed by the
+  // DID declared in actionEnvelope.proposer.did. This binds the claimed proposer
+  // identity to a signature (and makes an empty bundle unverifiable), which is
+  // what self-approval prevention in policy evaluation relies on.
+  const proposerDid = actionPackage.actionEnvelope.proposer.did;
+  const hasProposerApproval = bundleResult.verifiedApprovals.approvals.some(
+    (verified) => verified.decision === "propose" && verified.signerDid === proposerDid,
+  );
+  if (!hasProposerApproval) {
+    onStep?.("proposer_approval_check", false, { proposerDid });
+    return {
+      status: "rejected",
+      code: "MISSING_PROPOSER_APPROVAL",
+      message: "Approval Bundle must include a verified propose Approval from actionEnvelope.proposer.did.",
+      path: "$.approvalBundle.approvals",
+    };
+  }
+  onStep?.("proposer_approval_check", true, { proposerDid });
+
   return {
     status: "verified",
     actionId: actionPackage.actionEnvelope.actionId.value,
@@ -429,6 +462,53 @@ export async function verifyActionPackage(
     operationName: operationNameFromPayload(actionPackage.executionPayload),
     verifiedApprovals: bundleResult.verifiedApprovals,
   };
+}
+
+type BundleStructureResult = { ok: true } | { ok: false; message: string; path: string };
+
+/**
+ * Structural validation of the Approval Bundle before signature verification.
+ * A bundle failing these checks is malformed (deterministically invalid),
+ * never a signature-verification failure.
+ */
+function validateApprovalBundleStructure(bundle: ActionPackage["approvalBundle"]): BundleStructureResult {
+  if (!isRecord(bundle)) {
+    return { ok: false, message: "Approval Bundle must be a JSON object.", path: "$.approvalBundle" };
+  }
+  if (!isRecord(bundle.actionEnvelopeHash) || typeof bundle.actionEnvelopeHash.value !== "string") {
+    return {
+      ok: false,
+      message: "Approval Bundle actionEnvelopeHash must be a hash object.",
+      path: "$.approvalBundle.actionEnvelopeHash",
+    };
+  }
+  if (!Array.isArray(bundle.approvals) || bundle.approvals.length === 0) {
+    return {
+      ok: false,
+      message: "Approval Bundle approvals must be a non-empty array.",
+      path: "$.approvalBundle.approvals",
+    };
+  }
+  for (const [index, approval] of bundle.approvals.entries()) {
+    const path = `$.approvalBundle.approvals[${index}]`;
+    if (!isRecord(approval)) {
+      return { ok: false, message: "Approval must be a JSON object.", path };
+    }
+    if (!isRecord(approval.actionEnvelopeHash) || typeof approval.actionEnvelopeHash.value !== "string") {
+      return { ok: false, message: "Approval actionEnvelopeHash must be a hash object.", path: `${path}.actionEnvelopeHash` };
+    }
+    if (typeof approval.decision !== "string") {
+      return { ok: false, message: "Approval decision must be a string.", path: `${path}.decision` };
+    }
+    if (!isRecord(approval.signature) || typeof approval.signature.value !== "string") {
+      return { ok: false, message: "Approval signature must be a signature object.", path: `${path}.signature` };
+    }
+    if (typeof approval.createdAt !== "string") {
+      return { ok: false, message: "Approval createdAt must be a string.", path: `${path}.createdAt` };
+    }
+  }
+
+  return { ok: true };
 }
 
 function parseError(message: string, path: string): ParseActionPackageResult {
