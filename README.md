@@ -83,6 +83,10 @@ Production implementations are maintained independently. See the application reg
 - Self-approval is prevented at both coordination and policy engine levels
 - The Coordination Service is optional infrastructure, not a protocol requirement
 
+### The Governance Boundary
+
+The Application Plugin plus the deployment policy define the **governed set** of operations. An operation in that set gets schema validation and policy evaluation (thresholds, signer groups, `defaultRequirement`). An operation outside that set is routed as **pass-through**: after proposer gating and signature verification it executes with the adapter's credential on the proposer's signature alone — `defaultRequirement` does not apply to it. This is a deliberate local trust decision. If you care about an operation, put it in the plugin or give it a policy entry; if you want unlisted operations refused entirely, set `passThrough: "deny"` in the deployment config.
+
 ## Repository Layout
 
 ```

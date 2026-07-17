@@ -236,9 +236,13 @@ export function createAdapterApiServer(options: HttpEndpointOptions): FastifyIns
       }
 
       const policyResult = evaluatePolicy(pkg, verification.verifiedApprovals, policyFromLoadedConfig(loadedConfig));
-      if (policyResult.status === "denied") {
+      if (policyResult.status === "malformed") {
         trace.emit("verification_step", { actionId, step: "policy_evaluation", passed: false, code: policyResult.code });
-        return rejection(pkg, options, envelopeHash, "rejected", policyResult.code, policyResult.message);
+        return actionResponse(options, {
+          result: "malformed",
+          actionEnvelopeHash: envelopeHash,
+          error: { code: policyResult.code, message: policyResult.message },
+        });
       }
       if (policyResult.status === "additionalApprovalsRequired") {
         trace.emit("dispatch", { actionId, result: "additionalApprovalsRequired" });
@@ -250,8 +254,22 @@ export function createAdapterApiServer(options: HttpEndpointOptions): FastifyIns
       }
       trace.emit("verification_step", { actionId, step: "policy_evaluation", passed: true, policyStatus: policyResult.status });
     } else {
-      // Pass-through path: operation is not in the plugin, skip schema validation
-      // and policy evaluation.
+      // Pass-through path: operation is not in the plugin and has no policy
+      // entry. This is an explicit local trust decision — the operation
+      // executes with the adapter's credential on the proposer's signature
+      // alone, and defaultRequirement does NOT apply. Operators who want to
+      // fail closed instead set passThrough: "deny" in the deployment config.
+      if (loadedConfig.config.passThrough === "deny") {
+        trace.emit("verification_step", { actionId, step: "routing_decision", passed: false, path: "pass-through", operation: operationName(pkg) });
+        return rejection(
+          pkg,
+          options,
+          envelopeHash,
+          "rejected",
+          "OPERATION_NOT_GOVERNED",
+          `Operation ${operationName(pkg)} is not present in the plugin or policy, and this deployment denies pass-through operations.`,
+        );
+      }
       trace.emit("verification_step", { actionId, step: "routing_decision", passed: true, path: "pass-through", operation: operationName(pkg) });
     }
 

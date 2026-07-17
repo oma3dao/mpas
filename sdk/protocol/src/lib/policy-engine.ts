@@ -108,7 +108,14 @@ export interface UnsatisfiedThreshold {
 export type PolicyResult =
   | { status: "satisfied" }
   | { status: "additionalApprovalsRequired"; unsatisfiedRules: UnsatisfiedThreshold[] }
-  | { status: "denied"; code: "DEFAULT_DENY"; message: string };
+  /**
+   * The Action Package (or policy) contains a value that prevents
+   * deterministic evaluation — e.g. a numeric condition over a value that
+   * cannot be parsed as a number. Per the JSON Verifier Policy Profile,
+   * such packages are treated as malformed rather than silently matched
+   * or unmatched.
+   */
+  | { status: "malformed"; code: "NUMERIC_CONDITION_UNPARSEABLE" | "POLICY_INVALID"; message: string };
 
 // ---------------------------------------------------------------------------
 // Evaluation
@@ -162,10 +169,17 @@ export function evaluatePolicy(
   // Collect all matching entries within the action's policy array.
   const matchedEntries: PolicyEntry[] = [];
   if (policyEntries) {
-    for (const entry of policyEntries) {
-      if (!entry.match?.conditions || entry.match.conditions.length === 0 || matchesConditions(entry.match.conditions, actionPackage)) {
-        matchedEntries.push(entry);
+    try {
+      for (const entry of policyEntries) {
+        if (!entry.match?.conditions || entry.match.conditions.length === 0 || matchesConditions(entry.match.conditions, actionPackage)) {
+          matchedEntries.push(entry);
+        }
       }
+    } catch (error) {
+      if (error instanceof UnparseableNumericValueError) {
+        return { status: "malformed", code: "NUMERIC_CONDITION_UNPARSEABLE", message: error.message };
+      }
+      throw error;
     }
   }
 
@@ -220,12 +234,17 @@ function evaluateRequirement(
       return evaluateThreshold(requirement, verifiedApprovals, policy, proposerDid);
 
     case "allOf":
-      // All nested requirements must be satisfied.
-      return requirement.requirements.flatMap((r) =>
+      // All nested requirements must be satisfied (vacuously true when empty).
+      return (Array.isArray(requirement.requirements) ? requirement.requirements : []).flatMap((r) =>
         evaluateRequirement(r, verifiedApprovals, policy, proposerDid),
       );
 
-    case "anyOf":
+    case "anyOf": {
+      // An anyOf over zero requirements is unsatisfiable. Policy validation
+      // should reject such policies at load time; evaluation fails closed.
+      if (!Array.isArray(requirement.requirements) || requirement.requirements.length === 0) {
+        return [unsatisfiableRequirement()];
+      }
       // At least one nested requirement must be fully satisfied.
       for (const r of requirement.requirements) {
         const result = evaluateRequirement(r, verifiedApprovals, policy, proposerDid);
@@ -236,6 +255,7 @@ function evaluateRequirement(
       // None satisfied — return the unsatisfied from the first branch as representative.
       // (The operator can see what's needed for any path.)
       return evaluateRequirement(requirement.requirements[0], verifiedApprovals, policy, proposerDid);
+    }
 
     default:
       return [];
@@ -285,6 +305,18 @@ function evaluateThreshold(
   ];
 }
 
+/** Synthetic unsatisfied entry for structurally unsatisfiable requirements (fail closed). */
+function unsatisfiableRequirement(): UnsatisfiedThreshold {
+  return {
+    requirement: { type: "threshold", threshold: 1 },
+    requiredRole: "(unsatisfiable requirement)",
+    requiredDecision: "approve",
+    threshold: 1,
+    found: 0,
+    eligibleSigners: [],
+  };
+}
+
 /**
  * Resolves eligible signers for a threshold requirement.
  * Checks eligibleSigners (inline) first, then eligibleSignerGroup in signerGroups.
@@ -332,16 +364,16 @@ function conditionMatches(condition: PolicyCondition, actionPackage: ActionPacka
       return Array.isArray(condition.value) && !condition.value.includes(actual);
 
     case "gt":
-      return toNumber(actual) > toNumber(condition.value);
+      return toNumber(actual, condition) > toNumber(condition.value, condition);
 
     case "gte":
-      return toNumber(actual) >= toNumber(condition.value);
+      return toNumber(actual, condition) >= toNumber(condition.value, condition);
 
     case "lt":
-      return toNumber(actual) < toNumber(condition.value);
+      return toNumber(actual, condition) < toNumber(condition.value, condition);
 
     case "lte":
-      return toNumber(actual) <= toNumber(condition.value);
+      return toNumber(actual, condition) <= toNumber(condition.value, condition);
 
     case "exists":
       return actual !== undefined;
@@ -360,14 +392,28 @@ function conditionMatches(condition: PolicyCondition, actionPackage: ActionPacka
   }
 }
 
-function toNumber(value: unknown): number {
-  if (typeof value === "number") return value;
-  if (typeof value === "bigint") return Number(value);
-  if (typeof value === "string") {
-    const n = Number(value);
-    return Number.isNaN(n) ? -Infinity : n;
+export class UnparseableNumericValueError extends Error {
+  constructor(condition: PolicyCondition, value: unknown) {
+    super(
+      `Value at ${condition.source}${condition.path} (${JSON.stringify(value)}) cannot be parsed as a number for the "${condition.op}" comparison. ` +
+        "Numeric conditions over unparseable values make the Action Package malformed (JSON Verifier Policy Profile §5.4).",
+    );
+    this.name = "UnparseableNumericValueError";
   }
-  return -Infinity;
+}
+
+function toNumber(value: unknown, condition: PolicyCondition): number {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "bigint") return Number(value);
+  if (typeof value === "string" && value.trim() !== "") {
+    const n = Number(value);
+    if (!Number.isNaN(n)) return n;
+  }
+  // A missing path evaluates false for non-existence operators per the
+  // profile; undefined therefore short-circuits to "no match" rather than
+  // malformed.
+  if (value === undefined) return NaN;
+  throw new UnparseableNumericValueError(condition, value);
 }
 
 // ---------------------------------------------------------------------------

@@ -231,6 +231,28 @@ describe("HTTP endpoint", () => {
     });
   });
 
+  it("rejects an ungoverned operation when passThrough is deny", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "mpas-http-configs-deny-"));
+    const config = await readJson<Record<string, unknown>>(join(fixturesDir, "configs", "github-auto-approve.json"));
+    config.plugin = {
+      ...(config.plugin as Record<string, unknown>),
+      path: join(fixturesDir, "plugins", "github-demo-plugin.json"),
+    };
+    config.passThrough = "deny";
+    await writeFile(join(dir, "github-deny.json"), `${JSON.stringify(config, null, 2)}\n`);
+
+    const app = await makeApp(dir);
+    // create_issue is deliberately absent from the demo plugin and policy —
+    // the canonical pass-through operation.
+    const response = await submitFixture(app, "valid-no-approval-required.json");
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      result: "rejected",
+      error: { code: "OPERATION_NOT_GOVERNED" },
+    });
+  });
+
   it("rejects a proposer outside the allowed proposer set (proposer gating)", async () => {
     // Config identical to auto-approve, but the proposers group excludes the
     // fixture proposer (maintainers only). The package still verifies

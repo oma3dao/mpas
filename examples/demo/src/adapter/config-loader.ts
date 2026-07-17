@@ -70,6 +70,12 @@ export interface DeploymentConfig {
   executionTarget: McpStdioTarget | McpHttpTarget;
   policy: MpasApplicationPolicy;
   signerKeys: SignerKey[];
+  /**
+   * Routing for operations absent from both the plugin and the policy.
+   * "allow" (default) proxies them with the adapter credential on the
+   * proposer's signature alone; "deny" rejects them (fail closed).
+   */
+  passThrough?: "allow" | "deny";
 }
 
 export interface LoadedDeploymentConfig {
@@ -187,6 +193,7 @@ const deploymentConfigSchema = {
       },
       minItems: 1,
     },
+    passThrough: { enum: ["allow", "deny"] },
   },
   additionalProperties: false,
 };

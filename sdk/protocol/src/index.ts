@@ -20,6 +20,7 @@ export * from "./lib/mcp-payload.js";
 export {
   evaluatePolicy,
   checkProposerAuthorization,
+  UnparseableNumericValueError,
   type ProposerGateResult,
   type PolicyConfig,
   type PolicyEntry,

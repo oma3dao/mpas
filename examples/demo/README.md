@@ -236,9 +236,12 @@ You do not edit the plugin directly. Its integrity is verified via `artifactDid`
 | `credentialBindings`   | Maps credential handles to providers (`"github-test-token"` → `file`)       |
 | `executionTarget`      | How to call the real MCP server (`mcp.stdio` spawns a child process)        |
 | `policy`               | Full `MpasApplicationPolicy` object: signerGroups, policies (keyed by action name), defaultRequirement |
-| `signerKeys`           | Key registry: DID + label + publicJwk for each participant (for signature verification) |
+| `signerKeys`           | Key registry: DID + label (+ publicJwk for non-did:jwk methods) for each participant |
+| `passThrough`          | Routing for ungoverned operations: `"allow"` (default) or `"deny"`          |
 
 **Relationship between plugin and policy:** The plugin describes what operations exist and their payload schemas. The `policy` object (an embedded `MpasApplicationPolicy`) defines who can propose, who can approve, and what thresholds apply. An operation is governed if it's in the plugin's `operations` OR has an entry in `policy.policies`.
+
+**The governance boundary:** anything outside the governed set is routed as pass-through — after proposer gating and signature verification it executes with the adapter's credential on the proposer's signature alone, and `defaultRequirement` does not apply. The demo exposes `create_issue` this way on purpose to demonstrate the boundary. If you care about an operation, put it in the plugin or give it a policy entry; to refuse ungoverned operations entirely, set `passThrough: "deny"`.
 
 ### Bridge Config
 
@@ -281,7 +284,7 @@ The filename (minus `.json`) is the credential handle. At dispatch time, the ada
 
 | Action                             | Approval requirement                        |
 | ---------------------------------- | ------------------------------------------- |
-| `create_issue`                     | Pass-through (not governed, no approval)    |
+| `create_issue`                     | Pass-through (not governed; proposer signature only — see governance boundary note) |
 | `delete_branch`                    | 1 maintainer approval                       |
 | `merge_pull_request` into `main`   | 1 maintainer approval                       |
 

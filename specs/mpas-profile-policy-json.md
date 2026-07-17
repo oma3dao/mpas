@@ -121,6 +121,8 @@ Production deployments SHOULD require at least one non-proposer approval as the 
 
 The default requirement MUST NOT be used to execute an unknown, unsupported, or malformed action. Operation support and payload validation are determined by the Verifier under the declared execution profile, not by the absence of a matching policy.
 
+**Scope — governed operations only.** `defaultRequirement` is the baseline for *governed* operations: those present in the Application Plugin or named by a policy entry. It does not apply to operations a deployment routes as pass-through (see the MCP Execution Profile §5 step 2): a pass-through operation executes on the Proposer's verified signature alone, after proposer gating (4.6), with no schema validation and no policy evaluation. Operators who assume `defaultRequirement` covers every conceivable operation should either enumerate all governed operations in the plugin/policy or configure their deployment to deny pass-through routing.
+
 ### 4.6 Proposer Gating
 
 The Verifier MUST reject any Action Package whose `actionEnvelope.proposer.did` is not recognized. Proposer gating always occurs before policy evaluation.
