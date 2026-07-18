@@ -2,6 +2,12 @@
 
 This folder will contain the official MPAS conformance tools. Implementers test their MPAS implementation against these tools to validate correctness.
 
+## Scope: Conformance vs. Application CI
+
+Conformance tests are **protocol-level and implementation-agnostic**: they validate any MPAS implementation — any credential adapter, coordination service, or bridge, from any vendor — against the specifications (hash binding, duplicate-key rejection, lifecycle semantics, result codes). They know nothing about any particular application.
+
+They are distinct from the **application-level test harnesses** (compatibility and approval harnesses, hosted with production implementations in `oma3/mpas-applications`), which validate that one specific generated bridge is a faithful drop-in for one specific upstream server. When conformance tools exist, application CI runs the relevant conformance suite as one additional stage; the two layers do not merge. See `docs/features/bridge-generator/spec.md` §1.2.
+
 ## Conformance Model
 
 The conformance framework defines three test roles:

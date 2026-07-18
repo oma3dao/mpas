@@ -33,7 +33,7 @@ This repository is the OMA3-owned home of the MPAS standard:
 
 The example credential adapter uses a JSON policy format as a pragmatic choice for demonstration. Production implementations may use OPA, Cedar, or any other policy engine that satisfies the MPAS specification requirements.
 
-Production implementations are maintained independently. See the application registry for known implementations.
+Production implementations are maintained independently — reference implementations live in `oma3/mpas-applications`, and third-party or vendor implementations live in their publishers' repositories. The application registry in this repo is the index that points to all of them. This split is deliberate: this repository is the normative home (specifications, SDK, conformance, registry, teaching examples); implementations people deploy in production live elsewhere.
 
 ## Architecture
 

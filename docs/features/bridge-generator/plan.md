@@ -6,6 +6,8 @@ This document describes a toolchain for generating MPAS-compatible bridge server
 
 The goal is to scale MPAS adoption by turning existing MCP servers into MPAS-aware drop-in replacements.
 
+Contracts for the remaining work — CLI surface, artifact schemas, determinism rules, folder layout, harness behaviors — are specified in [spec.md](./spec.md). This document covers what and when; spec.md covers exactly what gets built.
+
 ---
 
 ## Status
@@ -33,13 +35,17 @@ Generated bridges import `@oma3/mpas` for protocol operations and `@modelcontext
 
 ### Remaining (to be built in `oma3/mpas-applications`)
 
-| Step | Description | Status |
-|------|-------------|--------|
-| 6. Compatibility Test Harness | Automated tests comparing upstream vs. bridge tool surfaces | ❌ Not started |
-| 7. Approval Test Harness | Generated test suites exercising the approval flow | ❌ Not started |
-| 8. Discovery Snapshot | Persist `tools-list.snapshot.json`, `metadata.json`, `classification.json` for review | ❌ Not started |
-| 9. Registry Entry Generation | Generate `application-registry/*.json` entries for OMA3 | ❌ Not started |
-| 10. Structured Output | Per-application folder layout under `applications/<name>/` | ❌ Not started |
+| Step | Milestone | Description | Status |
+|------|-----------|-------------|--------|
+| — | M0 | Generator test foundation: own devDependencies, discovery tests against mock MCP fixtures, compile-check and golden-file tests of generated output | ❌ Not started |
+| 8. Discovery Snapshot | M1 | Persist `tools-list.snapshot.json`, `metadata.json`, `classification.json` for review; compute the `toolSurface` hash | ❌ Not started |
+| 10. Structured Output | M2 | `generate --app` orchestrator; per-application folder layout under `applications/<name>/` with regeneration semantics | ❌ Not started |
+| 6. Compatibility Test Harness | M3 | Shared harness comparing upstream vs. bridge tool surfaces (config-driven, not generated per app) | ❌ Not started |
+| 7. Approval Test Harness | M4 | Shared harness exercising the four approval scenarios through the generated bridge (extracted from the demo e2e stack) | ❌ Not started |
+| 9. Registry Entry Generation | M5 | Generate `application-registry/*.json` entries, validated against the registry schema | ❌ Not started |
+| — | — | Reconcile the existing `application-registry/github-demo-oma3dao.json` (stale plugin path and DIDs) | ❌ Not started |
+
+Build order is M0 → M1 → M2 → M3 → M4 → M5: the snapshot (M1) is the keystone artifact the folder layout (M2) packages and both harnesses (M3/M4) consume; the registry entry (M5) is generated last so it attests to a tested artifact. M0 comes first because every later milestone teaches the generator new outputs, and the generator currently has no tests of its own.
 
 ---
 
@@ -82,6 +88,8 @@ The bridge-generator stays in `oma3/mpas` — it's a general-purpose protocol to
 
 The application-registry in `oma3/mpas/application-registry` is a lightweight index. Entries reference implementations wherever they live — `oma3/mpas-applications`, third-party repos, vendor repos.
 
+This split also draws a testing boundary: `oma3/mpas/conformance/` holds official, implementation-agnostic protocol conformance tests (specs-level, any implementation), while the compat/approval harnesses in `oma3/mpas-applications` are application-level QA for specific generated bridges. When conformance tools exist, application CI runs the relevant conformance suite as one additional pipeline stage (Phase 6); the two layers never merge. See spec.md §1.2.
+
 ---
 
 ## Core Idea
@@ -115,6 +123,10 @@ From the agent's perspective, the bridge should look like the GitHub MCP server.
 ---
 
 ## Terminology
+
+### Discovery
+
+Steps 1–2 in the status table (MCP Server Intake + Tool Discovery): spawning the upstream MCP server, performing the MCP handshake, and capturing `tools/list`. The generator already performs discovery during generation; the Discovery Snapshot (step 8 / M1) persists its results as reviewable artifacts instead of using them once and discarding them.
 
 ### Upstream MCP Server
 
@@ -386,3 +398,4 @@ When OMA3 conformance tests exist, bridge generation includes certification pre-
 3. What level of review is required before merging a generated bridge?
    - Could be human, agent, or security auditor — up to the developer.
 4. Should the compatibility and approval test harnesses be generated per-application, or be a shared test runner that takes a bridge config as input?
+   - **Resolved: shared runner, generated config.** Per-application generated test suites drift from the harness that runs them and multiply review burden. The generator emits only a small `harness-config.json` (upstream launch command, intentional deviations); the high-impact tool set is derived at run time from `classification.json` so review flows through automatically. The two harnesses live once in `oma3/mpas-applications` and take an application folder as input. A harness fix benefits every application at once. See spec.md §6.

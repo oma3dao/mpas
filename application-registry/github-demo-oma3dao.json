@@ -3,7 +3,7 @@
   "application": {
     "name": "GitHub Demo",
     "description": "MPAS demo using limited GitHub repository management via MPAS-protected operations.",
-    "applicationDid": "did:web:github.com",
+    "applicationDid": "did:web:github.example",
     "website": "https://github.com"
   },
   "native": false,
@@ -14,8 +14,8 @@
     "package": "@modelcontextprotocol/server-github"
   },
   "plugin": {
-    "repository": "https://github.com/oma3dao/mpas/tree/main/examples/demo/plugins/github.plugin.json",
-    "pluginDid": "did:web:plugins.oma3.org:github-demo"
+    "repository": "https://github.com/oma3dao/mpas/blob/main/examples/demo/plugins/github-demo-plugin.json",
+    "pluginDid": "did:web:plugins.example.com:github-demo-plugin"
   },
   "publisher": {
     "name": "OMA3",
