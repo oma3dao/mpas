@@ -4,6 +4,7 @@ import { dirname, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { generateBridge } from "./bridge-codegen.js";
 import { discoverUpstream } from "./discovery.js";
+import { runGenerate } from "./generate.js";
 import { generatePlugin } from "./plugin-codegen.js";
 
 interface CliArgs {
@@ -13,7 +14,22 @@ interface CliArgs {
   upstreamArgs: string[];
 }
 
+interface GenerateCliArgs {
+  appName: string;
+  outDir: string;
+  orgConfigPath?: string;
+  applicationDid?: string;
+  upstreamCommand: string;
+  upstreamArgs: string[];
+}
+
 export async function run(argv = process.argv.slice(2)): Promise<void> {
+  if (argv[0] === "generate") {
+    const args = parseGenerateArgs(argv.slice(1));
+    await runGenerate(args);
+    return;
+  }
+
   const args = parseArgs(argv);
   const upstream = await discoverUpstream(args.upstreamCommand, args.upstreamArgs);
 
@@ -24,6 +40,58 @@ export async function run(argv = process.argv.slice(2)): Promise<void> {
     await writeOutput(args.outputPlugin, generatePlugin(upstream.tools));
     process.stderr.write(`Plugin written to: ${args.outputPlugin}\n`);
   }
+}
+
+function parseGenerateArgs(argv: string[]): GenerateCliArgs {
+  let appName: string | undefined;
+  let outDir: string | undefined;
+  let orgConfigPath: string | undefined;
+  let applicationDid: string | undefined;
+  let delimiterIndex = -1;
+
+  for (let index = 0; index < argv.length; index++) {
+    const arg = argv[index];
+    if (arg === "--") {
+      delimiterIndex = index;
+      break;
+    }
+    if (arg === "--app") {
+      appName = argv[++index];
+      continue;
+    }
+    if (arg === "--out") {
+      outDir = argv[++index];
+      continue;
+    }
+    if (arg === "--org-config") {
+      orgConfigPath = argv[++index];
+      continue;
+    }
+    if (arg === "--application-did") {
+      applicationDid = argv[++index];
+      continue;
+    }
+    throw usage(`Unknown argument: ${arg}`);
+  }
+
+  if (!appName) {
+    throw usage("Missing required --app <name>.");
+  }
+  if (!outDir) {
+    throw usage("Missing required --out <dir>.");
+  }
+  if (delimiterIndex < 0 || !argv[delimiterIndex + 1]) {
+    throw usage("Missing upstream command after --.");
+  }
+
+  return {
+    appName,
+    outDir: resolve(outDir),
+    ...(orgConfigPath ? { orgConfigPath: resolve(orgConfigPath) } : {}),
+    ...(applicationDid ? { applicationDid } : {}),
+    upstreamCommand: argv[delimiterIndex + 1],
+    upstreamArgs: argv.slice(delimiterIndex + 2),
+  };
 }
 
 function parseArgs(argv: string[]): CliArgs {
@@ -72,7 +140,8 @@ function usage(message: string): Error {
   return new Error(`${message}
 
 Usage:
-  bridge-generator --output-bridge <path> [--output-plugin <path>] -- <upstream-command> [upstream-args...]`);
+  bridge-generator --output-bridge <path> [--output-plugin <path>] -- <upstream-command> [upstream-args...]
+  bridge-generator generate --app <name> --out <dir> [--org-config <path>] [--application-did <did>] -- <upstream-command> [upstream-args...]`);
 }
 
 function exitCodeFor(error: unknown): number {

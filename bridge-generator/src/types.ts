@@ -13,6 +13,7 @@ export interface UpstreamInfo {
   args: string[];
   serverName: string;
   serverVersion?: string;
+  protocolVersion?: string;
   tools: McpToolDefinition[];
 }
 

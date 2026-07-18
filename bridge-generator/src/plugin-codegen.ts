@@ -36,7 +36,7 @@ export function generatePlugin(tools: McpToolDefinition[]): string {
   return `${JSON.stringify(plugin, null, 2)}\n`;
 }
 
-function inferImpact(name: string): "medium" | "high" | "critical" {
+export function inferImpact(name: string): "medium" | "high" | "critical" {
   const normalized = name.toLowerCase();
   if (/(delete|remove|destroy|drop|purge)/.test(normalized)) {
     return "critical";

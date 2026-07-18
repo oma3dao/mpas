@@ -141,6 +141,7 @@ export async function discoverUpstream(command: string, args: string[]): Promise
       args,
       serverName: initResult.serverInfo.name,
       serverVersion: initResult.serverInfo.version,
+      protocolVersion: initResult.protocolVersion,
       tools,
     };
   } finally {
