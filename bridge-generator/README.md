@@ -16,7 +16,7 @@ Contracts for everything emitted are specified in [`docs/features/bridge-generat
 cd bridge-generator
 npm install
 npm run build
-npm test          # 39 tests; all should pass
+npm test          # 43 tests; all should pass
 ```
 
 ## Two modes
@@ -40,13 +40,13 @@ Output:
 
 ```text
 applications/github/
-  plugin.json                     MpasApplicationPlugin — review DIDs before publishing
+  plugin.json                     MpasApplicationPlugin — THE governed set; edit this (membership, DIDs, impacts)
   registry-entry.json             Application Registry draft (PLACEHOLDERs unless --org-config given)
   harness-config.json             Input for the compat/approval harnesses
-  build-artifacts/
-    tools-list.snapshot.json      Verbatim tool surface + toolSurface hash
+  build-artifacts/                Advisory/debug artifacts — not governance controls
+    tools-list.snapshot.json      Verbatim tool surface + toolSurface hash (regen uses it to remember your removals)
     metadata.json                 Server info, protocol version, capture timestamp
-    classification.json           Draft impact classification — REVIEW THIS
+    classification.json           Heuristic impact suggestions to consult while editing plugin.json
   bridge/
     src/index.ts                  The generated bridge MCP server
     package.json / tsconfig.json / README.md
@@ -78,11 +78,15 @@ node dist/index.js \
 
 ## The review workflow (do this before publishing anything)
 
-1. **`build-artifacts/classification.json`** — the impact levels are a name-based heuristic (`delete|remove|destroy|drop|purge` → critical, `merge|deploy|release|transfer|revoke` → high, everything else medium). Review every operation: fix wrong impacts, change each `rationale` from `"name-heuristic"` to a short justification, and flip `"draft": true` to `false` when done. Reviewed impacts flow into `plugin.json` on the next regeneration; the harnesses warn while `draft` is `true`.
-2. **`plugin.json`** — replace the `did:web:PLACEHOLDER` values (pluginDid, publisherDid, applicationDid) with real DIDs. The plugin's declared operations are the *governed set*; anything the upstream exposes that you leave out of the plugin routes as pass-through at deployments that allow it.
-3. **`registry-entry.json`** — replace PLACEHOLDERs (or use `--org-config`), set `plugin.repository` to where the plugin will actually be published, then submit as a PR to `oma3/mpas/application-registry/{application}-{org}.json`. The entry already pins `plugin.artifactDid` and `upstream.toolSurface` for you.
-4. **`harness-config.json`** — if you intentionally rename tools, wrap schemas, or edit descriptions in the bridge, record it under `intentionalDeviations` so the compat harness allowlists it. Every tool you reference must exist in the snapshot.
-5. Log your decisions in `CHANGELOG.md`.
+`plugin.json` is the source of truth for governance: an operation is governed iff it appears in the plugin's `operations` (per the MPAS Application Plugin profile). Everything under `build-artifacts/` is advisory — inputs to *your* judgment, not controls the generator or harnesses enforce.
+
+1. **`plugin.json`** — this is the file you edit.
+   - **Membership:** delete any operation that should route as pass-through instead of being governed. Regeneration remembers your removals (see below) and won't re-add them.
+   - **Impacts:** each operation's `impact` starts as a name-based heuristic (`delete|remove|destroy|drop|purge` → critical, `merge|deploy|release|transfer|revoke` → high, everything else medium). Fix wrong ones; your edits survive regeneration. Consult `build-artifacts/classification.json` for the heuristic's rationale per tool if useful.
+   - **Identity:** replace the `did:web:PLACEHOLDER` values (pluginDid, publisherDid, applicationDid) with real DIDs, and fill `credentialRequirements`. These also survive regeneration.
+2. **`registry-entry.json`** — replace PLACEHOLDERs (or use `--org-config`), set `plugin.repository` to where the plugin will actually be published, then submit as a PR to `oma3/mpas/application-registry/{application}-{org}.json`. The entry already pins `plugin.artifactDid` and `upstream.toolSurface` for you.
+3. **`harness-config.json`** — if you intentionally rename tools, wrap schemas, or edit descriptions in the bridge, record it under `intentionalDeviations` so the compat harness allowlists it. Every tool you reference must exist in the snapshot.
+4. Log your decisions in `CHANGELOG.md`.
 
 ## Regeneration
 
@@ -90,7 +94,8 @@ Re-running `generate` over an existing folder is safe and diff-friendly:
 
 - Generated files are overwritten; against an unchanged upstream, **only `metadata.json` changes** (its capture timestamp). Any other diff means the upstream actually drifted — read it.
 - `CHANGELOG.md` is never touched. Files listed in `.generator-keep` (one relative path per line, `#` comments allowed) are never touched.
-- `classification.json` is merged: your reviewed entries survive verbatim, new upstream tools are added as `name-heuristic` drafts (re-flagging `draft: true`), removed tools are dropped.
+- **`plugin.json` is merged, and your membership edits stick.** The previous snapshot minus the previous plugin is remembered as intentional pass-through: a tool you deleted from the plugin is not re-added on regen. Genuinely new upstream tools (absent from the previous snapshot) *are* added as governed candidates so they can't slip in unnoticed — delete them if they shouldn't be governed. Tools the upstream dropped disappear. DIDs, `credentialRequirements`, and per-operation `impact` values are preserved from your existing plugin; operation descriptions and payload schemas refresh from discovery. (You do **not** need to list `plugin.json` in `.generator-keep` — doing so would also block new-tool surfacing; remove it if you added it under older generator versions.)
+- `classification.json` is merged: your reviewed entries survive verbatim, new upstream tools are added as `name-heuristic` drafts (re-flagging `draft: true`), removed tools are dropped. It never drives plugin membership.
 - `harness-config.json` is merged: the upstream command is refreshed, your `intentionalDeviations` and `env` survive.
 
 ## Building a generated bridge

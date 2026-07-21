@@ -119,7 +119,7 @@ The one artifact where a wall-clock timestamp is correct — point-in-time captu
 
 ### 3.4 `classification.json`
 
-The impact heuristic's output, explicitly framed as a draft for manual review (in practice AI-assisted, but a person owns the sign-off) — the generator's name-regex classification (delete/remove/destroy → critical, merge/deploy/transfer → high, else medium) is a starting point, not a judgment.
+The impact heuristic's output — a **human advisory artifact** to consult while editing `plugin.json`, not a governance control. Per the Application Plugin profile, an operation is governed iff it appears in `plugin.json` `operations` (or is named in deployment policy); the optional per-operation `impact` is informational. The generator's name-regex classification (delete/remove/destroy → critical, merge/deploy/transfer → high, else medium) is a starting point for the reviewer's judgment, and it plays no role in deciding which operations the regenerated plugin contains (Section 5).
 
 ```json
 {
@@ -133,7 +133,7 @@ The impact heuristic's output, explicitly framed as a draft for manual review (i
 ```
 
 - `rationale` is `"name-heuristic"` for generated entries; manual review SHOULD change it (e.g. `"reviewed"`), which also documents review state per operation. When every operation has been reviewed, `draft` flips to `false` — the file-level signal the harnesses and registry gating read.
-- Reviewed classifications feed back into `plugin.json` impact fields on regeneration (Section 5).
+- Classification does NOT feed into `plugin.json` on regeneration — neither membership nor impacts of existing operations (Section 5). It seeds the heuristic `impact` of operations *newly added* to the plugin; everything else is for the reviewer's eyes.
 - No timestamps.
 
 ### 3.5 `harness-config.json`
@@ -154,7 +154,7 @@ The application-specific input consumed by both shared harnesses (Section 6). Ge
 ```
 
 - `intentionalDeviations` is empty when generated; reviewers populate it to allowlist deliberate differences (the "unless intentionally renamed/wrapped/modified" clauses in plan.md §6).
-- The high-impact tool set is deliberately NOT stored here. It is derived by the harnesses at run time from `classification.json` (`impact` of `high` or `critical`), so there is exactly one source of truth and manual review of the classification flows into harness behavior without a second file to keep in sync.
+- The high-impact tool set is deliberately NOT stored here. It is derived by the harnesses at run time from `plugin.json` (operations with `impact` of `high` or `critical`), so there is exactly one source of truth — the governed set the reviewer actually edits — and no second file to keep in sync. `classification.json` is advisory input to that editing, never a harness input.
 - **Anti-drift rule:** every tool name referenced anywhere in `intentionalDeviations` MUST exist in `tools-list.snapshot.json`. Harnesses FAIL on dangling references — a deviation entry for a tool that no longer exists means the config is stale relative to the snapshot.
 
 ### 3.6 `registry-entry.json`
@@ -194,13 +194,28 @@ Running `generate` over an existing `applications/<name>/` folder:
 
 | File | Behavior |
 | :--- | :--- |
-| `build-artifacts/*`, `bridge/src/index.ts`, `bridge/README.md`, `plugin.json`, `registry-entry.json` | Overwritten (generated surface) |
+| `build-artifacts/*` (except merged `classification.json`), `bridge/src/index.ts`, `bridge/README.md`, `registry-entry.json` | Overwritten (generated surface) |
 | `CHANGELOG.md` | Created if absent; never overwritten |
+| `plugin.json` | Merged (membership rules below): reviewer-removed operations stay removed, new upstream tools are added, identity fields and impacts preserved, descriptions/schemas refreshed |
 | `harness-config.json` | Merged: generated fields refreshed, `intentionalDeviations` and other manual edits preserved |
 | Files listed in `.generator-keep` (one path per line, optional) | Never overwritten |
-| `classification.json` | Merged: new tools added with heuristic impact + `"name-heuristic"` rationale; existing entries (human-reviewed) preserved; reviewed impacts flow into the regenerated `plugin.json` |
+| `classification.json` | Merged: new tools added with heuristic impact + `"name-heuristic"` rationale; existing entries (human-reviewed) preserved. Advisory only — never consulted for plugin membership |
 
-This is how "generated then checked in, edit freely" survives regeneration: the generator owns the generated surface, reviewers own review state, and the boundary is explicit.
+### 5.1 `plugin.json` membership on regeneration
+
+The plugin is the governance control, so the reviewer's membership edits are the state to preserve. The previous `tools-list.snapshot.json` records the full upstream surface the reviewer last saw; the previous `plugin.json` records what they chose to govern. Their difference — **old snapshot − old plugin — is intentional pass-through** and is remembered without any extra bookkeeping file.
+
+A newly discovered tool is included in the regenerated plugin's `operations` iff:
+
+- there is no previous `plugin.json` (first generate → all discovered tools included), or
+- it appears in the previous plugin's `operations` (still governed), or
+- it is absent from the previous snapshot (genuinely new upstream tool — included as a governed candidate so reviewers can't silently miss it; delete it to make it pass-through).
+
+Consequences: a tool in the old snapshot but not the old plugin is NOT re-added; a tool the upstream dropped disappears from the plugin. If a previous plugin exists but the previous snapshot is missing, new and reviewed-out tools are indistinguishable — the previous plugin's membership is treated as authoritative and the skipped tools are logged for manual review (the regen writes a fresh snapshot, so the ambiguity is one-time).
+
+For operations that survive the merge, `pluginDid`, `pluginVersion`, `publisherDid`, `applicationDid` (unless `--application-did`/`--org-config` overrides it), `credentialRequirements`, and per-operation `impact` are carried over from the previous plugin; `description` and `executionPayloadSchema` always refresh from discovery. Operations newly added take their heuristic `impact` (seeded via `classification.json`, which preserves reviewed entries).
+
+This is how "generated then checked in, edit freely" survives regeneration: the generator owns the generated surface, reviewers own review state — including plugin membership — and the boundary is explicit.
 
 ---
 
@@ -218,7 +233,7 @@ Spawns the upstream (from `harness-config.json`) and the generated bridge (with 
 | Input schemas deep-equal (modulo `wrappedSchemas`) | FAIL |
 | Descriptions equal (modulo `modifiedDescriptions`) | FAIL |
 | No tool present upstream but missing from the bridge | FAIL |
-| Every high-impact tool (from `classification.json`, `high`/`critical`) present in bridge `TOOLS` and in `plugin.json` operations | FAIL |
+| Every governed operation (`plugin.json` operations, which by definition include the high-impact set via their `impact` fields) present in bridge `TOOLS` | FAIL |
 | Any `intentionalDeviations` reference to a tool absent from the snapshot | FAIL (stale config) |
 | Live upstream `tools/list` vs. stored snapshot (`toolSurface` hash) | **WARN** + emit diff artifact |
 | `classification.json` still has `draft: true` | **WARN** (impact assignments unreviewed) |
@@ -236,7 +251,7 @@ Runs the four canonical scenarios end-to-end through the *actual generated bridg
 3. High-impact action, insufficient approvals → adapter blocks.
 4. High-impact action, threshold met → adapter dispatches upstream → bridge returns the result.
 
-Setup is generated per run, not per application: ephemeral did:jwk keys, a deployment config assembled from the app's `plugin.json`, and a template policy that threshold-gates one tool drawn from the `high`/`critical` entries of `classification.json`. If the classification is still `draft: true`, the harness runs anyway but emits the same unreviewed-classification warning as the compat harness — the scenarios are still valid, but the choice of gated tool has not been signed off. Nothing application-specific is committed beyond `harness-config.json`.
+Setup is generated per run, not per application: ephemeral did:jwk keys, a deployment config assembled from the app's `plugin.json`, and a template policy that threshold-gates one tool drawn from the plugin's `high`/`critical` `impact` operations (falling back to any governed operation if none are marked high-impact). If `classification.json` is still `draft: true`, the harness runs anyway but emits the same unreviewed-classification warning as the compat harness — the scenarios are still valid, but the impact assignments informing the choice of gated tool have not been signed off. Nothing application-specific is committed beyond `harness-config.json`.
 
 ---
 

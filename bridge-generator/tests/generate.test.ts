@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -140,12 +140,43 @@ describe("runGenerate", () => {
     });
     expect(mergedClassification.draft).toBe(false);
 
-    // Reviewed impact flows into the regenerated plugin.
+    // Classification is advisory: it does not overwrite the plugin's own impact.
     const plugin = await readJson<{ operations: Record<string, { impact: string }> }>(join(appDir, "plugin.json"));
-    expect(plugin.operations.create_issue.impact).toBe("high");
+    expect(plugin.operations.create_issue.impact).toBe("medium");
 
     const mergedHarness = await readJson<typeof harness>(harnessPath);
     expect(mergedHarness.intentionalDeviations.wrappedSchemas).toEqual(["create_issue"]);
+  });
+
+  it("preserves manual plugin edits (impact, DIDs, credentialRequirements) across regeneration (spec §5)", async () => {
+    const appDir = await generate();
+
+    const pluginPath = join(appDir, "plugin.json");
+    const plugin = await readJson<{
+      pluginDid: string;
+      publisherDid: string;
+      applicationDid: string;
+      credentialRequirements: unknown[];
+      operations: Record<string, { impact: string }>;
+    }>(pluginPath);
+    plugin.pluginDid = "did:web:plugins.wivity.example:github";
+    plugin.publisherDid = "did:web:wivity.example";
+    plugin.applicationDid = "did:web:github.example";
+    plugin.credentialRequirements = [{ type: "MembershipCredential" }];
+    plugin.operations.create_issue.impact = "high";
+    await writeFile(pluginPath, `${JSON.stringify(plugin, null, 2)}\n`);
+
+    await generate({ outDir: join(appDir, "..") });
+
+    const regenerated = await readJson<typeof plugin>(pluginPath);
+    expect(regenerated.pluginDid).toBe("did:web:plugins.wivity.example:github");
+    expect(regenerated.publisherDid).toBe("did:web:wivity.example");
+    expect(regenerated.applicationDid).toBe("did:web:github.example");
+    expect(regenerated.credentialRequirements).toEqual([{ type: "MembershipCredential" }]);
+    expect(regenerated.operations.create_issue.impact).toBe("high");
+    // --application-did still wins over the preserved value when given.
+    await generate({ outDir: join(appDir, ".."), applicationDid: "did:web:override.example" });
+    expect((await readJson<typeof plugin>(pluginPath)).applicationDid).toBe("did:web:override.example");
   });
 
   it("applies --application-did and org config to plugin and registry entry", async () => {
@@ -178,6 +209,83 @@ describe("runGenerate", () => {
 
   it("rejects invalid app names", async () => {
     await expect(generate({ appName: "Bad Name!" })).rejects.toBeInstanceOf(GenerateError);
+  });
+});
+
+describe("regeneration plugin membership (spec §5: old snapshot − old plugin = intentional pass-through)", () => {
+  const discoverTools = (names: string[]) => async (command: string, args: string[]) => ({
+    command,
+    args,
+    serverName: "fake-upstream",
+    serverVersion: "1.0.0",
+    protocolVersion: "2024-11-05",
+    tools: names.map((name) => ({ name, description: `${name} tool`, inputSchema: { type: "object" as const } })),
+  });
+
+  async function pluginOperations(appDir: string): Promise<string[]> {
+    const plugin = await readJson<{ operations: Record<string, unknown> }>(join(appDir, "plugin.json"));
+    return Object.keys(plugin.operations);
+  }
+
+  async function removeFromPlugin(appDir: string, name: string): Promise<void> {
+    const pluginPath = join(appDir, "plugin.json");
+    const plugin = await readJson<{ operations: Record<string, unknown> }>(pluginPath);
+    delete plugin.operations[name];
+    await writeFile(pluginPath, `${JSON.stringify(plugin, null, 2)}\n`);
+  }
+
+  it("first generate includes every discovered tool; regen honors removals and surfaces new tools", async () => {
+    const appDir = await generate({ discover: discoverTools(["a", "b", "c"]) });
+    expect(await pluginOperations(appDir)).toEqual(["a", "b", "c"]);
+
+    // Reviewer removes c from the plugin (intentional pass-through).
+    await removeFromPlugin(appDir, "c");
+
+    // Regen against an unchanged upstream: c stays out.
+    await generate({ outDir: join(appDir, ".."), discover: discoverTools(["a", "b", "c"]) });
+    expect(await pluginOperations(appDir)).toEqual(["a", "b"]);
+
+    // Upstream adds d: it appears as a governed candidate; c still stays out.
+    await generate({ outDir: join(appDir, ".."), discover: discoverTools(["a", "b", "c", "d"]) });
+    expect(await pluginOperations(appDir)).toEqual(["a", "b", "d"]);
+
+    // Upstream removes b: it drops from the plugin; prior decisions hold.
+    await generate({ outDir: join(appDir, ".."), discover: discoverTools(["a", "c", "d"]) });
+    expect(await pluginOperations(appDir)).toEqual(["a", "d"]);
+  });
+
+  it("membership does not depend on classification.json", async () => {
+    const appDir = await generate({ discover: discoverTools(["a", "b"]) });
+    await removeFromPlugin(appDir, "b");
+    // classification.json still lists b (it describes the upstream surface, not the governed set).
+    const classification = await readJson<{ operations: Record<string, unknown> }>(
+      join(appDir, "build-artifacts", "classification.json"),
+    );
+    expect(Object.keys(classification.operations)).toEqual(["a", "b"]);
+
+    await generate({ outDir: join(appDir, ".."), discover: discoverTools(["a", "b"]) });
+    expect(await pluginOperations(appDir)).toEqual(["a"]);
+  });
+
+  it("without a previous snapshot, treats the existing plugin as authoritative and warns", async () => {
+    const appDir = await generate({ discover: discoverTools(["a", "b", "c"]) });
+    await removeFromPlugin(appDir, "c");
+    await rm(join(appDir, "build-artifacts", "tools-list.snapshot.json"));
+
+    const logs: string[] = [];
+    await generate({
+      outDir: join(appDir, ".."),
+      discover: discoverTools(["a", "b", "c", "d"]),
+      log: (message) => logs.push(message),
+    });
+
+    // c and d are indistinguishable (new vs. reviewed-out) — neither is added.
+    expect(await pluginOperations(appDir)).toEqual(["a", "b"]);
+    expect(logs.join("\n")).toContain("c, d");
+
+    // The regen rewrote the snapshot, so the next run classifies e as new.
+    await generate({ outDir: join(appDir, ".."), discover: discoverTools(["a", "b", "c", "e"]) });
+    expect(await pluginOperations(appDir)).toEqual(["a", "b", "e"]);
   });
 });
 

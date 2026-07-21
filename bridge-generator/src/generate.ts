@@ -4,6 +4,10 @@
  * Runs discovery once and writes the full applications/<name>/ layout.
  * Regeneration semantics: generated surface overwritten; CHANGELOG.md created
  * once; harness-config and classification merged; .generator-keep respected.
+ * plugin.json is merged, not rebuilt: membership = (old plugin ∩ new upstream)
+ * ∪ tools new since the old snapshot, so operations a reviewer removed from
+ * the plugin stay removed (spec.md §5). Identity fields and reviewed impacts
+ * in the old plugin are preserved; descriptions/schemas refresh from discovery.
  */
 import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
@@ -27,7 +31,7 @@ import {
 import { generateBridge } from "./bridge-codegen.js";
 import { generatePlugin } from "./plugin-codegen.js";
 import { discoverUpstream } from "./discovery.js";
-import type { UpstreamInfo } from "./types.js";
+import type { GeneratedPlugin, McpToolDefinition, UpstreamInfo } from "./types.js";
 
 export const GENERATOR_VERSION = "0.2.0";
 
@@ -92,6 +96,13 @@ export async function runGenerate(options: GenerateOptions): Promise<void> {
     log(`Wrote: ${relativePath}`);
   };
 
+  // Prior state must be read before the generated surface is overwritten:
+  // regeneration membership is derived from old snapshot − old plugin.
+  const previousSnapshot = await readJsonIfExists<{ tools?: Array<{ name: string }> }>(
+    join(appDir, "build-artifacts", "tools-list.snapshot.json"),
+  );
+  const previousPlugin = await readJsonIfExists<Partial<GeneratedPlugin>>(join(appDir, "plugin.json"));
+
   // --- build-artifacts ---
   const snapshot = buildToolsListSnapshot(upstream.tools);
   await writeGenerated("build-artifacts/tools-list.snapshot.json", jsonFile(snapshot));
@@ -106,17 +117,29 @@ export async function runGenerate(options: GenerateOptions): Promise<void> {
   const classification = await mergedClassification(appDir, upstream);
   await writeGenerated("build-artifacts/classification.json", jsonFile(classification));
 
-  // --- plugin.json (reviewed classification impacts flow into the plugin) ---
-  const plugin = JSON.parse(generatePlugin(snapshot.tools)) as {
-    applicationDid: string;
-    operations: Record<string, { impact: string }>;
-  };
+  // --- plugin.json ---
+  // Membership in plugin.operations is the governance control (Application
+  // Plugin profile): tools the reviewer deleted from an existing plugin are
+  // intentional pass-through and must not be re-added. classification.json is
+  // advisory only and never drives membership.
+  const governedTools = selectGovernedTools(snapshot.tools, previousPlugin, previousSnapshot, log);
+  const plugin = JSON.parse(generatePlugin(governedTools)) as GeneratedPlugin;
+  if (previousPlugin) {
+    plugin.pluginDid = previousPlugin.pluginDid ?? plugin.pluginDid;
+    plugin.pluginVersion = previousPlugin.pluginVersion ?? plugin.pluginVersion;
+    plugin.publisherDid = previousPlugin.publisherDid ?? plugin.publisherDid;
+    plugin.applicationDid = previousPlugin.applicationDid ?? plugin.applicationDid;
+    plugin.credentialRequirements = previousPlugin.credentialRequirements ?? plugin.credentialRequirements;
+  }
   if (options.applicationDid ?? orgConfig?.application.applicationDid) {
     plugin.applicationDid = options.applicationDid ?? orgConfig!.application.applicationDid;
   }
-  for (const [name, entry] of Object.entries(classification.operations)) {
-    if (plugin.operations[name]) {
-      plugin.operations[name].impact = entry.impact;
+  for (const [name, operation] of Object.entries(plugin.operations)) {
+    const previousOperation = previousPlugin?.operations?.[name];
+    if (previousOperation?.impact) {
+      operation.impact = previousOperation.impact;
+    } else if (classification.operations[name]) {
+      operation.impact = classification.operations[name].impact;
     }
   }
   await writeGenerated("plugin.json", jsonFile(plugin));
@@ -225,6 +248,51 @@ async function loadOrgConfig(path: string): Promise<OrgConfig> {
     throw new GenerateError(`Org config ${path} must define publisher.name, publisher.githubOrg, and application.applicationDid.`);
   }
   return parsed;
+}
+
+async function readJsonIfExists<T>(path: string): Promise<T | undefined> {
+  if (!existsSync(path)) {
+    return undefined;
+  }
+  try {
+    return JSON.parse(await readFile(path, "utf8")) as T;
+  } catch (error) {
+    throw new GenerateError(`Unable to parse existing ${path}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+/**
+ * Regeneration membership (spec.md §5). A discovered tool is governed iff:
+ * - there is no previous plugin (first generate → all tools), or
+ * - it appears in the previous plugin's operations (still governed), or
+ * - it is absent from the previous snapshot (new upstream tool — included so
+ *   reviewers can't silently miss it).
+ * A tool in the previous snapshot but not the previous plugin was reviewed
+ * out (intentional pass-through) and stays out. Without a previous snapshot,
+ * new and reviewed-out tools are indistinguishable; the previous plugin is
+ * treated as authoritative and skipped tools are logged for review.
+ */
+function selectGovernedTools(
+  tools: McpToolDefinition[],
+  previousPlugin: Partial<GeneratedPlugin> | undefined,
+  previousSnapshot: { tools?: Array<{ name: string }> } | undefined,
+  log: (message: string) => void,
+): McpToolDefinition[] {
+  if (!previousPlugin) {
+    return tools;
+  }
+  const previousOperations = new Set(Object.keys(previousPlugin.operations ?? {}));
+  if (!previousSnapshot?.tools) {
+    const skipped = tools.filter((tool) => !previousOperations.has(tool.name)).map((tool) => tool.name);
+    if (skipped.length > 0) {
+      log(
+        `Warning: no previous tools-list.snapshot.json; kept the existing plugin's operations and left out: ${skipped.join(", ")}. Add any of these to plugin.json manually if they should be governed.`,
+      );
+    }
+    return tools.filter((tool) => previousOperations.has(tool.name));
+  }
+  const previousSurface = new Set(previousSnapshot.tools.map((tool) => tool.name));
+  return tools.filter((tool) => previousOperations.has(tool.name) || !previousSurface.has(tool.name));
 }
 
 async function loadKeepList(appDir: string): Promise<Set<string>> {
