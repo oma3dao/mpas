@@ -5,7 +5,7 @@
     "moduleResolution": "NodeNext",
     "lib": ["ES2022"],
     "types": ["node"],
-    "typeRoots": ["../sdk/protocol/node_modules/@types"],
+    "typeRoots": ["./node_modules/@types"],
     "rootDir": "src",
     "outDir": "dist",
     "strict": true,
