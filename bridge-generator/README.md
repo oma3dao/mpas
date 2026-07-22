@@ -8,7 +8,7 @@ Contracts for everything emitted are specified in [`docs/features/bridge-generat
 
 - Node.js >= 22
 - The upstream MCP server runnable from your shell (any command: `node`, `npx`, `docker run -i`, a binary)
-- For building generated bridges: the `@oma3/mpas` SDK built locally (see "Building a generated bridge" below)
+- For building generated bridges: npm access to the public `@oma3/mpas` SDK
 
 ## Setup
 
@@ -105,16 +105,19 @@ Re-running `generate` over an existing folder is safe and diff-friendly:
 
 ## Building a generated bridge
 
-Generated bridges import `@oma3/mpas`, which is not yet published to npm. On a machine with the `mpas` repo checked out:
+Generated bridges depend on the published `@oma3/mpas` alpha release:
 
 ```sh
-cd sdk/protocol && npm install && npm run build      # once
-
 cd applications/my-app/bridge
-# point the dependency at your local SDK checkout:
-#   "@oma3/mpas": "file:/path/to/mpas/sdk/protocol"
 npm install
 npm run build        # compiles index.ts and copies tools.json into dist/
+```
+
+For local SDK development, override the published dependency without editing
+the generated `package.json` by installing the checkout directly:
+
+```sh
+npm install /path/to/mpas/sdk/protocol
 ```
 
 Run it like the demo proposer bridge — the config format is identical:

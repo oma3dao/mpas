@@ -69,6 +69,12 @@ policy metadata.
 
 ## Usage
 
+Install the current alpha release:
+
+```sh
+npm install @oma3/mpas@alpha
+```
+
 ```typescript
 import {
   verifyActionPackage,
@@ -96,7 +102,7 @@ Each module is available as a direct import for consumers that want to avoid pul
 | `@oma3/mpas/plugin-loader` | Plugin loading & validation |
 | `@oma3/mpas/receipt-builder` | Receipt construction |
 | `@oma3/mpas/auth-requirements-builder` | Auth requirements |
-| `@oma3/mpas/did-key` | DID key utilities |
+| `@oma3/mpas/did-jwk` | DID JWK utilities |
 | `@oma3/mpas/key-manager` | Key management |
 | `@oma3/mpas/coordination-client` | Coordination Service client |
 | `@oma3/mpas/approval-builder` | Approval construction |
@@ -111,6 +117,18 @@ npm run build    # tsc → dist/
 npm run test     # vitest
 ```
 
+For local development before publishing a release, consumers can install this
+directory directly:
+
+```sh
+npm install /path/to/mpas/sdk/protocol
+```
+
+## Releasing
+
+Maintainer release instructions are documented in
+[RELEASING.md](https://github.com/oma3dao/mpas/blob/main/sdk/protocol/RELEASING.md).
+
 ## Tests
 
-42 tests covering all proposer-side primitives, hash utilities, bridge integration, and type conformance.
+59 tests covering all proposer-side primitives, hash utilities, bridge integration, and type conformance.

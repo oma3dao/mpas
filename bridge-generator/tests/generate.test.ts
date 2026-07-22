@@ -50,7 +50,10 @@ describe("runGenerate", () => {
     const appDir = await generate();
     const bridgeSource = await readFile(join(appDir, "bridge", "src", "index.ts"), "utf8");
     const tools = await readJson<Array<Record<string, unknown>>>(join(appDir, "bridge", "src", "tools.json"));
-    const bridgePackage = await readJson<{ scripts: { build: string } }>(join(appDir, "bridge", "package.json"));
+    const bridgePackage = await readJson<{
+      scripts: { build: string };
+      dependencies: Record<string, string>;
+    }>(join(appDir, "bridge", "package.json"));
 
     expect(bridgeSource).toContain('new URL("./tools.json", import.meta.url)');
     expect(bridgeSource).not.toContain('"name": "create_issue"');
@@ -62,6 +65,7 @@ describe("runGenerate", () => {
       _meta: { "example.test/category": "issues" },
     });
     expect(bridgePackage.scripts.build).toContain("copyFileSync('src/tools.json', 'dist/tools.json')");
+    expect(bridgePackage.dependencies["@oma3/mpas"]).toBe("^0.1.0-alpha.0");
   });
 
   it("snapshot, classification, and plugin agree on the tool surface", async () => {

@@ -1,63 +1,98 @@
 {
   "name": "@oma3/mpas",
-  "version": "0.0.0",
+  "version": "0.1.0-alpha.1",
   "description": "MPAS protocol SDK — types, verification, policy evaluation, receipts, and protocol primitives",
+  "license": "MIT",
   "type": "module",
-  "private": true,
+  "main": "./dist/index.js",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
       "default": "./dist/index.js"
     },
     "./policy-engine": {
       "types": "./dist/lib/policy-engine.d.ts",
+      "import": "./dist/lib/policy-engine.js",
       "default": "./dist/lib/policy-engine.js"
     },
     "./plugin-loader": {
       "types": "./dist/lib/plugin-loader.d.ts",
+      "import": "./dist/lib/plugin-loader.js",
       "default": "./dist/lib/plugin-loader.js"
     },
     "./verification": {
       "types": "./dist/lib/verification.d.ts",
+      "import": "./dist/lib/verification.js",
       "default": "./dist/lib/verification.js"
     },
     "./receipt-builder": {
       "types": "./dist/lib/receipt-builder.d.ts",
+      "import": "./dist/lib/receipt-builder.js",
       "default": "./dist/lib/receipt-builder.js"
     },
     "./auth-requirements-builder": {
       "types": "./dist/lib/auth-requirements-builder.d.ts",
+      "import": "./dist/lib/auth-requirements-builder.js",
       "default": "./dist/lib/auth-requirements-builder.js"
     },
     "./did-jwk": {
       "types": "./dist/lib/did-jwk.d.ts",
+      "import": "./dist/lib/did-jwk.js",
       "default": "./dist/lib/did-jwk.js"
     },
     "./trace": {
       "types": "./dist/lib/trace.d.ts",
+      "import": "./dist/lib/trace.js",
       "default": "./dist/lib/trace.js"
     },
     "./key-manager": {
       "types": "./dist/lib/key-manager.d.ts",
+      "import": "./dist/lib/key-manager.js",
       "default": "./dist/lib/key-manager.js"
     },
     "./coordination-client": {
       "types": "./dist/lib/coordination-client.d.ts",
+      "import": "./dist/lib/coordination-client.js",
       "default": "./dist/lib/coordination-client.js"
     },
     "./approval-builder": {
       "types": "./dist/lib/approval-builder.d.ts",
+      "import": "./dist/lib/approval-builder.js",
       "default": "./dist/lib/approval-builder.js"
     },
     "./hash": {
       "types": "./dist/utils/hash.d.ts",
+      "import": "./dist/utils/hash.js",
       "default": "./dist/utils/hash.js"
-    }
+    },
+    "./package.json": "./package.json"
   },
   "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "build": "rm -rf dist && tsc -p tsconfig.build.json",
-    "test": "node tests/scripts/run-tests.mjs"
+    "typecheck": "tsc -p tsconfig.build.json --noEmit",
+    "test": "node tests/scripts/run-tests.mjs",
+    "prepack": "npm run build",
+    "prepublishOnly": "npm test"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/oma3dao/mpas.git",
+    "directory": "sdk/protocol"
+  },
+  "homepage": "https://github.com/oma3dao/mpas/tree/main/sdk/protocol#readme",
+  "bugs": {
+    "url": "https://github.com/oma3dao/mpas/issues"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.13.0",
