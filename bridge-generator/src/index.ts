@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 import { mkdir, writeFile } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { generateBridge } from "./bridge-codegen.js";
+import { generateBridge, generateToolsJson } from "./bridge-codegen.js";
 import { discoverUpstream } from "./discovery.js";
 import { runGenerate } from "./generate.js";
 import { generatePlugin } from "./plugin-codegen.js";
@@ -39,7 +39,10 @@ export async function run(argv = process.argv.slice(2)): Promise<void> {
   const upstream = await discoverUpstream(args.upstreamCommand, args.upstreamArgs);
 
   await writeOutput(args.outputBridge, generateBridge(upstream));
+  const outputTools = join(dirname(args.outputBridge), "tools.json");
+  await writeOutput(outputTools, generateToolsJson(upstream.tools));
   process.stderr.write(`Bridge written to: ${args.outputBridge}\n`);
+  process.stderr.write(`Tools written to: ${outputTools}\n`);
 
   if (args.outputPlugin) {
     await writeOutput(args.outputPlugin, generatePlugin(upstream.tools));

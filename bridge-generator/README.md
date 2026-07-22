@@ -16,7 +16,7 @@ Contracts for everything emitted are specified in [`docs/features/bridge-generat
 cd bridge-generator
 npm install
 npm run build
-npm test          # 50 tests; all should pass
+npm test          # 53 tests; all should pass
 ```
 
 ## Two modes
@@ -49,7 +49,8 @@ applications/my-app/
     metadata.json                 Server info, protocol version, capture timestamp
     classification.json           Heuristic impact suggestions to consult while editing plugin.json
   bridge/
-    src/index.ts                  The generated bridge MCP server
+    src/index.ts                  The generated bridge MCP runtime
+    src/tools.json                Verbatim discovered MCP tool definitions
     package.json / tsconfig.json / README.md
   CHANGELOG.md                    Yours; never overwritten
 ```
@@ -77,6 +78,8 @@ node dist/index.js \
   [--prompt-secret UPSTREAM_API_TOKEN] \
   -- /path/to/upstream-mcp-server
 ```
+
+Low-level mode writes `tools.json` beside the `--output-bridge` file. Keep the two files together; the generated runtime loads its tool surface from that sibling file.
 
 ## The review workflow (do this before publishing anything)
 
@@ -111,7 +114,7 @@ cd applications/my-app/bridge
 # point the dependency at your local SDK checkout:
 #   "@oma3/mpas": "file:/path/to/mpas/sdk/protocol"
 npm install
-npm run build
+npm run build        # compiles index.ts and copies tools.json into dist/
 ```
 
 Run it like the demo proposer bridge — the config format is identical:

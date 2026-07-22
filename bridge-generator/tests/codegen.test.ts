@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import ts from "typescript";
-import { generateBridge } from "../src/bridge-codegen.js";
+import { generateBridge, generateToolsJson } from "../src/bridge-codegen.js";
 import { generatePlugin, inferImpact } from "../src/plugin-codegen.js";
 import type { UpstreamInfo } from "../src/types.js";
 
@@ -27,17 +27,24 @@ const upstream: UpstreamInfo = {
 };
 
 describe("generateBridge", () => {
-  it("embeds every discovered tool statically", () => {
+  it("loads tool definitions from a sibling tools.json", () => {
     const source = generateBridge(upstream);
-    expect(source).toContain('"name": "delete_branch"');
-    expect(source).toContain('"name": "list_repositories"');
-    expect(source).toContain('"title": "Delete Branch"');
-    expect(source).toContain('"outputSchema"');
-    expect(source).toContain('"destructiveHint": true');
-    expect(source).toContain('"example.test/category": "branches"');
-    expect(source).toContain("const TOOLS =");
+    expect(source).toContain('new URL("./tools.json", import.meta.url)');
+    expect(source).toContain("const TOOLS = loadTools();");
+    expect(source).not.toContain('"name": "delete_branch"');
+    expect(source).not.toContain('"example.test/category": "branches"');
     // Unknown tools are rejected at both entry points.
     expect(source).toContain("UNKNOWN_TOOL");
+  });
+
+  it("emits the complete discovered tool list as deterministic JSON", () => {
+    const json = generateToolsJson(upstream.tools);
+    expect(JSON.parse(json)).toEqual(upstream.tools);
+    expect(json).toContain('"outputSchema"');
+    expect(json).toContain('"destructiveHint": true');
+    expect(json).toContain('"example.test/category": "branches"');
+    expect(json.endsWith("\n")).toBe(true);
+    expect(generateToolsJson(upstream.tools)).toBe(json);
   });
 
   it("relays upstream MCP tool results without reshaping them", () => {
@@ -72,6 +79,7 @@ describe("generateBridge", () => {
       ],
     };
     const source = generateBridge(hostile);
+    expect(JSON.parse(generateToolsJson(hostile.tools))).toEqual(hostile.tools);
     const result = ts.transpileModule(source, {
       compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
       reportDiagnostics: true,

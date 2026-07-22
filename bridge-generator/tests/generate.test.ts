@@ -43,6 +43,25 @@ describe("runGenerate", () => {
       "tools-list.snapshot.json",
     ]);
     expect((await readdir(join(appDir, "bridge"))).sort()).toEqual(["README.md", "package.json", "src", "tsconfig.json"]);
+    expect((await readdir(join(appDir, "bridge", "src"))).sort()).toEqual(["index.ts", "tools.json"]);
+  });
+
+  it("keeps the bridge runtime small and writes the verbatim tool surface separately", async () => {
+    const appDir = await generate();
+    const bridgeSource = await readFile(join(appDir, "bridge", "src", "index.ts"), "utf8");
+    const tools = await readJson<Array<Record<string, unknown>>>(join(appDir, "bridge", "src", "tools.json"));
+    const bridgePackage = await readJson<{ scripts: { build: string } }>(join(appDir, "bridge", "package.json"));
+
+    expect(bridgeSource).toContain('new URL("./tools.json", import.meta.url)');
+    expect(bridgeSource).not.toContain('"name": "create_issue"');
+    expect(tools.map((tool) => tool.name)).toEqual(["create_issue", "delete_branch", "merge_pull_request"]);
+    expect(tools[0]).toMatchObject({
+      title: "Create Issue",
+      outputSchema: { type: "object" },
+      annotations: { destructiveHint: false },
+      _meta: { "example.test/category": "issues" },
+    });
+    expect(bridgePackage.scripts.build).toContain("copyFileSync('src/tools.json', 'dist/tools.json')");
   });
 
   it("snapshot, classification, and plugin agree on the tool surface", async () => {

@@ -20,7 +20,7 @@ Contracts for the remaining work — CLI surface, artifact schemas, determinism 
 | 2. Tool Discovery | MCP handshake + `tools/list` capture | ✅ Done |
 | 3. Risk Classification | Heuristic impact inference from tool names (`critical`/`high`/`medium`) | ✅ Done |
 | 4. Application Plugin Generation | Full `MpasApplicationPlugin` JSON with all operations | ✅ Done |
-| 5. Bridge Scaffold Generation | Complete TypeScript MPAS bridge with approval flow, coordination, wait/poll | ✅ Done |
+| 5. Bridge Scaffold Generation | TypeScript MPAS runtime plus separate verbatim `tools.json`, with approval flow, coordination, wait/poll | ✅ Done |
 
 The generator is a CLI:
 
@@ -31,7 +31,7 @@ npx bridge-generator \
   -- <upstream-command> [upstream-args...]
 ```
 
-Generated bridges import `@oma3/mpas` for protocol operations and `@modelcontextprotocol/sdk` for the MCP server. They implement the full approval flow (adapter submission, coordination service, wait/poll loop, all terminal response types). See `oma3/mpas/docs/features/reorg2/spec.md` for the detailed specification.
+Generated bridges import `@oma3/mpas` for protocol operations and `@modelcontextprotocol/sdk` for the MCP server. The runtime loads the discovered MCP tool surface from a sibling `tools.json`; low-level generation emits both files. Bridges implement the full approval flow (adapter submission, coordination service, wait/poll loop, all terminal response types). See `oma3/mpas/docs/features/reorg2/spec.md` for the detailed specification.
 
 ### Remaining (to be built in `oma3/mpas-applications`)
 

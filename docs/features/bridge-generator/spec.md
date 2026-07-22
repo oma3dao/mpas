@@ -40,6 +40,8 @@ The existing low-level mode is unchanged:
 bridge-generator --output-bridge <path> [--output-plugin <path>] -- <upstream-command> [args...]
 ```
 
+Low-level mode writes the runtime to `<path>` and the verbatim discovered tool list to a sibling `tools.json`. The runtime loads that file relative to `import.meta.url`.
+
 v2 adds an orchestrating command that runs discovery once and writes the full application layout:
 
 ```sh
@@ -79,7 +81,8 @@ applications/<name>/
     README.md                     # Generated usage doc
     package.json                  # Depends on @oma3/mpas + @modelcontextprotocol/sdk
     tsconfig.json
-    src/index.ts                  # The generated bridge (current bridge-codegen output)
+    src/index.ts                  # Generated bridge runtime
+    src/tools.json                # Verbatim discovered MCP Tool objects
   CHANGELOG.md                    # Created once, never overwritten
 ```
 
@@ -185,6 +188,7 @@ The generator MUST validate the emitted entry against the registry schema before
 2. All other artifacts MUST be byte-stable: regenerating against an unchanged upstream with unchanged inputs produces zero diff. (This is what makes upstream drift visible as a *meaningful* git diff and enables golden-file testing of the generator itself.)
 3. All JSON artifacts are written with 2-space indentation, trailing newline, keys in generation order as specified per artifact (sorted where the artifact says sorted).
 4. Generated code carries no generation timestamp (established in the v1 cleanup); provenance is expressed via `metadata.json` and, in future, the `toolSurface` hash in generated headers.
+5. `bridge/src/tools.json` preserves discovery order and is byte-stable for an unchanged upstream. Generated bridge builds copy it unchanged to `bridge/dist/tools.json`.
 
 ---
 
@@ -194,7 +198,7 @@ Running `generate` over an existing `applications/<name>/` folder:
 
 | File | Behavior |
 | :--- | :--- |
-| `build-artifacts/*` (except merged `classification.json`), `bridge/src/index.ts`, `bridge/README.md`, `registry-entry.json` | Overwritten (generated surface) |
+| `build-artifacts/*` (except merged `classification.json`), `bridge/src/index.ts`, `bridge/src/tools.json`, `bridge/README.md`, `registry-entry.json` | Overwritten (generated surface) |
 | `CHANGELOG.md` | Created if absent; never overwritten |
 | `plugin.json` | Merged (membership rules below): reviewer-removed operations stay removed, new upstream tools are added, identity fields and impacts preserved, descriptions/schemas refreshed |
 | `harness-config.json` | Merged: generated fields refreshed, `intentionalDeviations` and other manual edits preserved |
