@@ -339,7 +339,7 @@ function bridgePackageJson(appName: string): object {
     },
     dependencies: {
       "@modelcontextprotocol/sdk": "^1.13.0",
-      "@oma3/mpas": "^0.1.0-alpha.0",
+      "@oma3/mpas": "^0.1.0-alpha.1",
     },
     devDependencies: {
       "@types/node": "^22.15.29",

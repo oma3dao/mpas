@@ -65,7 +65,7 @@ describe("runGenerate", () => {
       _meta: { "example.test/category": "issues" },
     });
     expect(bridgePackage.scripts.build).toContain("copyFileSync('src/tools.json', 'dist/tools.json')");
-    expect(bridgePackage.dependencies["@oma3/mpas"]).toBe("^0.1.0-alpha.0");
+    expect(bridgePackage.dependencies["@oma3/mpas"]).toBe("^0.1.0-alpha.1");
   });
 
   it("snapshot, classification, and plugin agree on the tool surface", async () => {
