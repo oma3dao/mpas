@@ -387,11 +387,10 @@ function mapTerminalResponse(response: AdapterResponse): ToolCallResult {
 
 function relayExecutionResult(result: unknown): ToolCallResult {
   if (isRecord(result) && Array.isArray(result.content)) {
-    return {
-      content: result.content as ToolCallResult["content"],
-      structuredContent: result,
-      ...(result.isError === true ? { isError: true } : {}),
-    };
+    // The adapter returns the upstream MCP CallToolResult. Preserve it
+    // verbatim, including structuredContent, resource content, _meta, and
+    // future protocol fields, rather than wrapping or projecting it.
+    return result as unknown as ToolCallResult;
   }
 
   return {

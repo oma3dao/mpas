@@ -12,8 +12,12 @@ const upstream: UpstreamInfo = {
   tools: [
     {
       name: "delete_branch",
+      title: "Delete Branch",
       description: "Delete a branch.",
       inputSchema: { type: "object", required: ["branch"], properties: { branch: { type: "string" } } },
+      outputSchema: { type: "object", properties: { deleted: { type: "boolean" } } },
+      annotations: { destructiveHint: true },
+      _meta: { "example.test/category": "branches" },
     },
     {
       name: "list_repositories",
@@ -27,9 +31,19 @@ describe("generateBridge", () => {
     const source = generateBridge(upstream);
     expect(source).toContain('"name": "delete_branch"');
     expect(source).toContain('"name": "list_repositories"');
+    expect(source).toContain('"title": "Delete Branch"');
+    expect(source).toContain('"outputSchema"');
+    expect(source).toContain('"destructiveHint": true');
+    expect(source).toContain('"example.test/category": "branches"');
     expect(source).toContain("const TOOLS =");
     // Unknown tools are rejected at both entry points.
     expect(source).toContain("UNKNOWN_TOOL");
+  });
+
+  it("relays upstream MCP tool results without reshaping them", () => {
+    const source = generateBridge(upstream);
+    expect(source).toContain("return result as unknown as ToolCallResult;");
+    expect(source).not.toContain("structuredContent: result,");
   });
 
   it("is deterministic: same input produces byte-identical output", () => {

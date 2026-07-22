@@ -16,7 +16,7 @@ Contracts for everything emitted are specified in [`docs/features/bridge-generat
 cd bridge-generator
 npm install
 npm run build
-npm test          # 43 tests; all should pass
+npm test          # 50 tests; all should pass
 ```
 
 ## Two modes
@@ -27,19 +27,20 @@ One discovery pass, complete `applications/<name>/` layout:
 
 ```sh
 node dist/index.js generate \
-  --app github \
+  --app my-app \
   --out ../../mpas-applications/applications \
-  --application-did did:web:github.example \
+  --application-did did:web:my-app.example \
+  [--prompt-secret UPSTREAM_API_TOKEN] \
   [--org-config ./my-org.json] \
-  -- docker run -i --rm -e GITHUB_PERSONAL_ACCESS_TOKEN ghcr.io/github/github-mcp-server
+  -- /path/to/upstream-mcp-server
 ```
 
-Everything after `--` is the upstream command, executed verbatim with your current environment (so env vars like tokens pass through). The upstream only needs to survive `initialize` + `tools/list`; it is terminated after discovery.
+Everything after `--` is the upstream command (binary, `npx …`, `docker run -i …`, etc.), executed with your current environment. If the upstream needs credentials via an environment variable, either export that variable yourself or pass `--prompt-secret <ENV_VAR>` (repeatable): the generator prompts on the TTY with echo disabled when the variable is unset, then exports it for the spawn. The env var **name** is whatever that upstream documents — the generator does not assume a particular auth scheme. The upstream only needs to survive `initialize` + `tools/list`; it is terminated after discovery.
 
 Output:
 
 ```text
-applications/github/
+applications/my-app/
   plugin.json                     MpasApplicationPlugin — THE governed set; edit this (membership, DIDs, impacts)
   registry-entry.json             Application Registry draft (PLACEHOLDERs unless --org-config given)
   harness-config.json             Input for the compat/approval harnesses
@@ -57,12 +58,12 @@ applications/github/
 
 ```json
 {
-  "publisher": { "name": "Wivity", "githubOrg": "wivity", "publisherDid": "did:web:wivity.example" },
+  "publisher": { "name": "Example Org", "githubOrg": "example-org", "publisherDid": "did:web:example.org" },
   "application": {
-    "name": "GitHub",
-    "description": "MPAS-protected GitHub via the official GitHub MCP server.",
-    "applicationDid": "did:web:github.example",
-    "website": "https://github.com"
+    "name": "My App",
+    "description": "MPAS-protected bridge for the upstream MCP server.",
+    "applicationDid": "did:web:my-app.example",
+    "website": "https://example.org"
   }
 }
 ```
@@ -71,9 +72,10 @@ applications/github/
 
 ```sh
 node dist/index.js \
-  --output-bridge ./github-bridge.ts \
-  --output-plugin ./github-plugin.json \
-  -- npx -y @modelcontextprotocol/server-github
+  --output-bridge ./my-app-bridge.ts \
+  --output-plugin ./my-app-plugin.json \
+  [--prompt-secret UPSTREAM_API_TOKEN] \
+  -- /path/to/upstream-mcp-server
 ```
 
 ## The review workflow (do this before publishing anything)
@@ -82,7 +84,7 @@ node dist/index.js \
 
 1. **`plugin.json`** — this is the file you edit.
    - **Membership:** delete any operation that should route as pass-through instead of being governed. Regeneration remembers your removals (see below) and won't re-add them.
-   - **Impacts:** each operation's `impact` starts as a name-based heuristic (`delete|remove|destroy|drop|purge` → critical, `merge|deploy|release|transfer|revoke` → high, everything else medium). Fix wrong ones; your edits survive regeneration. Consult `build-artifacts/classification.json` for the heuristic's rationale per tool if useful.
+   - **Impacts:** each operation's `impact` starts from upstream MCP metadata when available (`annotations.destructiveHint: true` → critical), then falls back to a name-based heuristic (`delete|remove|destroy|drop|purge` → critical, `merge|deploy|release|transfer|revoke` → high, everything else medium). Annotations are untrusted hints, so generated classifications remain drafts and `destructiveHint: false` never downgrades a name-based warning. Fix wrong values; your edits survive regeneration. Consult `build-artifacts/classification.json` for the rationale per tool.
    - **Identity:** replace the `did:web:PLACEHOLDER` values (pluginDid, publisherDid, applicationDid) with real DIDs, and fill `credentialRequirements`. These also survive regeneration.
 2. **`registry-entry.json`** — replace PLACEHOLDERs (or use `--org-config`), set `plugin.repository` to where the plugin will actually be published, then submit as a PR to `oma3/mpas/application-registry/{application}-{org}.json`. The entry already pins `plugin.artifactDid` and `upstream.toolSurface` for you.
 3. **`harness-config.json`** — if you intentionally rename tools, wrap schemas, or edit descriptions in the bridge, record it under `intentionalDeviations` so the compat harness allowlists it. Every tool you reference must exist in the snapshot.
@@ -105,7 +107,7 @@ Generated bridges import `@oma3/mpas`, which is not yet published to npm. On a m
 ```sh
 cd sdk/protocol && npm install && npm run build      # once
 
-cd applications/github/bridge
+cd applications/my-app/bridge
 # point the dependency at your local SDK checkout:
 #   "@oma3/mpas": "file:/path/to/mpas/sdk/protocol"
 npm install
@@ -121,11 +123,11 @@ node dist/index.js --config ./bridge-config.json
 ```json
 {
   "mode": "proposer",
-  "plugin": "/path/to/applications/github/plugin.json",
+  "plugin": "/path/to/applications/my-app/plugin.json",
   "adapter": { "url": "http://127.0.0.1:7544" },
   "coordination": { "url": "http://127.0.0.1:7545" },
   "agent": { "did": "<did:jwk from key generate>", "keyFile": "/path/to/keys/proposer-key.json" },
-  "target": { "applicationDid": "did:web:github.example" },
+  "target": { "applicationDid": "did:web:my-app.example" },
   "approvalStrategy": "wait"
 }
 ```
@@ -135,7 +137,8 @@ Keys come from the demo CLI (`mpas key generate`, which mints did:jwk identities
 ## Behavior notes
 
 - **Deterministic output.** Same upstream, same input → byte-identical artifacts (timestamps live only in `metadata.json`). This is load-bearing: it's how drift shows up as a meaningful git diff.
-- **Verbatim capture.** Tool names, descriptions, and schemas are copied exactly — never summarized or renamed. Disambiguation between applications is the job of `target.applicationDid`, never tool-name prefixes.
+- **Verbatim capture.** Complete MCP Tool objects are copied exactly — including output schemas, annotations, icons, `_meta`, and extension fields — never summarized or renamed. Paginated `tools/list` responses are collected into one static surface. Disambiguation between applications is the job of `target.applicationDid`, never tool-name prefixes.
+- **Mirror responses.** Successful upstream MCP `CallToolResult` objects returned by the adapter are relayed without reshaping, preserving structured content, resource content, `_meta`, and future fields.
 - **Injection-safe codegen.** Hostile tool names/descriptions cannot break out of the generated code (tested).
 - **Exit codes:** `0` success · `2` upstream spawn failure · `3` MCP handshake failure · `4` tools/list failure (including zero tools or malformed tool definitions) · `5` generate-phase validation error (bad `--app` name, bad org config, incomplete registry entry). Progress goes to stderr.
 

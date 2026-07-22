@@ -23,6 +23,7 @@ interface InitializeResult {
 
 interface ToolsListResult {
   tools?: McpToolDefinition[];
+  nextCursor?: string;
 }
 
 export class UpstreamSpawnError extends Error {
@@ -121,19 +122,53 @@ export async function discoverUpstream(command: string, args: string[]): Promise
     });
     process.stderr.write(`MCP handshake complete: ${initResult.serverInfo.name} ${initResult.serverInfo.version ?? ""}\n`);
 
-    const toolsList = await request(child, pending, 2, "tools/list", undefined, 10_000, ToolsListError);
-    if (toolsList.error) {
-      throw new ToolsListError(`tools/list failed: ${toolsList.error.message ?? "JSON-RPC error"}`);
-    }
-    const toolsResult = toolsList.result as ToolsListResult | undefined;
-    if (!Array.isArray(toolsResult?.tools)) {
-      throw new ToolsListError("Malformed response to tools/list");
-    }
-    if (toolsResult.tools.length === 0) {
+    const tools: McpToolDefinition[] = [];
+    const seenCursors = new Set<string>();
+    let cursor: string | undefined;
+    let requestId = 2;
+    do {
+      const toolsList = await request(
+        child,
+        pending,
+        requestId++,
+        "tools/list",
+        cursor === undefined ? undefined : { cursor },
+        10_000,
+        ToolsListError,
+      );
+      if (toolsList.error) {
+        throw new ToolsListError(`tools/list failed: ${toolsList.error.message ?? "JSON-RPC error"}`);
+      }
+      const toolsResult = toolsList.result as ToolsListResult | undefined;
+      if (!Array.isArray(toolsResult?.tools)) {
+        throw new ToolsListError("Malformed response to tools/list");
+      }
+      tools.push(...toolsResult.tools.map(validateTool));
+
+      const nextCursor = toolsResult.nextCursor;
+      if (nextCursor !== undefined && typeof nextCursor !== "string") {
+        throw new ToolsListError("Malformed nextCursor in response to tools/list");
+      }
+      if (nextCursor !== undefined) {
+        if (seenCursors.has(nextCursor)) {
+          throw new ToolsListError(`Repeated tools/list cursor: ${nextCursor}`);
+        }
+        seenCursors.add(nextCursor);
+      }
+      cursor = nextCursor;
+    } while (cursor !== undefined);
+
+    if (tools.length === 0) {
       throw new ToolsListError("Upstream reported zero tools");
     }
 
-    const tools = toolsResult.tools.map(validateTool);
+    const toolNames = new Set<string>();
+    for (const tool of tools) {
+      if (toolNames.has(tool.name)) {
+        throw new ToolsListError(`Upstream reported duplicate tool name: ${tool.name}`);
+      }
+      toolNames.add(tool.name);
+    }
     process.stderr.write(`Discovered ${tools.length} tools: ${tools.map((tool) => tool.name).join(", ")}\n`);
 
     return {
@@ -195,11 +230,7 @@ function validateTool(value: unknown): McpToolDefinition {
     throw new ToolsListError("Malformed tool definition from upstream");
   }
 
-  return {
-    name: value.name,
-    ...(typeof value.description === "string" ? { description: value.description } : {}),
-    inputSchema: value.inputSchema,
-  };
+  return value as McpToolDefinition;
 }
 
 async function terminate(child: ChildProcessWithoutNullStreams): Promise<void> {

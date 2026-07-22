@@ -104,7 +104,7 @@ export function buildDiscoveryMetadata(
 export function buildClassificationDraft(tools: McpToolDefinition[]): ClassificationDraft {
   const operations: Record<string, ClassificationEntry> = {};
   for (const tool of sortTools(tools)) {
-    operations[tool.name] = { impact: inferImpact(tool.name), rationale: "name-heuristic" };
+    operations[tool.name] = classifyTool(tool);
   }
 
   return {
@@ -133,7 +133,7 @@ export function mergeClassificationDraft(
     if (kept) {
       operations[tool.name] = kept;
     } else {
-      operations[tool.name] = { impact: inferImpact(tool.name), rationale: "name-heuristic" };
+      operations[tool.name] = classifyTool(tool);
       addedUnreviewed = true;
     }
   }
@@ -144,6 +144,18 @@ export function mergeClassificationDraft(
     draft: existing.draft || addedUnreviewed,
     operations,
   };
+}
+
+/**
+ * Positive destructive annotations elevate a tool to critical. MCP annotations
+ * are untrusted hints, so a negative hint never downgrades the name heuristic
+ * and generated classifications remain drafts until reviewed.
+ */
+export function classifyTool(tool: McpToolDefinition): ClassificationEntry {
+  if (tool.annotations?.destructiveHint === true) {
+    return { impact: "critical", rationale: "mcp-annotation: destructiveHint=true" };
+  }
+  return { impact: inferImpact(tool.name), rationale: "name-heuristic" };
 }
 
 export function buildHarnessConfig(upstream: UpstreamInfo): HarnessConfig {

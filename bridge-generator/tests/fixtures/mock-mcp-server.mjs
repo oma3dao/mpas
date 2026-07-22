@@ -5,6 +5,7 @@
  * Behavior flags (argv):
  *   --zero-tools       tools/list returns an empty array
  *   --malformed-tool   tools/list includes a tool without a name
+ *   --paginated        tools/list returns two pages
  *   --no-server-info   initialize result omits serverInfo
  *   --silent           never responds (for timeout tests)
  *   --exit-early       exits before responding to initialize
@@ -16,6 +17,7 @@ const flags = new Set(process.argv.slice(2));
 const TOOLS = [
   {
     name: "create_issue",
+    title: "Create Issue",
     description: "Create an issue in a repository.",
     inputSchema: {
       type: "object",
@@ -27,10 +29,23 @@ const TOOLS = [
         body: { type: "string" },
       },
     },
+    outputSchema: {
+      type: "object",
+      required: ["number"],
+      properties: { number: { type: "integer" } },
+    },
+    annotations: {
+      destructiveHint: false,
+      readOnlyHint: false,
+      openWorldHint: true,
+    },
+    icons: [{ src: "https://example.test/create-issue.png", mimeType: "image/png" }],
+    _meta: { "example.test/category": "issues" },
   },
   {
     name: "delete_branch",
     description: "Delete a branch from a repository.",
+    annotations: { destructiveHint: true, idempotentHint: true },
     inputSchema: {
       type: "object",
       required: ["owner", "repo", "branch"],
@@ -92,7 +107,16 @@ lines.on("line", (line) => {
     } else if (flags.has("--malformed-tool")) {
       tools = [...TOOLS, { description: "tool with no name", inputSchema: { type: "object" } }];
     }
-    send({ jsonrpc: "2.0", id: request.id, result: { tools } });
+    if (flags.has("--paginated")) {
+      const secondPage = request.params?.cursor === "page-2";
+      send({
+        jsonrpc: "2.0",
+        id: request.id,
+        result: secondPage ? { tools: tools.slice(1) } : { tools: tools.slice(0, 1), nextCursor: "page-2" },
+      });
+    } else {
+      send({ jsonrpc: "2.0", id: request.id, result: { tools } });
+    }
     return;
   }
   if (typeof request.id === "number") {

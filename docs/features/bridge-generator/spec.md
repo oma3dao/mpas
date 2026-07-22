@@ -119,7 +119,7 @@ The one artifact where a wall-clock timestamp is correct — point-in-time captu
 
 ### 3.4 `classification.json`
 
-The impact heuristic's output — a **human advisory artifact** to consult while editing `plugin.json`, not a governance control. Per the Application Plugin profile, an operation is governed iff it appears in `plugin.json` `operations` (or is named in deployment policy); the optional per-operation `impact` is informational. The generator's name-regex classification (delete/remove/destroy → critical, merge/deploy/transfer → high, else medium) is a starting point for the reviewer's judgment, and it plays no role in deciding which operations the regenerated plugin contains (Section 5).
+The impact heuristic's output — a **human advisory artifact** to consult while editing `plugin.json`, not a governance control. Per the Application Plugin profile, an operation is governed iff it appears in `plugin.json` `operations` (or is named in deployment policy); the optional per-operation `impact` is informational. A positive upstream MCP `annotations.destructiveHint` elevates an operation to critical; otherwise the generator falls back to its name-regex classification (delete/remove/destroy → critical, merge/deploy/transfer → high, else medium). MCP annotations are untrusted hints, so `destructiveHint: false` never downgrades the name heuristic and generated entries still require review. Classification plays no role in deciding which operations the regenerated plugin contains (Section 5).
 
 ```json
 {
@@ -127,12 +127,12 @@ The impact heuristic's output — a **human advisory artifact** to consult while
   "type": "ImpactClassificationDraft",
   "draft": true,
   "operations": {
-    "delete_branch": { "impact": "critical", "rationale": "name-heuristic" }
+    "delete_branch": { "impact": "critical", "rationale": "mcp-annotation: destructiveHint=true" }
   }
 }
 ```
 
-- `rationale` is `"name-heuristic"` for generated entries; manual review SHOULD change it (e.g. `"reviewed"`), which also documents review state per operation. When every operation has been reviewed, `draft` flips to `false` — the file-level signal the harnesses and registry gating read.
+- `rationale` is `"mcp-annotation: destructiveHint=true"` or `"name-heuristic"` for generated entries; manual review SHOULD change it (e.g. `"reviewed"`), which also documents review state per operation. When every operation has been reviewed, `draft` flips to `false` — the file-level signal the harnesses and registry gating read.
 - Classification does NOT feed into `plugin.json` on regeneration — neither membership nor impacts of existing operations (Section 5). It seeds the heuristic `impact` of operations *newly added* to the plugin; everything else is for the reviewer's eyes.
 - No timestamps.
 

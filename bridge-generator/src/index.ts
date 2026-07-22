@@ -6,10 +6,12 @@ import { generateBridge } from "./bridge-codegen.js";
 import { discoverUpstream } from "./discovery.js";
 import { runGenerate } from "./generate.js";
 import { generatePlugin } from "./plugin-codegen.js";
+import { applyPromptSecrets } from "./prompt-secret.js";
 
 interface CliArgs {
   outputBridge: string;
   outputPlugin?: string;
+  promptSecrets: string[];
   upstreamCommand: string;
   upstreamArgs: string[];
 }
@@ -19,6 +21,7 @@ interface GenerateCliArgs {
   outDir: string;
   orgConfigPath?: string;
   applicationDid?: string;
+  promptSecrets: string[];
   upstreamCommand: string;
   upstreamArgs: string[];
 }
@@ -26,11 +29,13 @@ interface GenerateCliArgs {
 export async function run(argv = process.argv.slice(2)): Promise<void> {
   if (argv[0] === "generate") {
     const args = parseGenerateArgs(argv.slice(1));
+    await applyPromptSecrets(args.promptSecrets);
     await runGenerate(args);
     return;
   }
 
   const args = parseArgs(argv);
+  await applyPromptSecrets(args.promptSecrets);
   const upstream = await discoverUpstream(args.upstreamCommand, args.upstreamArgs);
 
   await writeOutput(args.outputBridge, generateBridge(upstream));
@@ -47,6 +52,7 @@ function parseGenerateArgs(argv: string[]): GenerateCliArgs {
   let outDir: string | undefined;
   let orgConfigPath: string | undefined;
   let applicationDid: string | undefined;
+  const promptSecrets: string[] = [];
   let delimiterIndex = -1;
 
   for (let index = 0; index < argv.length; index++) {
@@ -71,6 +77,14 @@ function parseGenerateArgs(argv: string[]): GenerateCliArgs {
       applicationDid = argv[++index];
       continue;
     }
+    if (arg === "--prompt-secret") {
+      const name = argv[++index];
+      if (!name || name.startsWith("--")) {
+        throw usage("Missing value for --prompt-secret <ENV_VAR>.");
+      }
+      promptSecrets.push(name);
+      continue;
+    }
     throw usage(`Unknown argument: ${arg}`);
   }
 
@@ -89,6 +103,7 @@ function parseGenerateArgs(argv: string[]): GenerateCliArgs {
     outDir: resolve(outDir),
     ...(orgConfigPath ? { orgConfigPath: resolve(orgConfigPath) } : {}),
     ...(applicationDid ? { applicationDid } : {}),
+    promptSecrets,
     upstreamCommand: argv[delimiterIndex + 1],
     upstreamArgs: argv.slice(delimiterIndex + 2),
   };
@@ -97,6 +112,7 @@ function parseGenerateArgs(argv: string[]): GenerateCliArgs {
 function parseArgs(argv: string[]): CliArgs {
   let outputBridge: string | undefined;
   let outputPlugin: string | undefined;
+  const promptSecrets: string[] = [];
   let delimiterIndex = -1;
 
   for (let index = 0; index < argv.length; index++) {
@@ -113,6 +129,14 @@ function parseArgs(argv: string[]): CliArgs {
       outputPlugin = argv[++index];
       continue;
     }
+    if (arg === "--prompt-secret") {
+      const name = argv[++index];
+      if (!name || name.startsWith("--")) {
+        throw usage("Missing value for --prompt-secret <ENV_VAR>.");
+      }
+      promptSecrets.push(name);
+      continue;
+    }
     throw usage(`Unknown argument: ${arg}`);
   }
 
@@ -126,6 +150,7 @@ function parseArgs(argv: string[]): CliArgs {
   return {
     outputBridge: resolve(outputBridge),
     ...(outputPlugin ? { outputPlugin: resolve(outputPlugin) } : {}),
+    promptSecrets,
     upstreamCommand: argv[delimiterIndex + 1],
     upstreamArgs: argv.slice(delimiterIndex + 2),
   };
@@ -140,8 +165,12 @@ function usage(message: string): Error {
   return new Error(`${message}
 
 Usage:
-  bridge-generator --output-bridge <path> [--output-plugin <path>] -- <upstream-command> [upstream-args...]
-  bridge-generator generate --app <name> --out <dir> [--org-config <path>] [--application-did <did>] -- <upstream-command> [upstream-args...]`);
+  bridge-generator [--prompt-secret <ENV_VAR>]... --output-bridge <path> [--output-plugin <path>] -- <upstream-command> [upstream-args...]
+  bridge-generator generate --app <name> --out <dir> [--org-config <path>] [--application-did <did>] [--prompt-secret <ENV_VAR>]... -- <upstream-command> [upstream-args...]
+
+  --prompt-secret <ENV_VAR>  If ENV_VAR is unset, prompt on the TTY with echo disabled
+                             (like an SSH passphrase) and export it for the upstream spawn.
+                             Repeatable. Skipped when the variable is already set.`);
 }
 
 function exitCodeFor(error: unknown): number {

@@ -11,12 +11,29 @@ describe("discoverUpstream", () => {
     expect(upstream.serverName).toBe("mock-mcp");
     expect(upstream.serverVersion).toBe("1.2.3");
     expect(upstream.tools.map((tool) => tool.name)).toEqual(["create_issue", "delete_branch", "merge_pull_request"]);
-    // Descriptions and schemas are captured verbatim.
+    // Required and optional Tool fields are captured verbatim.
+    expect(upstream.tools[0]).toMatchObject({
+      title: "Create Issue",
+      outputSchema: { type: "object", required: ["number"] },
+      annotations: { destructiveHint: false, openWorldHint: true },
+      icons: [{ src: "https://example.test/create-issue.png", mimeType: "image/png" }],
+      _meta: { "example.test/category": "issues" },
+    });
     expect(upstream.tools[1].description).toBe("Delete a branch from a repository.");
     expect(upstream.tools[2].inputSchema).toMatchObject({
       type: "object",
       required: ["owner", "repo", "pull_number"],
     });
+  });
+
+  it("collects every tools/list page", async () => {
+    const upstream = await discoverUpstream("node", [mockServer, "--paginated"]);
+
+    expect(upstream.tools.map((tool) => tool.name)).toEqual([
+      "create_issue",
+      "delete_branch",
+      "merge_pull_request",
+    ]);
   });
 
   it("rejects an upstream reporting zero tools", async () => {

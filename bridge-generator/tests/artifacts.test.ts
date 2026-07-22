@@ -41,6 +41,15 @@ describe("toolSurface hash (spec §3.2)", () => {
     expect(computeToolSurfaceHash(drifted).value).not.toBe(computeToolSurfaceHash(tools).value);
   });
 
+  it("changes when optional MCP tool metadata changes", () => {
+    const annotated = tools.map((tool) =>
+      tool.name === "create_issue"
+        ? { ...tool, annotations: { destructiveHint: true }, outputSchema: { type: "object" } }
+        : tool,
+    );
+    expect(computeToolSurfaceHash(annotated).value).not.toBe(computeToolSurfaceHash(tools).value);
+  });
+
   it("is base64url without padding", () => {
     const { alg, value } = computeToolSurfaceHash(tools);
     expect(alg).toBe("sha-256");
@@ -92,6 +101,31 @@ describe("classification draft and merge (spec §3.4, §5)", () => {
       delete_branch: { impact: "critical", rationale: "name-heuristic" },
       merge_pull_request: { impact: "high", rationale: "name-heuristic" },
     });
+  });
+
+  it("elevates a positive MCP destructive hint without trusting a negative hint", () => {
+    const draft = buildClassificationDraft([
+      {
+        name: "publish_notice",
+        inputSchema: { type: "object" },
+        annotations: { destructiveHint: true },
+      },
+      {
+        name: "delete_record",
+        inputSchema: { type: "object" },
+        annotations: { destructiveHint: false },
+      },
+    ]);
+
+    expect(draft.operations.publish_notice).toEqual({
+      impact: "critical",
+      rationale: "mcp-annotation: destructiveHint=true",
+    });
+    expect(draft.operations.delete_record).toEqual({
+      impact: "critical",
+      rationale: "name-heuristic",
+    });
+    expect(draft.draft).toBe(true);
   });
 
   it("merge preserves reviewed entries, adds new tools, drops removed tools", () => {

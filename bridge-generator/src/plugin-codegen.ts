@@ -18,7 +18,7 @@ export function generatePlugin(tools: McpToolDefinition[]): string {
         tool.name,
         {
           description: tool.description ?? "",
-          impact: inferImpact(tool.name),
+          impact: tool.annotations?.destructiveHint === true ? "critical" : inferImpact(tool.name),
           executionPayloadSchema: {
             type: "object",
             required: ["name", "arguments"],
