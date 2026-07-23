@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { ActionPackage, AdapterResponse, McpToolDefinition } from "../src/index.js";
+import type { ActionPackage, AdapterResponse, McpToolDefinition, PolicyConfig } from "../src/index.js";
 
 describe("MPAS Bridge types", () => {
   it("allows a fully typed sample Action Package", () => {
@@ -115,5 +115,19 @@ describe("MPAS Bridge types", () => {
 
     expect(tool.name).toBe("create_issue");
     expect(response.result).toBe("additionalApprovalsRequired");
+  });
+
+  it("models requirement and reject policy entries", () => {
+    const policy: PolicyConfig = {
+      defaultRequirement: { type: "proposerOnly" },
+      policies: {
+        create_issue: [
+          { reject: false, requirements: { type: "proposerOnly" } },
+          { reject: true, description: "Issue creation is disabled." },
+        ],
+      },
+    };
+
+    expect(policy.policies?.create_issue[1].reject).toBe(true);
   });
 });

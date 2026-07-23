@@ -8,7 +8,7 @@ import { sha256 } from "multiformats/hashes/sha2";
 import { base32 } from "multiformats/bases/base32";
 import { loadPlugin, type MpasApplicationPlugin } from "../core/plugin-loader.js";
 import type { Did } from "../core/types.js";
-import type { PolicyConfig } from "../core/policy-engine.js";
+import type { PolicyConfig, PolicyEntry } from "../core/policy-engine.js";
 import type { McpHttpTarget } from "./dispatch/mcp-http.js";
 import type { McpStdioTarget } from "./dispatch/mcp-stdio.js";
 import { canTrust, type TrustContext, type TrustVerdict } from "./trust.js";
@@ -35,18 +35,7 @@ export interface MpasApplicationPolicy {
   };
   defaultRequirement: PolicyConfig["defaultRequirement"];
   signerGroups: Record<string, Did[]>;
-  policies?: Record<string, Array<{
-    description?: string;
-    match?: {
-      conditions?: Array<{
-        source: string;
-        path: string;
-        op: string;
-        value?: unknown;
-      }>;
-    };
-    requirements: PolicyConfig["defaultRequirement"];
-  }>>;
+  policies?: Record<string, PolicyEntry[]>;
   context?: unknown;
 }
 
@@ -109,6 +98,25 @@ export type LoadDeploymentConfigsResult =
       ok: false;
       error: DeploymentConfigLoadError;
     };
+
+const policyEntrySchema = {
+  type: "object",
+  properties: {
+    reject: { type: "boolean", default: false },
+    requirements: { type: "object", required: ["type"] },
+  },
+  oneOf: [
+    {
+      required: ["requirements"],
+      properties: { reject: { const: false } },
+    },
+    {
+      required: ["reject"],
+      not: { required: ["requirements"] },
+      properties: { reject: { const: true } },
+    },
+  ],
+} as const;
 
 const deploymentConfigSchema = {
   type: "object",
@@ -175,7 +183,13 @@ const deploymentConfigSchema = {
           required: ["all"],
           additionalProperties: { type: "array", items: { type: "string", pattern: "^did:[a-z0-9]+:.+" } },
         },
-        policies: { type: "object" },
+        policies: {
+          type: "object",
+          additionalProperties: {
+            type: "array",
+            items: policyEntrySchema,
+          },
+        },
         context: {},
       },
     },

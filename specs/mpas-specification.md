@@ -1127,7 +1127,7 @@ Verify each candidate Approval needed to satisfy, block, or override policy. Ver
 
 **Step 10: Evaluate Policy and Produce Response**
 
-Evaluate the Action Package against current policy using only verified Approvals. Produce one of the response types defined below.
+Evaluate the Action Package against current policy using only verified Approvals. A deterministic policy rule that blocks the requested action type or matching action parameters MUST produce `rejected` immediately; collecting additional ordinary Approvals cannot satisfy such a rule. Produce one of the response types defined below.
 
 #### 6.2.3 Verifier Response Types
 
@@ -1140,7 +1140,7 @@ Evaluate the Action Package against current policy using only verified Approvals
 | malformed                   | The Action Package is structurally invalid.                                                                 |
 | policyUnavailable           | The Verifier cannot determine applicable policy at this time.                                               |
 
-When the response is `additionalApprovalsRequired`, the Verifier SHOULD return an Authorization Requirements object. When policy is satisfied, the Verifier transitions the action to `executing` per Section 6.9 and begins dispatch. When the response resolves the Action, the Verifier or MPAS-aware component SHOULD issue an Execution Receipt.
+When the response is `additionalApprovalsRequired`, the Verifier SHOULD return an Authorization Requirements object. A rejected action MUST NOT include Authorization Requirements and MUST NOT be dispatched. When policy is satisfied, the Verifier transitions the action to `executing` per Section 6.9 and begins dispatch. When the response resolves the Action, the Verifier or MPAS-aware component SHOULD issue an Execution Receipt.
 
 ### 6.3 Phase 3: Signer Review Set Distribution
 

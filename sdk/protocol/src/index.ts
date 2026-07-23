@@ -24,6 +24,8 @@ export {
   type ProposerGateResult,
   type PolicyConfig,
   type PolicyEntry,
+  type RequirementPolicyEntry,
+  type RejectPolicyEntry,
   type PolicyCondition,
   type ConditionSource,
   type ConditionOp,

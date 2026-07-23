@@ -244,6 +244,10 @@ export function createAdapterApiServer(options: HttpEndpointOptions): FastifyIns
           error: { code: policyResult.code, message: policyResult.message },
         });
       }
+      if (policyResult.status === "rejected") {
+        trace.emit("verification_step", { actionId, step: "policy_evaluation", passed: false, code: policyResult.code });
+        return rejection(pkg, options, envelopeHash, "rejected", policyResult.code, policyResult.message);
+      }
       if (policyResult.status === "additionalApprovalsRequired") {
         trace.emit("dispatch", { actionId, result: "additionalApprovalsRequired" });
         return actionResponse(options, {

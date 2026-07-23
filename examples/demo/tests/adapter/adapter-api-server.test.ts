@@ -231,6 +231,44 @@ describe("HTTP endpoint", () => {
     });
   });
 
+  it("returns an immediate policy rejection for a blocked action without requesting approvals or dispatching", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "mpas-http-configs-policy-deny-"));
+    const config = await readJson<Record<string, unknown>>(join(fixturesDir, "configs", "github-auto-approve.json"));
+    config.plugin = {
+      ...(config.plugin as Record<string, unknown>),
+      path: join(fixturesDir, "plugins", "github-demo-plugin.json"),
+    };
+    const policy = config.policy as { policies: Record<string, unknown[]> };
+    policy.policies.create_issue = [
+      {
+        reject: true,
+        description: "This operator-only rationale must not be returned.",
+      },
+    ];
+    await writeFile(join(dir, "github-policy-deny.json"), `${JSON.stringify(config, null, 2)}\n`);
+
+    const app = await makeApp(dir);
+    const first = await submitFixture(app, "valid-no-approval-required.json");
+    const firstBody = first.json() as Record<string, unknown>;
+
+    expect(first.statusCode).toBe(200);
+    expect(firstBody).toMatchObject({
+      result: "rejected",
+      error: {
+        code: "ACTION_BLOCKED_BY_POLICY",
+        message: "Action create_issue is blocked by policy.",
+      },
+    });
+    expect(firstBody.authorizationRequirements).toBeUndefined();
+
+    // A policy denial is stateless: the actionId was not dispatched or consumed.
+    const second = await submitFixture(app, "valid-no-approval-required.json");
+    expect(second.json()).toMatchObject({
+      result: "rejected",
+      error: { code: "ACTION_BLOCKED_BY_POLICY" },
+    });
+  });
+
   it("rejects an ungoverned operation when passThrough is deny", async () => {
     const dir = await mkdtemp(join(tmpdir(), "mpas-http-configs-deny-"));
     const config = await readJson<Record<string, unknown>>(join(fixturesDir, "configs", "github-auto-approve.json"));

@@ -93,6 +93,61 @@ Low-level mode writes `tools.json` beside the `--output-bridge` file. Keep the t
 3. **`harness-config.json`** — if you intentionally rename tools, wrap schemas, or edit descriptions in the bridge, record it under `intentionalDeviations` so the compat harness allowlists it. Every tool you reference must exist in the snapshot.
 4. Log your decisions in `CHANGELOG.md`.
 
+### Example prompt for reviewing plugin membership
+
+The Credential Adapter treats an operation as governed when it appears in
+`plugin.json` or has an explicit entry in the deployment policy. Governed
+operations receive policy evaluation; operations declared in the plugin also
+receive plugin schema validation. An operation absent from both is
+pass-through: with the default `passThrough: "allow"`, the adapter still
+verifies proposer authorization, signatures, target binding, freshness, and
+replay protection, but skips plugin schema validation and additional approval
+policy before executing with the adapter's credential. A deployment can
+instead set `passThrough: "deny"` to reject ungoverned operations. Removing an
+operation from the plugin does not remove it from the bridge's MCP tool list.
+
+You can give the following prompt to a coding agent from the generated
+application directory:
+
+```text
+Review this generated MPAS application before publication.
+
+Read:
+- plugin.json
+- build-artifacts/classification.json
+- bridge/src/tools.json
+- the deployment policy/config, if one is available
+
+The plugin should contain only operations that need MPAS governance. An
+operation is governed if it appears in plugin.json or has an explicit policy
+entry. Operations absent from both use the Credential Adapter's passThrough
+setting, which defaults to "allow". Pass-through operations remain visible in
+the bridge's MCP tool list and still undergo proposer authorization, signature,
+target, freshness, and replay checks, but they skip plugin schema validation
+and additional approval policy. A deployment with passThrough: "deny" rejects
+them instead.
+
+Treat classification.json, impact values, names, and MCP annotations such as
+destructiveHint as advisory evidence, not automatic decisions. Consider side
+effects, access to sensitive data, credential use, external communication,
+financial or irreversible effects, and application-specific risk. Do not
+assume every "medium" operation is safe to pass through.
+
+First, do not edit files. Propose three lists with a short rationale for each
+operation:
+1. Keep governed in plugin.json.
+2. Remove from plugin.json as pass-through.
+3. Uncertain and requiring operator judgment.
+
+After I approve the proposal:
+- Delete only approved pass-through operations from plugin.json.
+- Preserve tool schemas, DIDs, credential requirements, and unrelated fields.
+- Update each reviewed classification.json rationale to record the decision.
+- Set classification.json draft to false only when every operation has been
+  reviewed.
+- Summarize the final governed, pass-through, and policy-only operations.
+```
+
 ## Regeneration
 
 Re-running `generate` over an existing folder is safe and diff-friendly:

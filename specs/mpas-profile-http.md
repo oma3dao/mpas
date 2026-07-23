@@ -165,6 +165,25 @@ with an `ActionResponse` body containing:
 }
 ```
 
+For example, a Verifier implementing the JSON Verifier Policy Profile returns a matched blocked-action rule synchronously as:
+
+```http
+HTTP/1.1 200 OK
+Content-Type: application/mpas+json
+
+{
+  "version": "1",
+  "type": "ActionResponse",
+  "result": "rejected",
+  "error": {
+    "code": "ACTION_BLOCKED_BY_POLICY",
+    "message": "Action github.delete_repository is blocked by policy."
+  }
+}
+```
+
+This is a deterministic MPAS protocol rejection, not an HTTP authorization failure. The response MUST NOT include Authorization Requirements, and the Verifier MUST NOT dispatch the action.
+
 ### 4.7 Standard HTTP Status Mapping
 
 |                  HTTP Status | Meaning                                                                                                      |
@@ -462,7 +481,7 @@ Presence rule:
 | ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `executed`                    | The Action was authorized and executed. An Execution Receipt SHOULD be present.                                                                           |
 | `additionalApprovalsRequired` | The Action Package does not yet satisfy policy but may be authorized if additional Approvals are collected. Authorization Requirements SHOULD be present. |
-| `rejected`                    | The Verifier rejected the Action. An Execution Receipt SHOULD be present if the Action is resolved.                                                       |
+| `rejected`                    | The Verifier rejected the Action, including a deterministic policy block. An Execution Receipt SHOULD be present if the Action is resolved.                 |
 | `notSupported`                | The Verifier does not support the requested Application, operation, payload format, or verification mode.                                                 |
 | `malformed`                   | The Action Package is structurally invalid, not canonicalizable, or has invalid hash bindings.                                                            |
 | `policyUnavailable`           | The Verifier cannot determine applicable policy at this time.                                                                                             |

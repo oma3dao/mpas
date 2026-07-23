@@ -89,3 +89,73 @@ describe("evaluatePolicy — degenerate requirement composition", () => {
     expect(evaluatePolicy(pkg({}), noApprovals, policy).status).toBe("satisfied");
   });
 });
+
+describe("evaluatePolicy — reject entries", () => {
+  it("rejects an action matched by an unconditional reject entry", () => {
+    const policy: PolicyConfig = {
+      defaultRequirement: { type: "proposerOnly" },
+      policies: {
+        send_payment: [{ reject: true, description: "Payments are disabled." }],
+      },
+    };
+
+    expect(evaluatePolicy(pkg({ amount: "10" }), noApprovals, policy)).toEqual({
+      status: "rejected",
+      code: "ACTION_BLOCKED_BY_POLICY",
+      message: "Action send_payment is blocked by policy.",
+    });
+  });
+
+  it("uses the default requirement when a conditional reject entry does not match", () => {
+    const policy: PolicyConfig = {
+      defaultRequirement: { type: "proposerOnly" },
+      policies: {
+        send_payment: [
+          {
+            reject: true,
+            match: {
+              conditions: [{ source: "executionPayload", path: "/arguments/amount", op: "gt", value: "100" }],
+            },
+          },
+        ],
+      },
+    };
+
+    expect(evaluatePolicy(pkg({ amount: "10" }), noApprovals, policy)).toEqual({ status: "satisfied" });
+  });
+
+  it("lets a matching reject override an otherwise satisfied requirement", () => {
+    const policy: PolicyConfig = {
+      defaultRequirement: { type: "proposerOnly" },
+      policies: {
+        send_payment: [
+          { requirements: { type: "proposerOnly" } },
+          { reject: true },
+        ],
+      },
+    };
+
+    expect(evaluatePolicy(pkg({ amount: "10" }), noApprovals, policy).status).toBe("rejected");
+  });
+
+  it("lets a matching reject override an unsatisfied requirement instead of requesting approvals", () => {
+    const policy: PolicyConfig = {
+      defaultRequirement: { type: "proposerOnly" },
+      policies: {
+        send_payment: [
+          {
+            reject: false,
+            requirements: {
+              type: "threshold",
+              threshold: 1,
+              eligibleSigners: ["did:web:agents.example:cfo" as Did],
+            },
+          },
+          { reject: true },
+        ],
+      },
+    };
+
+    expect(evaluatePolicy(pkg({ amount: "10" }), noApprovals, policy).status).toBe("rejected");
+  });
+});

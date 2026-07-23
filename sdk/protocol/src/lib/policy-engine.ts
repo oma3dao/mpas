@@ -5,6 +5,7 @@
  *
  * Key behaviors:
  * - All matching policies apply (logical AND of their requirements).
+ * - A matching reject entry overrides all matching positive requirements.
  * - If no policy matches, defaultRequirement applies (defaults to proposerOnly).
  * - Explicit rules override defaultRequirement when they match.
  * - Requirements support recursive composition via allOf/anyOf.
@@ -57,13 +58,24 @@ export interface PolicyConfig {
   signerGroups?: Record<string, Did[]>;
 }
 
-export interface PolicyEntry {
+interface PolicyEntryBase {
   description?: string;
   match?: {
     conditions?: PolicyCondition[];
   };
+}
+
+export interface RequirementPolicyEntry extends PolicyEntryBase {
+  reject?: false;
   requirements: Requirement;
 }
+
+export interface RejectPolicyEntry extends PolicyEntryBase {
+  reject: true;
+  requirements?: never;
+}
+
+export type PolicyEntry = RequirementPolicyEntry | RejectPolicyEntry;
 
 // ---------------------------------------------------------------------------
 // Conditions (per spec §5.4)
@@ -107,6 +119,7 @@ export interface UnsatisfiedThreshold {
 
 export type PolicyResult =
   | { status: "satisfied" }
+  | { status: "rejected"; code: "ACTION_BLOCKED_BY_POLICY"; message: string }
   | { status: "additionalApprovalsRequired"; unsatisfiedRules: UnsatisfiedThreshold[] }
   /**
    * The Action Package (or policy) contains a value that prevents
@@ -183,17 +196,29 @@ export function evaluatePolicy(
     }
   }
 
+  // A matching reject entry is final and overrides all positive requirements.
+  if (matchedEntries.some((entry) => entry.reject === true)) {
+    return {
+      status: "rejected",
+      code: "ACTION_BLOCKED_BY_POLICY",
+      message: `Action ${actionName ?? "(unknown)"} is blocked by policy.`,
+    };
+  }
+
   // Determine the effective requirement.
   let effectiveRequirement: Requirement;
 
   if (matchedEntries.length > 0) {
     // All matching entries apply — combine with allOf.
+    const matchedRequirements = matchedEntries
+      .filter((entry): entry is RequirementPolicyEntry => entry.reject !== true)
+      .map((entry) => entry.requirements);
     if (matchedEntries.length === 1) {
-      effectiveRequirement = matchedEntries[0].requirements;
+      effectiveRequirement = matchedRequirements[0];
     } else {
       effectiveRequirement = {
         type: "allOf",
-        requirements: matchedEntries.map((e) => e.requirements),
+        requirements: matchedRequirements,
       };
     }
   } else {

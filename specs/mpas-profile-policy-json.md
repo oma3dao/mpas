@@ -216,9 +216,9 @@ Field definitions:
 
 ### 5.2 Policy Objects
 
-A policy object defines when additional approvals apply.
+A policy entry defines either the positive Approval requirements that apply or a deterministic rejection. A Boolean `reject` field distinguishes these behaviors. If `reject` is omitted, it defaults to `false` for compatibility with existing policy documents.
 
-Example (one entry in the array for action `"github.delete_repository"`):
+Example requirement entry (one entry in the array for action `"github.delete_repository"`):
 
 ```json
 {
@@ -233,16 +233,31 @@ Example (one entry in the array for action `"github.delete_repository"`):
 }
 ```
 
+Example reject entry:
+
+```json
+{
+  "reject": true,
+  "description": "Repository deletion is disabled for this deployment.",
+  "match": {}
+}
+```
+
 Since the action name is already the key in the `policies` object, conditions within `match` only need to express additional constraints (e.g., parameter-level conditions). An empty `match` or omitted `match` means the policy applies to all invocations of that action.
 
 Field definitions:
 
 | Field | Required | Description |
 | :--- | :---: | :--- |
+| `reject` | Optional | Boolean deterministic-rejection flag. Defaults to `false` when omitted. |
 | `description` | Optional | Human-readable explanation. Non-authoritative. |
 | `match` | Optional | Additional conditions determining when this entry applies within the action. Since the action name is already matched by the policy key, conditions here express parameter-level constraints (e.g., target branch, amount thresholds). Omitted or empty means the entry applies to all invocations of the action. |
-| `requirements` | Yes | Positive requirement expression required when the policy matches. |
+| `requirements` | Conditional | Positive requirement expression. Required when `reject` is omitted or `false`, and MUST be absent when `reject` is `true`. |
 | `context` | Optional | Non-authoritative metadata. MUST NOT affect evaluation. |
+
+A matching entry with `reject: true` is a deterministic policy rejection. It does not describe an Approval requirement and cannot be satisfied or overridden by collecting additional ordinary Approvals. If any reject entry matches an action, rejection overrides all matching requirement entries for that action.
+
+The Verifier MUST reject a policy as invalid if `reject` is not Boolean, an entry with `reject: true` contains `requirements`, or an entry with `reject` omitted or `false` omits `requirements`.
 
 ### 5.3 Match Objects
 
@@ -497,7 +512,9 @@ The Verifier MUST evaluate conditions deterministically. A Verifier MUST NOT use
 
 If no policy entry matches (no key for the action name, or conditions evaluate false), the Verifier uses `defaultRequirement`.
 
-If a policy entry matches and its conditions pass, the Verifier uses that entry's requirements. If multiple entries within the same action's array match, all contribute their requirements (combined with logical AND).
+If one or more matching entries have `reject: true`, the policy outcome is `rejected`. Rejection overrides all matching requirement entries, regardless of whether their requirements are currently satisfied. The Verifier MUST NOT return Authorization Requirements for a rejected action.
+
+Otherwise, each matching entry is a requirement entry (an omitted `reject` is treated as `false`). If one requirement entry matches, the Verifier uses that entry's requirements. If multiple requirement entries within the same action's array match, all contribute their requirements (combined with logical AND).
 
 Since policies are keyed by action name, there is at most one key per action. Multiple conditional requirements for the same action are expressed as multiple entries in the array. Cross-action policies are not supported; use `defaultRequirement` for baseline behavior across all governed operations.
 
@@ -528,6 +545,8 @@ Policy evaluation produces one of the following policy outcomes:
 | `malformed` | The Action Package or Execution Payload is structurally invalid or cannot be safely interpreted. |
 | `policyUnavailable` | The Verifier cannot load or evaluate required trusted policy configuration. |
 
+For a matched reject entry, a transport that supports structured response details SHOULD use error code `ACTION_BLOCKED_BY_POLICY` and a safe generic message identifying the requested action as blocked by policy. A policy entry's `description` is non-authoritative operator metadata and MUST NOT be exposed automatically, because it may contain sensitive policy rationale.
+
 ## 7. Verifier Evaluation Procedure
 
 A Verifier implementing this profile performs the core MPAS verification procedure and then applies this profile as follows.
@@ -556,11 +575,11 @@ The Verifier looks up the action name in the `policies` object as described in S
 
 If no policy entry matches the action, the Verifier uses `defaultRequirement`.
 
-If a policy entry matches and its conditions evaluate true, the Verifier uses that entry's `requirements`.
+If any entry with `reject: true` matches the action, the Verifier produces the `rejected` policy outcome immediately. Otherwise, each matching requirement entry contributes its `requirements`.
 
 ### 7.4 Build Combined Requirements
 
-The Verifier uses the matched policy entry's requirements directly. Since policies are keyed by action name, there is at most one entry per action.
+When no reject entry matches, the Verifier combines all matching requirement entries with logical AND. If exactly one requirement entry matches, the Verifier may use its requirements directly. If no entry matches, the Verifier uses `defaultRequirement`.
 
 ### 7.5 Verify and Count Approvals
 
@@ -574,7 +593,7 @@ If requirements are satisfied, the Verifier returns or produces the MPAS result 
 
 If requirements are not satisfied but could be satisfied by additional Approvals, the Verifier returns `additionalApprovalsRequired` and SHOULD return Authorization Requirements.
 
-If the action is rejected, malformed, unsupported, or policy cannot be evaluated, the Verifier returns the corresponding MPAS result.
+If an entry with `reject: true` matched, the Verifier returns `rejected`, MUST NOT return Authorization Requirements, and MUST NOT dispatch the action. If the action is otherwise rejected, malformed, unsupported, or policy cannot be evaluated, the Verifier returns the corresponding MPAS result.
 
 ### 7.7 Produce Authorization Requirements
 
@@ -889,15 +908,21 @@ A Verifier MUST NOT count an Approval unless the Approval has been verified and 
 
 A Verifier MUST reevaluate current policy when a completed Action Package is submitted. Previously returned Authorization Requirements do not guarantee future execution.
 
-### 9.8 Conforming Verifier Requirements
+### 9.8 Reject-Entry Handling
+
+Reject entries MUST be loaded only from the same trusted policy source as requirement entries. A rejection MUST depend only on the action key and deterministic conditions defined by this profile. Rejection MUST override matching positive requirements so that additional Approvals cannot accidentally authorize a blocked action. Verifiers SHOULD avoid returning sensitive operator rationale and SHOULD use the generic `ACTION_BLOCKED_BY_POLICY` response detail defined in Section 6.6.
+
+### 9.9 Conforming Verifier Requirements
 
 A Verifier conforming to this profile MUST:
 
 - parse and validate `MpasApplicationPolicy` objects with `version: "1"`;
 - reject policies that omit required fields (`defaultRequirement`, `signerGroups`, `signerGroups.all`);
+- reject invalid `reject`/`requirements` combinations;
 - reject or ignore unsupported policy versions according to deployment policy;
 - ensure `applicationDid` matches the Action Envelope target Application DID and `executionProfile.id` matches the Action Envelope execution profile;
 - evaluate all matching entries within the policy array for the requested action;
+- apply matching reject entries before evaluating positive requirements;
 - combine matching positive requirements with logical AND;
 - apply `defaultRequirement` for governed operations with no matching policy entry;
 - support the condition operators defined in Section 5.4;
@@ -1107,9 +1132,12 @@ This appendix defines a JSON Schema for structural validation of `MpasApplicatio
   "$defs": {
     "policy": {
       "type": "object",
-      "required": ["requirements"],
       "additionalProperties": false,
       "properties": {
+        "reject": {
+          "type": "boolean",
+          "default": false
+        },
         "description": {
           "type": "string"
         },
@@ -1123,7 +1151,28 @@ This appendix defines a JSON Schema for structural validation of `MpasApplicatio
           "type": "object",
           "additionalProperties": true
         }
-      }
+      },
+      "oneOf": [
+        {
+          "required": ["requirements"],
+          "properties": {
+            "reject": {
+              "const": false
+            }
+          }
+        },
+        {
+          "required": ["reject"],
+          "not": {
+            "required": ["requirements"]
+          },
+          "properties": {
+            "reject": {
+              "const": true
+            }
+          }
+        }
+      ]
     },
     "match": {
       "type": "object",

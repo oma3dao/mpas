@@ -81,4 +81,30 @@ describe("loadDeploymentConfigs", () => {
       },
     });
   });
+
+  it("rejects a reject policy entry that also contains requirements", async () => {
+    const { configDir } = await tempFixtureConfigDir();
+    const config = await readJson<Record<string, unknown>>(join(fixturesDir, "configs", "github-auto-approve.json"));
+    config.plugin = {
+      ...(config.plugin as Record<string, unknown>),
+      path: "../plugins/github-demo-plugin.json",
+    };
+    const policy = config.policy as { policies: Record<string, unknown[]> };
+    policy.policies.create_issue = [
+      {
+        reject: true,
+        requirements: { type: "proposerOnly" },
+      },
+    ];
+    await writeJson(join(configDir, "github-invalid-deny.json"), config);
+
+    const result = await loadDeploymentConfigs(configDir);
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        code: "CONFIG_SCHEMA_INVALID",
+      },
+    });
+  });
 });
