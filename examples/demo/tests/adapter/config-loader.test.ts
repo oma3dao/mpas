@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import { loadDeploymentConfigs } from "../../src/adapter/config-loader.js";
 
 const fixturesDir = fileURLToPath(new URL("../fixtures/", import.meta.url));
+const approvePluginUse = async () => true;
 
 async function readJson<T>(path: string): Promise<T> {
   return JSON.parse(await readFile(path, "utf8")) as T;
@@ -30,7 +31,7 @@ async function tempFixtureConfigDir() {
 
 describe("loadDeploymentConfigs", () => {
   it("loads fixture configs and indexes by target application DID", async () => {
-    const result = await loadDeploymentConfigs(join(fixturesDir, "configs"));
+    const result = await loadDeploymentConfigs(join(fixturesDir, "configs"), { confirmPluginUse: approvePluginUse });
 
     expect(result.ok).toBe(true);
     if (result.ok) {
@@ -53,7 +54,7 @@ describe("loadDeploymentConfigs", () => {
     };
     await writeJson(join(configDir, "github-strict.json"), config);
 
-    const result = await loadDeploymentConfigs(configDir);
+    const result = await loadDeploymentConfigs(configDir, { confirmPluginUse: approvePluginUse });
 
     expect(result).toMatchObject({
       ok: false,
@@ -72,7 +73,7 @@ describe("loadDeploymentConfigs", () => {
     };
     await writeJson(join(configDir, "github-strict.json"), config);
 
-    const result = await loadDeploymentConfigs(configDir);
+    const result = await loadDeploymentConfigs(configDir, { confirmPluginUse: approvePluginUse });
 
     expect(result).toMatchObject({
       ok: false,
@@ -98,7 +99,7 @@ describe("loadDeploymentConfigs", () => {
     ];
     await writeJson(join(configDir, "github-invalid-deny.json"), config);
 
-    const result = await loadDeploymentConfigs(configDir);
+    const result = await loadDeploymentConfigs(configDir, { confirmPluginUse: approvePluginUse });
 
     expect(result).toMatchObject({
       ok: false,

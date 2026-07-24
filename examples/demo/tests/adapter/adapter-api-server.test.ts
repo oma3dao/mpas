@@ -38,7 +38,9 @@ async function makeApp(configDir?: string) {
   // Default to only the auto-approve config to avoid strict overriding it (both
   // target the same application DID, so the last loaded wins).
   const effectiveConfigDir = configDir ?? join(fixturesDir, "configs");
-  const configs = await loadDeploymentConfigs(effectiveConfigDir);
+  const configs = await loadDeploymentConfigs(effectiveConfigDir, {
+    confirmPluginUse: async () => true,
+  });
   if (!configs.ok) {
     throw new Error(configs.error.message);
   }

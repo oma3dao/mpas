@@ -432,6 +432,35 @@ This checks that each `signerKeys` entry has a DID that matches its `publicJwk`,
 
 ## 2.2 Start Adapter and Coordination
 
+### Plugin trust confirmation
+
+The adapter verifies that each plugin's content matches its configured
+`did:artifact` before startup. It then displays the available OMATrust
+attestation and target-linkage information and asks whether you want to use the
+plugin.
+
+If you have not configured OMATrust, expect a warning similar to:
+
+```text
+Content integrity: verified (plugin content matches the configured did:artifact)
+WARNING: No OMATrust context was provided.
+No OMATrust attestations, approved-issuer checks, target linkage, or other
+legitimacy and provenance checks were performed.
+
+[y/N] Would you like to use this plugin given the information shown?
+```
+
+This warning does not mean the content hash failed. It means the adapter cannot
+establish who published or reviewed the content, or whether it is legitimately
+associated with the target application. Review the plugin and deployment
+configuration before answering `y`; the default is `No`.
+
+To enable OMATrust checks, create an `OmaTrustConfig` JSON file and add
+`--omatrust-config /path/to/omatrust.json` to the daemon command below, or set
+`MPAS_OMATRUST_CONFIG`. See
+[OMATrust Plugin Verification](../README.md#omatrust-plugin-verification) for
+the complete format and an explanation of the reported evidence.
+
 In a dedicated terminal:
 
 ```sh

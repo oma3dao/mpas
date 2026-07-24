@@ -75,12 +75,19 @@ Linkage is established by any of:
 
 ### TrustContext
 
+`TrustContext` is a derived runtime object. Operators provide `OmaTrustConfig`;
+the adapter fetches current trust anchors and constructs this object. It is not
+an operator-authored file format.
+
 ```typescript
 interface TrustContext {
-  /** OMATrust SDK instance for querying attestations */
-  sdk: OmaTrustSdk;
-  /** OMATrust backend URL for fetching trusted issuers */
+  /** OMATrust backend URL used for trust anchors and controller checks */
   backendUrl: string;
+  /** Approved issuers derived from current trust anchors */
+  approvedIssuers: Array<{
+    address: string;
+    label: string;
+  }>;
   /** Schema UIDs to query */
   schemas: {
     securityAssessment: string;
@@ -89,6 +96,12 @@ interface TrustContext {
     linkedIdentifier: string;
     controllerWitness: string;
   };
+  /** Optional schema UID to human-readable label mapping */
+  schemaLabels?: Map<string, string>;
+  /** RPC endpoint for querying EAS attestations */
+  rpcUrl: string;
+  /** EAS contract on the configured chain */
+  easContractAddress: string;
 }
 ```
 
@@ -115,47 +128,56 @@ Approved issuers are fetched from the OMATrust-backend trust-policy API at start
 1. Adapter loads plugin and verifies `artifactDid` hash (existing behavior)
 2. Adapter calls `canTrust(plugin, config, trustContext)`
 3. `canTrust` queries OMATrust for attestations and linkage proofs
-4. Returns `TrustVerdict` with pass/fail per check and human-readable reasons
-5. If either check passes → `trusted: true`, load plugin
-6. If both checks fail → prompt operator with reasons, ask to confirm or abort
-7. If operator confirms → load plugin; if operator rejects → skip plugin
+4. Returns a trust report with pass/fail per check and human-readable reasons
+5. Adapter displays all available attestation and linkage information
+6. Adapter asks the operator whether to use the plugin regardless of the aggregate verdict
+7. If the operator confirms → load plugin; if operator rejects → skip plugin
 
 ---
 
 ## 5. Operator Experience
 
-### Trusted plugin (no prompt)
+### Plugin with trusted evidence
 
 ```
 Plugin: github-repo (did:artifact:bafk...)
-  ✓ Trust verified
-    Attested by: OMA3 Security Lab (security-assessment)
-    Linked to: github.com (controller-witness)
-  Loading plugin...
+  Content integrity: verified (plugin content matches the configured did:artifact)
+  OMATrust information:
+    Attestation check: PASS — Attested by: OMA3 Security Lab (security-assessment)
+    Target linkage: PASS — Linked to: github.com (controller-witness)
+
+  [y/N] Would you like to use this plugin given the information shown?
 ```
 
 ### Untrusted plugin (interactive prompt)
 
 ```
 Plugin: sketchy-tool (did:artifact:bafk...)
-  ⚠️  Plugin has a low trust score. Do you want to continue?
-
-  Reasons:
-  • Zero attestations: No attestations found for this artifact on OMATrust.
-  • No linkage: did:artifact is not linked to the URL this plugin targets (api.example.com).
+  Content integrity: verified (plugin content matches the configured did:artifact)
+  OMATrust information:
+  Attestation check: NOT VERIFIED — Zero attestations: No attestations found for this artifact on OMATrust.
+  Target linkage: NOT VERIFIED — No linkage: did:artifact is not linked to the URL this plugin targets (api.example.com).
     Without linkage, there is no trusted issuer that vouches for this plugin's
     association with its declared target.
 
-  [y/N] Continue loading this plugin?
+  [y/N] Would you like to use this plugin given the information shown?
 ```
 
 ### Network unreachable (graceful degradation)
 
 ```
 Plugin: github-repo (did:artifact:bafk...)
-  ⚠️  OMATrust check skipped: network unavailable
-  Cannot verify trust posture. Do you want to continue? [y/N]
+  Content integrity: verified (plugin content matches the configured did:artifact)
+  WARNING: OMATrust context could not be loaded.
+  No OMATrust attestations, approved-issuer checks, target linkage, or other
+  legitimacy and provenance checks were performed.
+
+  [y/N] Would you like to use this plugin given the information shown?
 ```
+
+If no OMATrust context is configured, the adapter displays the same warning with
+`No OMATrust context was provided`. Content integrity verification still occurs;
+the warning concerns legitimacy, provenance, attestations, and target linkage.
 
 ---
 
@@ -165,17 +187,17 @@ The check hooks into `config-loader.ts` → `loadDeploymentConfigFile()`, after 
 
 ```typescript
 // After hash verification passes:
-const verdict = await canTrust(pluginResult.plugin, config, trustContext);
+const assessment = trustContext
+  ? { status: "checked", report: await buildTrustReport(pluginResult.plugin, config, trustContext) }
+  : { status: "notChecked", reason: "notConfigured" };
 
-if (!verdict.trusted) {
-  const confirmed = await promptOperator(verdict, config);
-  if (!confirmed) {
-    return loadError("PLUGIN_TRUST_REJECTED", "Operator declined to load untrusted plugin.", filePath);
-  }
+const confirmed = await promptPluginUse(assessment, config);
+if (!confirmed) {
+  return loadError("PLUGIN_TRUST_REJECTED", "Operator declined to use the plugin.", filePath);
 }
 ```
 
-If `canTrust` throws (network failure, SDK error), the adapter treats it as untrusted and prompts the operator with the degraded-mode message.
+If the trust context cannot be loaded or a check is unavailable, the adapter reports the failure and prompts the operator with the degraded-mode message.
 
 ---
 
@@ -256,7 +278,17 @@ interface OmaTrustConfig {
 }
 ```
 
-If `disabled: true` or no config is provided, the adapter skips `canTrust` and loads plugins as it does today (no regression).
+Pass the configuration programmatically as `DaemonOptions.omaTrust`, or provide a
+JSON file through `mpas daemon start --omatrust-config <file>` or the
+`MPAS_OMATRUST_CONFIG` environment variable.
+
+The canonical operator-facing format, complete JSON example, and startup
+instructions are documented in the demo
+[OMATrust Plugin Verification README section](../../../examples/demo/README.md#omatrust-plugin-verification).
+
+If `disabled: true` or no configuration is provided, the adapter still verifies
+the plugin's `did:artifact`, warns that no OMATrust legitimacy or provenance
+checks were performed, and requires operator confirmation.
 
 ---
 
@@ -264,7 +296,7 @@ If `disabled: true` or no config is provided, the adapter skips `canTrust` and l
 
 | Dependency | Purpose |
 |---|---|
-| `omatrust-sdk` | `getAttestationsForDid`, `deduplicateReviews`, `calculateAverageUserReviewRating`, linkage queries |
+| `@oma3/omatrust` | `getAttestationsForDid`, DID conversion, and linkage queries |
 | `omatrust-backend` | Trust-policy API (provides the approved issuers list) |
 | `ethers` | JSON-RPC provider for on-chain queries |
 | EAS on OMAchain | Source of attestation and linkage data |
@@ -276,8 +308,9 @@ If `disabled: true` or no config is provided, the adapter skips `canTrust` and l
 
 **In scope (v1):**
 - `canTrust()` function with two built-in checks (attestation + linkage)
-- Interactive operator prompt when trust fails
+- Interactive operator prompt after every plugin trust report
 - Graceful degradation when network is unavailable
+- Explicit warning and confirmation when no trust context is configured
 - Trust report for logging/audit
 - `disabled` flag to skip entirely
 

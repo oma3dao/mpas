@@ -43,6 +43,7 @@ async function startFixtureDaemon() {
     port: 0,
     maxEnvelopeValidityMs: Number.MAX_SAFE_INTEGER,
     journalPath: join(journalDir, "dispatch-ledger.jsonl"),
+    confirmPluginUse: async () => true,
   });
   startedApps.push(daemon.app);
   return daemon;

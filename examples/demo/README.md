@@ -226,6 +226,64 @@ The plugin is a stable, published artifact that describes what an MCP server can
 
 You do not edit the plugin directly. Its integrity is verified via `artifactDid` at startup — any modification invalidates the DID.
 
+### OMATrust Plugin Verification
+
+The `did:artifact` check proves **content integrity**: the plugin bytes loaded by
+the adapter match the content-addressed identifier in deployment configuration.
+It does not by itself prove that the publisher is legitimate, that the plugin
+is associated with its claimed target application, or that a trusted party has
+reviewed it.
+
+When an OMATrust configuration is provided, the adapter also queries for:
+
+- attestations from approved issuers, including their schema and current status;
+- linkage between the plugin artifact and its declared target application; and
+- controller evidence such as linked-identifier attestations, controller
+  witnesses, DNS TXT records, or a well-known DID document.
+
+The adapter displays all evidence it finds and asks the operator whether to use
+the plugin. It prompts even when trusted evidence is present. If no OMATrust
+configuration is provided—or OMATrust is unavailable—the adapter reports that
+the `did:artifact` integrity check succeeded, warns that legitimacy and
+provenance were not checked, and asks for confirmation. Non-interactive startup
+declines by default.
+
+Operators provide an `OmaTrustConfig` JSON file; they do not construct the
+internal `TrustContext` directly. The adapter builds `TrustContext` by loading
+the configured chain information and fetching current trust anchors.
+
+```json
+{
+  "rpcUrl": "https://YOUR_CHAIN_RPC_URL",
+  "easContractAddress": "0xYOUR_EAS_CONTRACT_ADDRESS",
+  "backendUrl": "https://YOUR_OMATRUST_BACKEND",
+  "schemas": {
+    "securityAssessment": "0xSECURITY_ASSESSMENT_SCHEMA_UID",
+    "certification": "0xCERTIFICATION_SCHEMA_UID",
+    "userReview": "0xUSER_REVIEW_SCHEMA_UID",
+    "linkedIdentifier": "0xLINKED_IDENTIFIER_SCHEMA_UID",
+    "controllerWitness": "0xCONTROLLER_WITNESS_SCHEMA_UID"
+  }
+}
+```
+
+The RPC endpoint, EAS contract, and schema UIDs must describe the same OMATrust
+chain deployment. Start the daemon with either:
+
+```sh
+mpas daemon start --omatrust-config /path/to/omatrust.json
+```
+
+or:
+
+```sh
+export MPAS_OMATRUST_CONFIG=/path/to/omatrust.json
+mpas daemon start
+```
+
+For evaluation semantics and the derived `TrustContext` structure, see the
+[OMATrust plugin verification feature specification](../../docs/features/omatrust/spec.md).
+
 ### Deployment Config
 
 | Field                  | Purpose                                                                     |
@@ -241,7 +299,7 @@ You do not edit the plugin directly. Its integrity is verified via `artifactDid`
 
 **Relationship between plugin and policy:** The plugin describes what operations exist and their payload schemas. The `policy` object (an embedded `MpasApplicationPolicy`) defines who can propose, who can approve, and what thresholds apply. An operation is governed if it's in the plugin's `operations` OR has an entry in `policy.policies`.
 
-**The governance boundary:** anything outside the governed set is routed as pass-through — after proposer gating and signature verification it executes with the adapter's credential on the proposer's signature alone, and `defaultRequirement` does not apply. This is the plugin-anchored trust model: the plugin publisher decides which operations need governance, and trusting the plugin (via OMATrust publisher attestation) is what makes pass-through safe. The demo exposes `create_issue` this way on purpose to demonstrate the boundary. If you care about an operation, put it in the plugin or give it a policy entry; power users can refuse ungoverned operations entirely with `passThrough: "deny"`.
+**The governance boundary:** anything outside the governed set is routed as pass-through — after proposer gating and signature verification it executes with the adapter's credential on the proposer's signature alone, and `defaultRequirement` does not apply. This is the plugin-anchored trust model: the plugin publisher decides which operations need governance, and the operator accepts that boundary after reviewing available OMATrust attestation and target-linkage evidence. The demo exposes `create_issue` this way on purpose to demonstrate the boundary. If you care about an operation, put it in the plugin or give it a policy entry; power users can refuse ungoverned operations entirely with `passThrough: "deny"`.
 
 ### Bridge Config
 
@@ -313,7 +371,7 @@ Coordination endpoints:
 
 ## Getting Started
 
-See [docs/setup/macos.md](docs/setup/macos.md) for the full demo setup guide covering:
+See [guides/setup-macos.md](guides/setup-macos.md) for the full demo setup guide covering:
 
 - Part 1: Environment setup (every account)
 - Part 2: Single-user demo configuration

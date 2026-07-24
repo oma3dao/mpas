@@ -11,8 +11,12 @@ import type { Did } from "../core/types.js";
 import type { PolicyConfig, PolicyEntry } from "../core/policy-engine.js";
 import type { McpHttpTarget } from "./dispatch/mcp-http.js";
 import type { McpStdioTarget } from "./dispatch/mcp-stdio.js";
-import { canTrust, type TrustContext, type TrustVerdict } from "./trust.js";
-import { promptOperator, displayTrusted, promptNetworkUnavailable } from "./trust-prompt.js";
+import { buildTrustReport, type TrustContext } from "./trust.js";
+import {
+  promptPluginUse,
+  type ConfirmPluginUse,
+  type PluginTrustAssessment,
+} from "./trust-prompt.js";
 
 import type { JWK } from "jose";
 import { didJwkToJwk, isDidJwk } from "@oma3/mpas";
@@ -98,6 +102,12 @@ export type LoadDeploymentConfigsResult =
       ok: false;
       error: DeploymentConfigLoadError;
     };
+
+export interface LoadDeploymentConfigsOptions {
+  trustContext?: TrustContext | null;
+  trustContextError?: string;
+  confirmPluginUse?: ConfirmPluginUse;
+}
 
 const policyEntrySchema = {
   type: "object",
@@ -215,7 +225,10 @@ const deploymentConfigSchema = {
 const ajv = new Ajv2020({ strict: false });
 const validateDeploymentConfig = ajv.compile(deploymentConfigSchema);
 
-export async function loadDeploymentConfigs(configDir: string, trustContext?: TrustContext | null): Promise<LoadDeploymentConfigsResult> {
+export async function loadDeploymentConfigs(
+  configDir: string,
+  options: LoadDeploymentConfigsOptions = {},
+): Promise<LoadDeploymentConfigsResult> {
   let entries: string[];
   try {
     entries = await readdir(configDir);
@@ -228,7 +241,7 @@ export async function loadDeploymentConfigs(configDir: string, trustContext?: Tr
 
   for (const entry of entries.filter((file) => file.endsWith(".json")).sort()) {
     const filePath = join(configDir, entry);
-    const loaded = await loadDeploymentConfigFile(filePath, configDir, trustContext);
+    const loaded = await loadDeploymentConfigFile(filePath, configDir, options);
     if (!loaded.ok) {
       return loaded;
     }
@@ -247,7 +260,7 @@ export async function loadDeploymentConfigs(configDir: string, trustContext?: Tr
 async function loadDeploymentConfigFile(
   filePath: string,
   configDir: string,
-  trustContext?: TrustContext | null,
+  options: LoadDeploymentConfigsOptions,
 ): Promise<
   | {
       ok: true;
@@ -334,28 +347,35 @@ async function loadDeploymentConfigFile(
     );
   }
 
-  // OMATrust: evaluate plugin trustworthiness after integrity is confirmed.
-  if (trustContext) {
-    let verdict: TrustVerdict;
+  // Report the available trust information and require an explicit operator
+  // decision after the did:artifact integrity check succeeds.
+  let assessment: PluginTrustAssessment;
+  if (options.trustContext) {
     try {
-      verdict = await canTrust(pluginResult.plugin, config, trustContext);
-    } catch {
-      // Network failure or SDK error — treat as untrusted, prompt operator.
-      const confirmed = await promptNetworkUnavailable(config);
-      if (!confirmed) {
-        return loadError("PLUGIN_TRUST_REJECTED", "Operator declined to load plugin (trust check unavailable).", filePath);
-      }
-      return { ok: true, config: { filePath, config, plugin: pluginResult.plugin } };
+      assessment = {
+        status: "checked",
+        report: await buildTrustReport(pluginResult.plugin, config, options.trustContext),
+      };
+    } catch (error) {
+      assessment = {
+        status: "notChecked",
+        reason: "unavailable",
+        detail: error instanceof Error ? error.message : String(error),
+      };
     }
+  } else {
+    assessment = options.trustContextError
+      ? { status: "notChecked", reason: "unavailable", detail: options.trustContextError }
+      : { status: "notChecked", reason: "notConfigured" };
+  }
 
-    if (verdict.trusted) {
-      displayTrusted(config, verdict);
-    } else {
-      const confirmed = await promptOperator(verdict, config);
-      if (!confirmed) {
-        return loadError("PLUGIN_TRUST_REJECTED", "Operator declined to load untrusted plugin.", filePath);
-      }
-    }
+  const confirmed = await (options.confirmPluginUse ?? promptPluginUse)(assessment, config);
+  if (!confirmed) {
+    return loadError(
+      "PLUGIN_TRUST_REJECTED",
+      "Operator declined to use the plugin after reviewing its trust information.",
+      filePath,
+    );
   }
 
   return {
