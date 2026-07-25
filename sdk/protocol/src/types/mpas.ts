@@ -316,6 +316,23 @@ export interface AdapterError {
 }
 
 /**
+ * Non-authoritative, sanitized diagnostic metadata for an ActionResponse.
+ * Execution profiles define interoperable values for `code`, `phase`, and
+ * `transport`.
+ */
+export interface ActionDiagnostic {
+  code: string;
+  phase?: string;
+  transport?: string;
+  message?: string;
+}
+
+export interface ActionResponseContext {
+  diagnostic?: ActionDiagnostic;
+  [key: string]: unknown;
+}
+
+/**
  * ActionResponse — the HTTP profile's protocol response (Section 6.4). The Verifier
  * returns this for any submission it can parse far enough to compute the
  * actionEnvelopeHash. `result` is the projection of the Core Action Lifecycle.
@@ -341,6 +358,7 @@ export interface ActionResponse {
   executionReceipt?: ExecutionReceipt;
   executionResult?: unknown;
   error?: AdapterError;
+  context?: ActionResponseContext;
   actionRequestId?: string;
   pollAfter?: Timestamp;
   createdAt?: Timestamp;

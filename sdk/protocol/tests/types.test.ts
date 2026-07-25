@@ -117,6 +117,24 @@ describe("MPAS Bridge types", () => {
     expect(response.result).toBe("additionalApprovalsRequired");
   });
 
+  it("models informative ActionResponse diagnostics", () => {
+    const response: AdapterResponse = {
+      version: "1",
+      type: "ActionResponse",
+      result: "indeterminate",
+      context: {
+        diagnostic: {
+          code: "DISPATCH_TIMEOUT",
+          phase: "tools/call",
+          transport: "stdio",
+          message: "The upstream MCP server did not respond before the dispatch timeout.",
+        },
+      },
+    };
+
+    expect(response.context?.diagnostic?.code).toBe("DISPATCH_TIMEOUT");
+  });
+
   it("models requirement and reject policy entries", () => {
     const policy: PolicyConfig = {
       defaultRequirement: { type: "proposerOnly" },

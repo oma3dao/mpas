@@ -53,6 +53,13 @@ describe("generateBridge", () => {
     expect(source).not.toContain("structuredContent: result,");
   });
 
+  it("relays indeterminate diagnostics while preserving no-retry guidance", () => {
+    const source = generateBridge(upstream);
+    expect(source).toContain("response.context?.diagnostic");
+    expect(source).toContain("...(diagnostic ? { diagnostic } : {})");
+    expect(source).toContain("Do not automatically retry with the same actionId");
+  });
+
   it("is deterministic: same input produces byte-identical output", () => {
     expect(generateBridge(upstream)).toBe(generateBridge(upstream));
   });

@@ -1,4 +1,6 @@
-import type { DispatchPrepareResult, DispatchSession, McpDispatchResult } from "./mcp-stdio.js";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { errorMessage, McpClientSession, type DispatchPrepareResult } from "./mcp-stdio.js";
 
 export interface McpHttpTarget {
   type: "mcp.http";
@@ -8,88 +10,36 @@ export interface McpHttpTarget {
 }
 
 /**
- * Prepare an HTTP dispatch session. Unlike stdio, the fetch-based client folds
- * connection establishment into transmission, so there is no separable pre-ledger
- * connect step; the ledger write occurs immediately before the request is sent.
- * Connection-level failures therefore surface at transmit time and are classified
- * conservatively as `indeterminate` (outcome unconfirmed) per the no-rollback rule.
+ * Connect and initialize the HTTP MCP target before the ledger write. A later
+ * transport failure during tools/call remains indeterminate.
  */
 export async function prepareMcpHttp(target: McpHttpTarget, credential: string): Promise<DispatchPrepareResult> {
-  const session: DispatchSession = {
-    transmit: (toolName, args) => transmitMcpHttp(target, toolName, args, credential),
-    close: () => {},
-  };
-  return { ok: true, session };
-}
-
-async function transmitMcpHttp(
-  target: McpHttpTarget,
-  toolName: string,
-  args: object,
-  credential: string,
-): Promise<McpDispatchResult> {
   const timeoutMs = target.timeoutMs ?? 30_000;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  let response: Response;
+  const transport = new StreamableHTTPClientTransport(new URL(target.url), {
+    requestInit: {
+      headers: injectCredential(target.headers ?? {}, credential),
+    },
+  });
+  const client = new Client(
+    { name: "mpas-credential-adapter", version: "1.0.0" },
+    { capabilities: {} },
+  );
   try {
-    response = await fetch(target.url, {
-      method: "POST",
-      signal: controller.signal,
-      headers: {
-        "content-type": "application/json",
-        ...injectCredential(target.headers ?? {}, credential),
-      },
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        id: 1,
-        method: "tools/call",
-        params: {
-          name: toolName,
-          arguments: args,
-        },
-      }),
-    });
+    await client.connect(transport, { timeout: timeoutMs, maxTotalTimeout: timeoutMs });
   } catch (error) {
-    if (controller.signal.aborted) {
-      return {
-        ok: false,
-        error: {
-          kind: "McpDispatchError",
-          code: "DISPATCH_TIMEOUT",
-          message: `MCP HTTP dispatch timed out after ${timeoutMs} ms.`,
-        },
-      };
-    }
-
-    // Transport failure after the ledger write: the outcome is unconfirmed.
+    await client.close().catch(() => {});
+    await transport.close().catch(() => {});
     return {
       ok: false,
       error: {
-        kind: "McpDispatchError",
-        code: "DISPATCH_TIMEOUT",
-        message: `MCP HTTP transport error: ${error instanceof Error ? error.message : String(error)}`,
-      },
-    };
-  } finally {
-    clearTimeout(timer);
-  }
-
-  const json = (await response.json()) as { result?: unknown; error?: { message?: string } };
-  if (!response.ok || json.error) {
-    return {
-      ok: false,
-      error: {
-        kind: "McpDispatchError",
-        code: "INVALID_RESPONSE",
-        message: json.error?.message ?? `MCP HTTP server returned ${response.status}.`,
+        code: "TARGET_UNAVAILABLE",
+        message: `MCP HTTP target could not be connected and initialized: ${errorMessage(error)}`,
       },
     };
   }
-
   return {
     ok: true,
-    result: json.result,
+    session: new McpClientSession(client, timeoutMs, "TRANSPORT_ERROR"),
   };
 }
 

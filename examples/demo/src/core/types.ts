@@ -46,6 +46,8 @@ export type {
   PolicySuggestion,
   MpasApplicationPlugin,
   AdapterError,
+  ActionDiagnostic,
+  ActionResponseContext,
   ActionResponse,
   MpasHttpError,
   AdapterResponse,

@@ -16,7 +16,7 @@ const target: McpStdioTarget = {
 };
 
 describe("prepareMcpStdio", () => {
-  it("launches a stdio MCP server and transmits with injected credentials", async () => {
+  it("initializes a stdio MCP server before transmitting with injected credentials", async () => {
     const prepared = await prepareMcpStdio(target, "ghp_test");
     expect(prepared.ok).toBe(true);
     if (!prepared.ok) {
@@ -39,7 +39,7 @@ describe("prepareMcpStdio", () => {
       expect(payload.credentialPresent).toBe(true);
       expect(payload.simulated_result).toMatchObject({ title: "hello" });
     } finally {
-      prepared.session.close();
+      await prepared.session.close();
     }
   });
 
@@ -65,12 +65,12 @@ describe("prepareMcpStdio", () => {
         expect(firstPayload.pid).toBe(secondPayload.pid);
       }
     } finally {
-      prepared.session.close();
+      await prepared.session.close();
     }
   });
 
   it("returns DISPATCH_TIMEOUT when the stdio MCP server does not respond in time", async () => {
-    const prepared = await prepareMcpStdio({ ...target, args: [slowFixtureServer], timeoutMs: 10 }, "ghp_test");
+    const prepared = await prepareMcpStdio({ ...target, args: [slowFixtureServer], timeoutMs: 50 }, "ghp_test");
     expect(prepared.ok).toBe(true);
     if (!prepared.ok) {
       return;
@@ -84,7 +84,7 @@ describe("prepareMcpStdio", () => {
 
       expect(result).toMatchObject({ ok: false, error: { code: "DISPATCH_TIMEOUT" } });
     } finally {
-      prepared.session.close();
+      await prepared.session.close();
     }
   });
 

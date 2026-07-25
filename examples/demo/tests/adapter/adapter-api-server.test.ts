@@ -13,6 +13,7 @@ import type { Did, ExecutionReceipt, ReceiptPayload } from "../../src/core/types
 const fixturesDir = fileURLToPath(new URL("../fixtures/", import.meta.url));
 const slowFixtureServer = fileURLToPath(new URL("../fixtures/adapter/slow-mcp-server.mjs", import.meta.url));
 const errorFixtureServer = fileURLToPath(new URL("../fixtures/adapter/error-mcp-server.mjs", import.meta.url));
+const missingFixtureServer = join(fixturesDir, "adapter", "missing-mcp-server.mjs");
 const apps: FastifyInstance[] = [];
 
 interface KeyFixture {
@@ -81,7 +82,7 @@ async function submitFixture(app: FastifyInstance, fixtureFile: string) {
   });
 }
 
-async function makeTargetConfigDir(server: string, timeoutMs: number) {
+async function makeTargetConfigDir(server: string, timeoutMs: number, command = "node") {
   const dir = await mkdtemp(join(tmpdir(), "mpas-http-configs-"));
   const config = await readJson<Record<string, unknown>>(join(fixturesDir, "configs", "github-auto-approve.json"));
   config.plugin = {
@@ -90,7 +91,7 @@ async function makeTargetConfigDir(server: string, timeoutMs: number) {
   };
   config.executionTarget = {
     type: "mcp.stdio",
-    command: "node",
+    command,
     args: [server],
     env: {
       GITHUB_PERSONAL_ACCESS_TOKEN: "{{credential:github-test-token}}",
@@ -149,14 +150,45 @@ describe("HTTP endpoint", () => {
     expect(second.json()).toMatchObject({ result: "rejected", error: { code: "REPLAY_DETECTED" } });
   });
 
-  it("resolves a dispatch timeout as indeterminate, not failed", async () => {
-    const app = await makeApp(await makeTargetConfigDir(slowFixtureServer, 10));
+  it("reports a sanitized initialization diagnostic without issuing a receipt", async () => {
+    const app = await makeApp(await makeTargetConfigDir(missingFixtureServer, 1000, "definitely-not-an-mcp-command"));
     const response = await submitFixture(app, "valid-no-approval-required.json");
 
     expect(response.statusCode).toBe(200);
-    const body = response.json() as { result: string; executionReceipt: ExecutionReceipt; executionResult?: unknown };
+    expect(response.json()).toMatchObject({
+      result: "rejected",
+      error: { code: "TARGET_UNAVAILABLE" },
+      context: {
+        diagnostic: {
+          code: "TARGET_UNAVAILABLE",
+          phase: "initialize",
+          transport: "stdio",
+          message: "The upstream MCP target could not be launched or initialized.",
+        },
+      },
+    });
+    expect(response.json()).not.toHaveProperty("executionReceipt");
+  });
+
+  it("resolves a dispatch timeout as indeterminate, not failed", async () => {
+    const app = await makeApp(await makeTargetConfigDir(slowFixtureServer, 50));
+    const response = await submitFixture(app, "valid-no-approval-required.json");
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json() as {
+      result: string;
+      executionReceipt: ExecutionReceipt;
+      executionResult?: unknown;
+      context?: { diagnostic?: Record<string, unknown> };
+    };
     expect(body.result).toBe("indeterminate");
     expect(body.executionResult).toBeUndefined();
+    expect(body.context?.diagnostic).toEqual({
+      code: "DISPATCH_TIMEOUT",
+      phase: "tools/call",
+      transport: "stdio",
+      message: "The upstream MCP server did not respond before the dispatch timeout.",
+    });
     expect((await verifyReceiptPayload(body.executionReceipt)).result).toBe("indeterminate");
   });
 
@@ -165,8 +197,18 @@ describe("HTTP endpoint", () => {
     const response = await submitFixture(app, "valid-no-approval-required.json");
 
     expect(response.statusCode).toBe(200);
-    const body = response.json() as { result: string; executionReceipt: ExecutionReceipt };
+    const body = response.json() as {
+      result: string;
+      executionReceipt: ExecutionReceipt;
+      context?: { diagnostic?: Record<string, unknown> };
+    };
     expect(body.result).toBe("failed");
+    expect(body.context?.diagnostic).toEqual({
+      code: "INVALID_RESPONSE",
+      phase: "tools/call",
+      transport: "stdio",
+      message: "The upstream MCP server returned a protocol error.",
+    });
     expect((await verifyReceiptPayload(body.executionReceipt)).result).toBe("failed");
   });
 

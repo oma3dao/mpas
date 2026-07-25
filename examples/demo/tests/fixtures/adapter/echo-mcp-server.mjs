@@ -150,6 +150,7 @@ function respondError(id, code, message) {
 }
 
 const lines = createInterface({ input: process.stdin });
+let initialized = false;
 
 lines.on("line", (line) => {
   let request;
@@ -171,15 +172,24 @@ lines.on("line", (line) => {
   }
 
   if (method === "notifications/initialized") {
+    initialized = true;
     return; // no response needed
   }
 
   if (method === "tools/list") {
+    if (!initialized) {
+      respondError(id, -32002, "MCP client must initialize before listing tools.");
+      return;
+    }
     respond(id, { tools });
     return;
   }
 
   if (method === "tools/call") {
+    if (!initialized) {
+      respondError(id, -32002, "MCP client must initialize before calling tools.");
+      return;
+    }
     const result = handleToolCall(params.name, params.arguments ?? {});
     if (result === null) {
       respondError(id, -32601, `Unknown tool: ${params.name}`);

@@ -177,6 +177,22 @@ When verification and policy succeed, the Verifier dispatches the action as a na
 
 A response with `isError: true` is a definitive outcome from the target (the call happened and the application reports failure); it MUST NOT be treated as unconfirmed.
 
+#### 6.1.1 MCP ActionResponse Diagnostics
+
+An HTTP-profile Verifier SHOULD include `ActionResponse.context.diagnostic` for the MCP dispatch conditions below. These diagnostics explain the outcome but do not alter the receipt result or Core lifecycle.
+
+| Diagnostic `code`   | Action result    | `phase`       | Meaning |
+| ------------------- | ---------------- | ------------- | ------- |
+| `TARGET_UNAVAILABLE`| `rejected`       | `initialize`  | The MCP target could not be launched, connected, or initialized before the dispatch-ledger write. This is a stateless pre-dispatch rejection and has no Execution Receipt. |
+| `PROCESS_EXITED`    | `indeterminate`  | `tools/call`  | A stdio MCP process exited after dispatch and before a response was confirmed. |
+| `DISPATCH_TIMEOUT`  | `indeterminate`  | `tools/call`  | No definitive response was received before the dispatch timeout. |
+| `TRANSPORT_ERROR`   | `indeterminate`  | `tools/call`  | The MCP transport failed after dispatch and the execution outcome cannot be confirmed. |
+| `INVALID_RESPONSE`  | `failed`         | `tools/call`  | A definitive JSON-RPC or MCP protocol error was received. |
+
+For this profile, `phase` is either `initialize` or `tools/call`. The interoperable `transport` values are `stdio` and `streamable-http`; implementations MAY define additional transport values. Messages MUST follow the sanitization requirements in the HTTP Profile Section 6.4.2 and SHOULD describe the condition without embedding raw upstream error output.
+
+A bridge SHOULD relay the diagnostic object to the calling agent when it synthesizes a response for an outcome that has no `executionResult`. A bridge MUST preserve the result's lifecycle semantics; specifically, it MUST NOT encourage automatic resubmission of an `indeterminate` action with the same `actionId`.
+
 ### 6.2 Tool Availability Drift
 
 Application Plugins are immutable; target MCP servers evolve. If the target server does not expose the payload's tool at dispatch time (e.g., JSON-RPC "unknown tool" error), the receipt result is `failed`. Verifiers SHOULD detect schema drift proactively (e.g., comparing the plugin's operations against the target's `tools/list` at startup or on a schedule) and surface warnings to the operator; drift detection is diagnostic and MUST NOT alter verification semantics, which are defined solely by the installed plugin.

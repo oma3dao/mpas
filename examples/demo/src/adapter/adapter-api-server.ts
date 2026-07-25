@@ -5,7 +5,14 @@ import { buildAuthorizationRequirements } from "../core/auth-requirements-builde
 import { checkProposerAuthorization, evaluatePolicy, type PolicyConfig } from "../core/policy-engine.js";
 import { validatePayloadAgainstPlugin } from "../core/plugin-loader.js";
 import { buildAndSignReceipt } from "../core/receipt-builder.js";
-import type { ActionPackage, Did, ExecutionReceipt, Hash, ReceiptResult } from "../core/types.js";
+import type {
+  ActionPackage,
+  ActionResponseContext,
+  Did,
+  ExecutionReceipt,
+  Hash,
+  ReceiptResult,
+} from "../core/types.js";
 import { TraceLogger } from "../core/trace.js";
 import {
   DEFAULT_MAX_ENVELOPE_VALIDITY_MS,
@@ -302,6 +309,11 @@ export function createAdapterApiServer(options: HttpEndpointOptions): FastifyIns
         result: "rejected",
         actionEnvelopeHash: envelopeHash,
         error: { code: prepared.error.code, message: prepared.error.message },
+        context: diagnosticContext(
+          prepared.error.code,
+          "initialize",
+          loadedConfig.config.executionTarget.type,
+        ),
       });
     }
 
@@ -310,7 +322,7 @@ export function createAdapterApiServer(options: HttpEndpointOptions): FastifyIns
     // actionId can never both reach transmission.
     const authorize = ledger.authorizeDispatch(pkg.actionEnvelope.actionId, envelopeHash.value, pkg.actionEnvelope.expiresAt);
     if (authorize.kind !== "absent") {
-      prepared.session.close();
+      await prepared.session.close();
       if (authorize.kind === "pending") {
         trace.emit("dispatch", { actionId, result: "pending", reason: "ledger_race" });
         return actionResponse(options, { result: "pending", actionEnvelopeHash: envelopeHash });
@@ -332,7 +344,7 @@ export function createAdapterApiServer(options: HttpEndpointOptions): FastifyIns
     try {
       dispatchResult = await prepared.session.transmit(mcpOperation, mcpArguments);
     } finally {
-      prepared.session.close();
+      await prepared.session.close();
     }
 
     const classified = classifyDispatch(dispatchResult);
@@ -350,6 +362,13 @@ export function createAdapterApiServer(options: HttpEndpointOptions): FastifyIns
       executionReceipt: receipt,
       executionResult: classified.executionResult,
       error: classified.error,
+      context: classified.error
+        ? diagnosticContext(
+            classified.error.code,
+            "tools/call",
+            loadedConfig.config.executionTarget.type,
+          )
+        : undefined,
     });
   });
 
@@ -362,7 +381,8 @@ export function createAdapterApiServer(options: HttpEndpointOptions): FastifyIns
  *   - JSON-RPC success, result.isError !== true -> executed (executionResult present)
  *   - JSON-RPC success, result.isError === true -> failed   (executionResult present, verbatim)
  *   - INVALID_RESPONSE (JSON-RPC/protocol error)  -> failed   (executionResult absent)
- *   - DISPATCH_TIMEOUT / PROCESS_EXITED           -> indeterminate (executionResult absent)
+ *   - DISPATCH_TIMEOUT / PROCESS_EXITED / TRANSPORT_ERROR
+ *                                                  -> indeterminate (executionResult absent)
  */
 export function classifyDispatch(dispatchResult: McpDispatchResult): {
   result: "executed" | "failed" | "indeterminate";
@@ -380,6 +400,7 @@ export function classifyDispatch(dispatchResult: McpDispatchResult): {
   switch (dispatchResult.error.code) {
     case "DISPATCH_TIMEOUT":
     case "PROCESS_EXITED":
+    case "TRANSPORT_ERROR":
       return { result: "indeterminate", error: { code: dispatchResult.error.code, message: dispatchResult.error.message } };
     default:
       return { result: "failed", error: { code: dispatchResult.error.code, message: dispatchResult.error.message } };
@@ -407,6 +428,7 @@ interface ActionResponseInit {
   authorizationRequirements?: unknown;
   executionResult?: unknown;
   error?: { code: string; message: string };
+  context?: ActionResponseContext;
 }
 
 function actionResponse(options: HttpEndpointOptions, init: ActionResponseInit) {
@@ -420,8 +442,41 @@ function actionResponse(options: HttpEndpointOptions, init: ActionResponseInit) 
     ...(init.executionReceipt ? { executionReceipt: init.executionReceipt } : {}),
     ...(init.executionResult !== undefined ? { executionResult: init.executionResult } : {}),
     ...(init.error ? { error: init.error } : {}),
+    ...(init.context ? { context: init.context } : {}),
     createdAt: new Date().toISOString(),
   };
+}
+
+function diagnosticContext(
+  code: string,
+  phase: "initialize" | "tools/call",
+  targetType: LoadedDeploymentConfig["config"]["executionTarget"]["type"],
+): ActionResponseContext {
+  return {
+    diagnostic: {
+      code,
+      phase,
+      transport: targetType === "mcp.stdio" ? "stdio" : "streamable-http",
+      message: diagnosticMessage(code),
+    },
+  };
+}
+
+function diagnosticMessage(code: string): string {
+  switch (code) {
+    case "TARGET_UNAVAILABLE":
+      return "The upstream MCP target could not be launched or initialized.";
+    case "PROCESS_EXITED":
+      return "The upstream MCP process exited before responding.";
+    case "DISPATCH_TIMEOUT":
+      return "The upstream MCP server did not respond before the dispatch timeout.";
+    case "TRANSPORT_ERROR":
+      return "The upstream MCP transport failed after dispatch.";
+    case "INVALID_RESPONSE":
+      return "The upstream MCP server returned a protocol error.";
+    default:
+      return "The upstream MCP operation did not complete normally.";
+  }
 }
 
 /** Deterministic rejection that issues a repeatable (stateless) Execution Receipt. */

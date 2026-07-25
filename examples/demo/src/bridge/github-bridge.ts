@@ -509,16 +509,21 @@ function errorResult(code: string, message: string, structuredContent?: object):
 }
 
 function indeterminateResult(response: AdapterResponse): ToolCallResult {
+  const diagnostic = response.context?.diagnostic;
+  const diagnosticText = diagnostic
+    ? `INDETERMINATE (${diagnostic.code}).${diagnostic.message ? ` ${diagnostic.message}` : ""}`
+    : "INDETERMINATE.";
   return {
     isError: true,
     content: [
       {
         type: "text",
-        text: "INDETERMINATE: Execution was dispatched but the outcome could not be confirmed. Do not automatically retry with the same actionId; reconcile out of band and submit a new Action Envelope if needed.",
+        text: `${diagnosticText} Execution was dispatched but the outcome could not be confirmed. Do not automatically retry with the same actionId; reconcile out of band and submit a new Action Envelope if needed.`,
       },
     ],
     structuredContent: {
       status: "indeterminate",
+      ...(diagnostic ? { diagnostic } : {}),
       executionReceipt: response.executionReceipt,
     },
   };

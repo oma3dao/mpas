@@ -460,7 +460,7 @@ Fields:
 | `error`                     |  Optional   | Machine-readable detail for `rejected`/`failed`/`malformed` results (`{ code, message }`). Distinct from the transport-level `MpasHttpError` (Section 4.8). |
 | `actionRequestId`           |  Optional   | Verifier-local identifier for async processing.                                                                                                          |
 | `pollAfter`                 |  Optional   | Suggested time after which the caller may poll or retry, if async behavior is supported.                                                                 |
-| `context`                   |  Optional   | Non-authoritative explanatory metadata.                                                                                                                  |
+| `context`                   |  Optional   | Non-authoritative explanatory metadata, including profile-defined diagnostics (Section 6.4.2).                                                           |
 | `createdAt`                 | Recommended | Response timestamp.                                                                                                                                      |
 
 If both `ActionResponse.actionEnvelopeHash` and `authorizationRequirements.actionEnvelopeHash` are present, they MUST be identical. A client SHOULD reject a response where they differ.
@@ -474,6 +474,34 @@ Presence rule:
 - `result: executed` → `executionResult` present, verbatim target response.
 - `result: failed` where the target returned a tool-level failure (`isError: true`) → `executionResult` present, verbatim — this is a normal MCP tool response the agent is built to handle.
 - `result: failed` from a JSON-RPC/protocol error, and all pure-MPAS outcomes (`additionalApprovalsRequired`, `pending`, `rejected`, `expired`, `malformed`, `indeterminate`) → `executionResult` ABSENT; a bridge synthesizes a response for the agent, since the real server would never have produced these outcomes.
+
+#### 6.4.2 context.diagnostic (Informative)
+
+`context.diagnostic` carries sanitized, machine-readable information about where and how processing failed. It is INFORMATIVE and non-authoritative: it is not hash-bound, is not covered by the Execution Receipt signature, and MUST NOT override or contradict `result`, an Execution Receipt, Authorization Requirements, or any other MPAS artifact.
+
+```json
+{
+  "context": {
+    "diagnostic": {
+      "code": "DISPATCH_TIMEOUT",
+      "phase": "tools/call",
+      "transport": "stdio",
+      "message": "The upstream server did not respond before the dispatch timeout."
+    }
+  }
+}
+```
+
+| Field       | Required | Description |
+| ----------- | :------: | ----------- |
+| `code`      |   Yes    | Stable machine-readable diagnostic code. Execution profiles SHOULD define interoperable values. |
+| `phase`     | Optional | Profile-defined processing phase in which the condition occurred. |
+| `transport` | Optional | Profile- or deployment-defined transport identifier. |
+| `message`   | Optional | Sanitized human-readable explanation suitable for logs and agent-facing error reporting. |
+
+A Verifier SHOULD include `context.diagnostic` when a `failed`, `indeterminate`, or transient pre-dispatch response would otherwise be difficult to operate or reconcile. Diagnostic metadata MUST NOT change retry, idempotency, or lifecycle rules. In particular, a diagnostic on `result: indeterminate` does not make the same `actionId` safe to retry.
+
+Diagnostic content MUST be sanitized and resource-bounded. It MUST NOT contain credentials, authorization headers, environment-variable values, secrets, tokens, private keys, raw command arguments, or raw process output. Implementations MUST ignore unknown diagnostic fields and codes without changing their interpretation of `result`.
 
 ### 6.5 ActionResponse Result Values
 
