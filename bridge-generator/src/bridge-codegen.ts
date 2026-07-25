@@ -429,15 +429,20 @@ function errorResult(code: string, message: string, structuredContent?: object):
 
 function indeterminateResult(response: AdapterResponse): ToolCallResult {
   const diagnostic = response.context?.diagnostic;
+  const diagnosticMessage = diagnostic?.message ? \` \${diagnostic.message}\` : "";
   const diagnosticText = diagnostic
-    ? \`INDETERMINATE (\${diagnostic.code}).\${diagnostic.message ? \` \${diagnostic.message}\` : ""}\`
+    ? \`INDETERMINATE (\${diagnostic.code}).\${diagnosticMessage}\`
     : "INDETERMINATE.";
   return {
     isError: true,
     content: [
       {
         type: "text",
-        text: \`\${diagnosticText} Execution was dispatched but the outcome could not be confirmed. Do not automatically retry with the same actionId; reconcile out of band and submit a new Action Envelope if needed.\`,
+        text: [
+          \`\${diagnosticText} Execution was dispatched but the outcome could not be confirmed.\`,
+          "Do not automatically retry with the same actionId.",
+          "Reconcile out of band and submit a new Action Envelope if needed.",
+        ].join(" "),
       },
     ],
     structuredContent: {
