@@ -177,10 +177,14 @@ describe("MCP Execution Profile — Appendix A test vectors", () => {
         version: "1",
         type: "MpasApplicationPlugin",
         pluginDid: "did:web:plugins.example:x",
-        pluginVersion: "1.0.0",
+        pluginVersion: "0.1.0",
         publisherDid: "did:web:publisher.example",
         applicationDid: "did:web:app.example",
-        executionProfile: { id: "did:web:profiles.oma3.org:mcp", format: "mcp.toolsCall" },
+        executionProfile: {
+          id: "did:web:profiles.oma3.org:mcp",
+          format: "mcp.toolsCall",
+          protocolVersion: "2024-11-05",
+        },
         operations: {
           x: {
             description: "silent schema",

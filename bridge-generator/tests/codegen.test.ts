@@ -9,6 +9,7 @@ const upstream: UpstreamInfo = {
   args: ["mock-server.mjs"],
   serverName: "mock-mcp",
   serverVersion: "1.2.3",
+  protocolVersion: "2024-11-05",
   tools: [
     {
       name: "delete_branch",
@@ -97,12 +98,16 @@ describe("generateBridge", () => {
 
 describe("generatePlugin", () => {
   it("emits an operation for every tool with fail-closed payload schemas", () => {
-    const plugin = JSON.parse(generatePlugin(upstream.tools)) as {
+    const plugin = JSON.parse(generatePlugin(upstream.tools, upstream.protocolVersion)) as {
       type: string;
+      pluginVersion: string;
+      executionProfile: { protocolVersion: string };
       operations: Record<string, { impact: string; executionPayloadSchema: Record<string, unknown> }>;
     };
 
     expect(plugin.type).toBe("MpasApplicationPlugin");
+    expect(plugin.pluginVersion).toBe("0.1.0");
+    expect(plugin.executionProfile.protocolVersion).toBe("2024-11-05");
     expect(Object.keys(plugin.operations)).toEqual(["delete_branch", "list_repositories"]);
     expect(plugin.operations.delete_branch.impact).toBe("critical");
     expect(plugin.operations.delete_branch.executionPayloadSchema).toMatchObject({
@@ -113,7 +118,9 @@ describe("generatePlugin", () => {
   });
 
   it("is deterministic", () => {
-    expect(generatePlugin(upstream.tools)).toBe(generatePlugin(upstream.tools));
+    expect(generatePlugin(upstream.tools, upstream.protocolVersion)).toBe(
+      generatePlugin(upstream.tools, upstream.protocolVersion),
+    );
   });
 });
 

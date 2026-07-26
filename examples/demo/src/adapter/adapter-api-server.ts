@@ -408,9 +408,10 @@ export function classifyDispatch(dispatchResult: McpDispatchResult): {
 }
 
 async function prepareTarget(loadedConfig: LoadedDeploymentConfig, credential: string): Promise<DispatchPrepareResult> {
+  const protocolVersion = loadedConfig.plugin.executionProfile.protocolVersion;
   return loadedConfig.config.executionTarget.type === "mcp.http"
-    ? prepareMcpHttp(loadedConfig.config.executionTarget, credential)
-    : prepareMcpStdio(loadedConfig.config.executionTarget, credential);
+    ? prepareMcpHttp(loadedConfig.config.executionTarget, credential, protocolVersion)
+    : prepareMcpStdio(loadedConfig.config.executionTarget, credential, protocolVersion);
 }
 
 export function policyFromLoadedConfig(loadedConfig: LoadedDeploymentConfig): PolicyConfig {

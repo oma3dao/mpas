@@ -39,10 +39,11 @@ const applicationPluginSchema = {
     applicationDid: { type: "string", pattern: "^did:[a-z0-9]+:.+" },
     executionProfile: {
       type: "object",
-      required: ["id"],
+      required: ["id", "protocolVersion"],
       properties: {
         id: { type: "string", pattern: "^did:[a-z0-9]+:.+" },
         format: { type: "string", minLength: 1 },
+        protocolVersion: { type: "string", minLength: 1 },
       },
       additionalProperties: false,
     },

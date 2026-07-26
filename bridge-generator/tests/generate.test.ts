@@ -93,7 +93,7 @@ describe("runGenerate", () => {
       native: boolean;
       protocol: string;
       status: string;
-      upstream: { name: string; toolSurface: { alg: string; value: string } };
+      upstream: { name: string; protocolVersion: string; toolSurface: { alg: string; value: string } };
       plugin: { artifactDid: string };
     }>(join(appDir, "registry-entry.json"));
     const snapshot = await readJson<{ toolSurface: { value: string } }>(
@@ -103,6 +103,7 @@ describe("runGenerate", () => {
     expect(entry.native).toBe(false);
     expect(entry.protocol).toBe("mcp");
     expect(entry.status).toBe("beta");
+    expect(entry.upstream.protocolVersion).toBe("2024-11-05");
     expect(entry.upstream.toolSurface.value).toBe(snapshot.toolSurface.value);
     expect(entry.plugin.artifactDid).toMatch(/^did:artifact:baf/);
   });

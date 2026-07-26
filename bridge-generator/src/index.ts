@@ -45,7 +45,7 @@ export async function run(argv = process.argv.slice(2)): Promise<void> {
   process.stderr.write(`Tools written to: ${outputTools}\n`);
 
   if (args.outputPlugin) {
-    await writeOutput(args.outputPlugin, generatePlugin(upstream.tools));
+    await writeOutput(args.outputPlugin, generatePlugin(upstream.tools, upstream.protocolVersion));
     process.stderr.write(`Plugin written to: ${args.outputPlugin}\n`);
   }
 }

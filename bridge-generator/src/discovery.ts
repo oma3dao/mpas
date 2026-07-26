@@ -112,7 +112,11 @@ export async function discoverUpstream(command: string, args: string[]): Promise
       throw new HandshakeError(`initialize failed: ${initialize.error.message ?? "JSON-RPC error"}`);
     }
     const initResult = initialize.result as InitializeResult | undefined;
-    if (!initResult?.serverInfo?.name) {
+    if (
+      !initResult?.serverInfo?.name
+      || typeof initResult.protocolVersion !== "string"
+      || initResult.protocolVersion.length === 0
+    ) {
       throw new HandshakeError("Malformed response to initialize");
     }
 

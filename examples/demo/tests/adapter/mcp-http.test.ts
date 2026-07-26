@@ -3,12 +3,14 @@ import { afterEach, describe, expect, it } from "vitest";
 import { prepareMcpHttp, type McpHttpTarget } from "../../src/adapter/dispatch/mcp-http.js";
 
 let server: http.Server | undefined;
+let initializedProtocolVersion: string | undefined;
 
 afterEach(async () => {
   if (server) {
     await new Promise<void>((resolve) => server!.close(() => resolve()));
     server = undefined;
   }
+  initializedProtocolVersion = undefined;
 });
 
 async function startMcpServer(toolDelayMs = 0): Promise<{ url: string }> {
@@ -37,6 +39,7 @@ async function startMcpServer(toolDelayMs = 0): Promise<{ url: string }> {
       }
       response.setHeader("content-type", "application/json");
       if (json.method === "initialize") {
+        initializedProtocolVersion = json.params.protocolVersion;
         response.end(
           JSON.stringify({
             jsonrpc: "2.0",
@@ -86,8 +89,9 @@ describe("prepareMcpHttp", () => {
       },
     };
 
-    const prepared = await prepareMcpHttp(target, "ghp_test");
+    const prepared = await prepareMcpHttp(target, "ghp_test", "2024-11-05");
     expect(prepared.ok).toBe(true);
+    expect(initializedProtocolVersion).toBe("2024-11-05");
     if (!prepared.ok) {
       return;
     }
@@ -117,7 +121,11 @@ describe("prepareMcpHttp", () => {
 
   it("returns DISPATCH_TIMEOUT when the HTTP MCP endpoint does not respond in time", async () => {
     const { url } = await startMcpServer(100);
-    const prepared = await prepareMcpHttp({ type: "mcp.http", url, timeoutMs: 50 }, "ghp_test");
+    const prepared = await prepareMcpHttp(
+      { type: "mcp.http", url, timeoutMs: 50 },
+      "ghp_test",
+      "2024-11-05",
+    );
     expect(prepared.ok).toBe(true);
     if (!prepared.ok) {
       return;

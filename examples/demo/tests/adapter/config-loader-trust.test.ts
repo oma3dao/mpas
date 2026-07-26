@@ -107,7 +107,7 @@ describe("plugin trust confirmation during config loading", () => {
     const report = {
       artifactDid: "did:artifact:bafktest",
       pluginDid: "did:web:plugins.example.com:github-demo-plugin",
-      pluginVersion: "1.0.0",
+      pluginVersion: "0.1.0",
       targetUrl: "github.example",
       verdict: {
         trusted: true,

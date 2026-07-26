@@ -350,7 +350,7 @@ Each deployment config binds a plugin to operator decisions:
   "name": "github-production",
   "plugin": {
     "pluginDid": "did:web:plugins.example.com:github-demo-plugin",
-    "pluginVersion": "1.0.0",
+    "pluginVersion": "0.1.0",
     "artifactDid": "did:artifact:bafkrei..."
   },
   "credentialBindings": [

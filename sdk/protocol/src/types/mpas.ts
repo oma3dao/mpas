@@ -294,6 +294,7 @@ export interface MpasApplicationPlugin {
   executionProfile: {
     id: Did;
     format?: string;
+    protocolVersion: string;
   };
   credentialRequirements?: CredentialRequirement[];
   operations: Record<string, PluginOperationDescriptor>;

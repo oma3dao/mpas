@@ -76,7 +76,7 @@ describe("buildToolsListSnapshot", () => {
 describe("buildDiscoveryMetadata", () => {
   it("carries capture context including the timestamp", () => {
     const metadata = buildDiscoveryMetadata(upstream, {
-      protocolVersion: upstream.protocolVersion ?? "unknown",
+      protocolVersion: upstream.protocolVersion,
       generatorVersion: "0.2.0",
       capturedAt: "2026-07-18T00:00:00.000Z",
     });

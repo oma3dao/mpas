@@ -13,6 +13,9 @@ import type { Did, ExecutionReceipt, ReceiptPayload } from "../../src/core/types
 const fixturesDir = fileURLToPath(new URL("../fixtures/", import.meta.url));
 const slowFixtureServer = fileURLToPath(new URL("../fixtures/adapter/slow-mcp-server.mjs", import.meta.url));
 const errorFixtureServer = fileURLToPath(new URL("../fixtures/adapter/error-mcp-server.mjs", import.meta.url));
+const protocolVersionFixtureServer = fileURLToPath(
+  new URL("../fixtures/adapter/protocol-version-mcp-server.mjs", import.meta.url),
+);
 const missingFixtureServer = join(fixturesDir, "adapter", "missing-mcp-server.mjs");
 const apps: FastifyInstance[] = [];
 
@@ -137,6 +140,19 @@ describe("HTTP endpoint", () => {
       result: "executed",
       executionReceipt: { version: "1", type: "ExecutionReceipt", format: "jws" },
       executionResult: { content: [{ type: "text" }] },
+    });
+  });
+
+  it("initializes the upstream with the protocol revision from the installed plugin", async () => {
+    const app = await makeApp(await makeTargetConfigDir(protocolVersionFixtureServer, 1000));
+    const response = await submitFixture(app, "valid-no-approval-required.json");
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      result: "executed",
+      executionResult: {
+        content: [{ type: "text", text: expect.stringContaining('"protocolVersion":"2024-11-05"') }],
+      },
     });
   });
 

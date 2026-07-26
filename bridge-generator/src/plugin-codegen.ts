@@ -1,16 +1,17 @@
 import type { GeneratedPlugin, McpToolDefinition } from "./types.js";
 
-export function generatePlugin(tools: McpToolDefinition[]): string {
+export function generatePlugin(tools: McpToolDefinition[], protocolVersion: string): string {
   const plugin: GeneratedPlugin = {
     version: "1",
     type: "MpasApplicationPlugin",
     pluginDid: "did:web:PLACEHOLDER",
-    pluginVersion: "1.0.0",
+    pluginVersion: "0.1.0",
     publisherDid: "did:web:PLACEHOLDER",
     applicationDid: "did:web:PLACEHOLDER",
     executionProfile: {
       id: "did:web:profiles.oma3.org:mcp",
       format: "mcp.toolsCall",
+      protocolVersion,
     },
     credentialRequirements: [],
     operations: Object.fromEntries(

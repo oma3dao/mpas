@@ -108,7 +108,7 @@ export async function runGenerate(options: GenerateOptions): Promise<void> {
   await writeGenerated("build-artifacts/tools-list.snapshot.json", jsonFile(snapshot));
 
   const metadata = buildDiscoveryMetadata(upstream, {
-    protocolVersion: upstream.protocolVersion ?? "unknown",
+    protocolVersion: upstream.protocolVersion,
     generatorVersion: GENERATOR_VERSION,
     capturedAt: options.capturedAt,
   });
@@ -123,7 +123,7 @@ export async function runGenerate(options: GenerateOptions): Promise<void> {
   // intentional pass-through and must not be re-added. classification.json is
   // advisory only and never drives membership.
   const governedTools = selectGovernedTools(snapshot.tools, previousPlugin, previousSnapshot, log);
-  const plugin = JSON.parse(generatePlugin(governedTools)) as GeneratedPlugin;
+  const plugin = JSON.parse(generatePlugin(governedTools, upstream.protocolVersion)) as GeneratedPlugin;
   if (previousPlugin) {
     plugin.pluginDid = previousPlugin.pluginDid ?? plugin.pluginDid;
     plugin.pluginVersion = previousPlugin.pluginVersion ?? plugin.pluginVersion;
@@ -186,7 +186,7 @@ export interface RegistryEntry {
   application: { name: string; description: string; applicationDid: string; website?: string };
   native: false;
   protocol: "mcp";
-  upstream: { name: string; toolSurface: { alg: string; value: string } };
+  upstream: { name: string; protocolVersion: string; toolSurface: { alg: string; value: string } };
   plugin: { repository: string; pluginDid?: string; artifactDid?: string };
   publisher: { name: string; githubOrg: string; publisherDid?: string; repository?: string };
   status: "beta";
@@ -212,6 +212,7 @@ function buildRegistryEntry(
     protocol: "mcp",
     upstream: {
       name: upstream.serverName,
+      protocolVersion: upstream.protocolVersion,
       toolSurface,
     },
     plugin: {

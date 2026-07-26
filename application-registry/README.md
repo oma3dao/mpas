@@ -51,11 +51,12 @@ Present when `native` is `false`. The object format depends on the `protocol` fi
 
 **For `"mcp"` protocol:**
 
-| Field        | Required | Description                                         |
-| :----------- | :------: | :-------------------------------------------------- |
-| `name`       | Yes      | Human-readable name of the upstream MCP server.     |
-| `repository` | No       | Source repository URL.                              |
-| `package`    | No       | Package identifier (npm, pip, etc.).                |
+| Field             | Required | Description                                         |
+| :---------------- | :------: | :-------------------------------------------------- |
+| `name`            | Yes      | Human-readable name of the upstream MCP server.     |
+| `protocolVersion` | Yes      | MCP protocol revision observed for this integration. This is a discovery hint; the installed plugin is authoritative at runtime. |
+| `repository`      | No       | Source repository URL.                              |
+| `package`         | No       | Package identifier (npm, pip, etc.).                |
 
 Future protocols (OpenAPI, EVM, A2A) will define their own upstream object formats.
 

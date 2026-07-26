@@ -1,6 +1,11 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { ErrorCode, McpError as SdkMcpError } from "@modelcontextprotocol/sdk/types.js";
+import {
+  ErrorCode,
+  McpError as SdkMcpError,
+  type JSONRPCMessage,
+} from "@modelcontextprotocol/sdk/types.js";
+import { withInitializeProtocolVersion } from "./mcp-protocol-version.js";
 
 export interface McpStdioTarget {
   type: "mcp.stdio";
@@ -102,21 +107,41 @@ export class McpClientSession implements DispatchSession {
   }
 }
 
+class VersionedStdioClientTransport extends StdioClientTransport {
+  constructor(
+    server: ConstructorParameters<typeof StdioClientTransport>[0],
+    private readonly protocolVersion: string,
+  ) {
+    super(server);
+  }
+
+  override send(message: JSONRPCMessage): Promise<void> {
+    return super.send(withInitializeProtocolVersion(message, this.protocolVersion));
+  }
+}
+
 /**
  * Launch and initialize the stdio MCP target before the ledger write. Spawn or
  * initialization failures are stateless preparation errors.
  */
-export async function prepareMcpStdio(target: McpStdioTarget, credential: string): Promise<DispatchPrepareResult> {
+export async function prepareMcpStdio(
+  target: McpStdioTarget,
+  credential: string,
+  protocolVersion: string,
+): Promise<DispatchPrepareResult> {
   const timeoutMs = target.timeoutMs ?? 30_000;
-  const transport = new StdioClientTransport({
-    command: target.command,
-    args: target.args ?? [],
-    env: {
-      ...definedProcessEnvironment(),
-      ...injectCredential(target.env ?? {}, credential),
+  const transport = new VersionedStdioClientTransport(
+    {
+      command: target.command,
+      args: target.args ?? [],
+      env: {
+        ...definedProcessEnvironment(),
+        ...injectCredential(target.env ?? {}, credential),
+      },
+      stderr: "inherit",
     },
-    stderr: "inherit",
-  });
+    protocolVersion,
+  );
   const client = new Client(
     { name: "mpas-credential-adapter", version: "1.0.0" },
     { capabilities: {} },

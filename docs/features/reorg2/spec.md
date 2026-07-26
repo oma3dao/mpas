@@ -381,7 +381,7 @@ time would hide it from later review.
   "version": "1",
   "type": "MpasApplicationPlugin",
   "pluginDid": "did:web:PLACEHOLDER",
-  "pluginVersion": "1.0.0",
+  "pluginVersion": "0.1.0",
   "publisherDid": "did:web:PLACEHOLDER",
   "applicationDid": "did:web:PLACEHOLDER",
   "executionProfile": {

@@ -218,7 +218,7 @@ The plugin is a stable, published artifact that describes what an MCP server can
 | Field                    | Purpose                                                                    |
 | ------------------------ | -------------------------------------------------------------------------- |
 | `pluginDid`              | Unique identity of this plugin (a DID)                                     |
-| `pluginVersion`          | Semver version of the plugin schema                                        |
+| `pluginVersion`          | Release version of this particular plugin document                         |
 | `applicationDid`         | The application this plugin describes (e.g., `did:web:github.example`)     |
 | `executionProfile`       | Declares how execution payloads are formatted (`mcp.toolsCall`)            |
 | `credentialRequirements` | What credential the adapter needs to authenticate to the target            |

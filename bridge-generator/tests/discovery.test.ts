@@ -10,6 +10,7 @@ describe("discoverUpstream", () => {
 
     expect(upstream.serverName).toBe("mock-mcp");
     expect(upstream.serverVersion).toBe("1.2.3");
+    expect(upstream.protocolVersion).toBe("2024-11-05");
     expect(upstream.tools.map((tool) => tool.name)).toEqual(["create_issue", "delete_branch", "merge_pull_request"]);
     // Required and optional Tool fields are captured verbatim.
     expect(upstream.tools[0]).toMatchObject({

@@ -10,6 +10,7 @@
   "protocol": "mcp",
   "upstream": {
     "name": "Official GitHub MCP Server",
+    "protocolVersion": "2024-11-05",
     "repository": "https://github.com/github/github-mcp-server",
     "package": "@modelcontextprotocol/server-github"
   },

@@ -34,7 +34,7 @@ export interface UpstreamInfo {
   args: string[];
   serverName: string;
   serverVersion?: string;
-  protocolVersion?: string;
+  protocolVersion: string;
   tools: McpToolDefinition[];
 }
 
@@ -48,6 +48,7 @@ export interface GeneratedPlugin {
   executionProfile: {
     id: string;
     format: string;
+    protocolVersion: string;
   };
   credentialRequirements: unknown[];
   operations: Record<string, {

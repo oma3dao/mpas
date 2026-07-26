@@ -1,10 +1,17 @@
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { prepareMcpStdio, type McpStdioTarget } from "../../src/adapter/dispatch/mcp-stdio.js";
+import {
+  prepareMcpStdio,
+  type McpStdioTarget,
+} from "../../src/adapter/dispatch/mcp-stdio.js";
 
+const pluginProtocolVersion = "2024-11-05";
 const fixtureServer = fileURLToPath(new URL("../fixtures/adapter/echo-mcp-server.mjs", import.meta.url));
 const slowFixtureServer = fileURLToPath(new URL("../fixtures/adapter/slow-mcp-server.mjs", import.meta.url));
+const protocolVersionFixtureServer = fileURLToPath(
+  new URL("../fixtures/adapter/protocol-version-mcp-server.mjs", import.meta.url),
+);
 
 const target: McpStdioTarget = {
   type: "mcp.stdio",
@@ -17,7 +24,7 @@ const target: McpStdioTarget = {
 
 describe("prepareMcpStdio", () => {
   it("initializes a stdio MCP server before transmitting with injected credentials", async () => {
-    const prepared = await prepareMcpStdio(target, "ghp_test");
+    const prepared = await prepareMcpStdio(target, "ghp_test", pluginProtocolVersion);
     expect(prepared.ok).toBe(true);
     if (!prepared.ok) {
       return;
@@ -44,7 +51,7 @@ describe("prepareMcpStdio", () => {
   });
 
   it("reuses the same process for subsequent transmissions on a session", async () => {
-    const prepared = await prepareMcpStdio(target, "ghp_test");
+    const prepared = await prepareMcpStdio(target, "ghp_test", pluginProtocolVersion);
     expect(prepared.ok).toBe(true);
     if (!prepared.ok) {
       return;
@@ -69,8 +76,51 @@ describe("prepareMcpStdio", () => {
     }
   });
 
+  it("uses the stable MCP revision required by a GitHub-compatible stdio server", async () => {
+    const prepared = await prepareMcpStdio(
+      {
+        type: "mcp.stdio",
+        command: "node",
+        args: [protocolVersionFixtureServer, "stdio"],
+        env: {
+          GITHUB_PERSONAL_ACCESS_TOKEN: "{{credential:github-test-token}}",
+          EXPECTED_MCP_PROTOCOL_VERSION: pluginProtocolVersion,
+          REQUIRE_STDIO_ARGUMENT: "1",
+        },
+      },
+      "ghp_test",
+      pluginProtocolVersion,
+    );
+
+    expect(prepared.ok).toBe(true);
+    if (!prepared.ok) {
+      return;
+    }
+
+    try {
+      const result = await prepared.session.transmit("get_me", {});
+      expect(result.ok).toBe(true);
+      if (!result.ok) {
+        return;
+      }
+
+      const content = result.result as { content: Array<{ text: string }> };
+      expect(JSON.parse(content.content[0].text)).toEqual({
+        initialized: true,
+        protocolVersion: pluginProtocolVersion,
+        credentialPresent: true,
+      });
+    } finally {
+      await prepared.session.close();
+    }
+  });
+
   it("returns DISPATCH_TIMEOUT when the stdio MCP server does not respond in time", async () => {
-    const prepared = await prepareMcpStdio({ ...target, args: [slowFixtureServer], timeoutMs: 50 }, "ghp_test");
+    const prepared = await prepareMcpStdio(
+      { ...target, args: [slowFixtureServer], timeoutMs: 50 },
+      "ghp_test",
+      pluginProtocolVersion,
+    );
     expect(prepared.ok).toBe(true);
     if (!prepared.ok) {
       return;
@@ -92,6 +142,7 @@ describe("prepareMcpStdio", () => {
     const prepared = await prepareMcpStdio(
       { type: "mcp.stdio", command: "this-command-does-not-exist-mpas", args: [] },
       "ghp_test",
+      pluginProtocolVersion,
     );
 
     expect(prepared.ok).toBe(false);

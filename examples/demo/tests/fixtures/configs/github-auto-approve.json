@@ -7,8 +7,8 @@
   },
   "plugin": {
     "pluginDid": "did:web:plugins.example.com:github-demo-plugin",
-    "pluginVersion": "1.0.0",
-    "artifactDid": "did:artifact:bafkreifsfzfrk4oi5rj32euwn7z55t4cbz6axspmqjcck65tohdw4brgty",
+    "pluginVersion": "0.1.0",
+    "artifactDid": "did:artifact:bafkreihafo43swp4jbl3gahyselcz5vie7ihd5atz7grw5crkiawhq6bpu",
     "path": "../plugins/github-demo-plugin.json"
   },
   "credentialBindings": [

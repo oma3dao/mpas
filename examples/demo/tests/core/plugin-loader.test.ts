@@ -1,4 +1,4 @@
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -23,6 +23,25 @@ describe("loadPlugin", () => {
 
   it("rejects plugin JSON that fails the Application Plugin Profile schema", async () => {
     const result = await loadPlugin(join(pluginsDir, "malformed-missing-operations.json"));
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        code: "PLUGIN_SCHEMA_INVALID",
+      },
+    });
+  });
+
+  it("rejects an MCP plugin without an execution protocol version", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "mpas-plugin-loader-"));
+    const path = join(dir, "missing-protocol-version.json");
+    const plugin = JSON.parse(
+      await readFile(join(pluginsDir, "github-demo-plugin.json"), "utf8"),
+    ) as { executionProfile: { protocolVersion?: string } };
+    delete plugin.executionProfile.protocolVersion;
+    await writeFile(path, JSON.stringify(plugin));
+
+    const result = await loadPlugin(path);
 
     expect(result).toMatchObject({
       ok: false,

@@ -192,12 +192,13 @@ Example shape:
   "version": "1",
   "type": "MpasApplicationPlugin",
   "pluginDid": "did:web:plugins.example.com:github-pr",
-  "pluginVersion": "1.0.0",
+  "pluginVersion": "0.1.0",
   "publisherDid": "did:web:wivity.example",
   "applicationDid": "did:web:github.com",
   "executionProfile": {
     "id": "did:web:profiles.oma3.org:mcp",
-    "format": "mcp.toolsCall"
+    "format": "mcp.toolsCall",
+    "protocolVersion": "2024-11-05"
   },
   "credentialRequirements": [
     {
@@ -260,6 +261,7 @@ Field definitions:
 | `applicationDid`           | Yes         | DID of the target Application or execution authority.                                                                 |
 | `executionProfile.id`      | Yes         | DID of the execution profile this plugin describes.                                                                   |
 | `executionProfile.format`  | Recommended | Specific payload format under the execution profile, such as `mcp.toolsCall`.                                         |
+| `executionProfile.protocolVersion` | Yes | Upstream protocol revision the Credential Adapter MUST use when initializing execution for this plugin. |
 | `credentialRequirements`   | Optional    | Array of credential requirement class descriptors for the plugin.                                                     |
 | `operations`               | Yes         | Object of operation descriptors keyed by operation name. Each key is the native operation identifier (e.g., MCP tool name). |
 
@@ -321,20 +323,24 @@ The `executionProfile` object identifies the execution profile and payload forma
 ```json
 {
   "id": "did:web:profiles.oma3.org:mcp",
-  "format": "mcp.toolsCall"
+  "format": "mcp.toolsCall",
+  "protocolVersion": "2024-11-05"
 }
 ```
 
 Field definitions:
 
-| Field    | Required    | Description                                  |
-| :------- | :---------: | :------------------------------------------- |
-| `id`     | Yes         | DID of the execution profile.                |
-| `format` | Recommended | Specific format under the execution profile. |
+| Field             | Required    | Description |
+| :---------------- | :---------: | :---------- |
+| `id`              | Yes         | DID of the execution profile. |
+| `format`          | Recommended | Specific format under the execution profile. |
+| `protocolVersion` | Yes         | Profile-native upstream protocol revision used to initialize execution. For the MCP profile this is an MCP revision such as `2024-11-05`. |
 
 A consuming Verifier or Credential Adapter MUST validate that the declared Action Envelope execution profile is permitted for the plugin's Application DID under trusted local configuration.
 
 A plugin MUST NOT cause a Credential Adapter to accept an arbitrary execution profile for an Application DID. The pairing of Application DID and execution profile must be trusted by the consuming deployment.
+
+`executionProfile.protocolVersion` is trusted runtime binding metadata from the installed plugin. It is not copied into the Action Envelope and does not change the hash-covered execution intent. A Credential Adapter MUST use this value when initializing the upstream protocol and MUST NOT replace it with a registry hint, discovery record, SDK default, or deployment override.
 
 ---
 
@@ -586,12 +592,13 @@ This profile does not define the artifact method or distribution record format.
   "version": "1",
   "type": "MpasApplicationPlugin",
   "pluginDid": "did:web:plugins.example.com:github-repo",
-  "pluginVersion": "1.0.0",
+  "pluginVersion": "0.1.0",
   "publisherDid": "did:web:wivity.example",
   "applicationDid": "did:web:github.com",
   "executionProfile": {
     "id": "did:web:profiles.oma3.org:mcp",
-    "format": "mcp.toolsCall"
+    "format": "mcp.toolsCall",
+    "protocolVersion": "2024-11-05"
   },
   "credentialRequirements": [
     {
@@ -889,13 +896,17 @@ This appendix provides an initial JSON Schema for structural validation. The sch
     },
     "executionProfile": {
       "type": "object",
-      "required": ["id"],
+      "required": ["id", "protocolVersion"],
       "properties": {
         "id": {
           "type": "string",
           "pattern": "^did:[a-z0-9]+:.+"
         },
         "format": {
+          "type": "string",
+          "minLength": 1
+        },
+        "protocolVersion": {
           "type": "string",
           "minLength": 1
         }
