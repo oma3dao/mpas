@@ -58,7 +58,7 @@ describe("buildAuthorizationRequirements", () => {
     const actionPackage = await readJson<ActionPackage>(join(fixturesDir, "core", "insufficient-approvals.json"));
     const verification = await verifyActionPackage(actionPackage, {
       trustedSigners: await trustedSigners(),
-      trustedApplicationDids: ["did:web:github.example"],
+      trustedApplicationDids: ["did:web:github-mirror.example"],
     });
     if (verification.status !== "verified") {
       throw new Error("fixture should verify before policy evaluation");

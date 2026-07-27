@@ -189,7 +189,7 @@ export async function buildTrustReport(
 
 /**
  * Extracts a URL/domain from an applicationDid.
- * e.g., "did:web:github.example" → "github.example"
+ * e.g., "did:web:github-mirror.example" → "github.example"
  */
 export function extractTargetUrl(applicationDid: string): string {
   // did:web:domain.example → domain.example

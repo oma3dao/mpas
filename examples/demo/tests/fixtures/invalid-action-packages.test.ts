@@ -99,7 +99,7 @@ describe("invalid Action Package fixtures", () => {
     const fixture = await readJson<ActionPackage>(join(fixturesDir, "core", "insufficient-approvals.json"));
 
     expect(fixture.executionPayload).toMatchObject({
-      name: "merge_pull_request_demo",
+      name: "merge_pull_request_mirror",
       arguments: { baseRef: "main" },
     });
     expect(fixture.approvalBundle.approvals).toHaveLength(1);
@@ -117,7 +117,7 @@ describe("invalid Action Package fixtures", () => {
     const fixture = await readJson<ActionPackage>(join(fixturesDir, "core", "invalid-disabled-operation.json"));
 
     expect(fixture.executionPayload).toMatchObject({
-      name: "delete_branch_demo",
+      name: "delete_branch_mirror",
       arguments: { branch: "feature/disabled-operation" },
     });
     expect(fixture.actionEnvelope.executionPayloadHash).toEqual(hashJson(fixture.executionPayload));

@@ -1,0 +1,100 @@
+[
+  {
+    "name": "create_issue_demo",
+    "description": "Create a new issue in a GitHub repository.",
+    "inputSchema": {
+      "type": "object",
+      "required": [
+        "owner",
+        "repo",
+        "title"
+      ],
+      "properties": {
+        "owner": {
+          "type": "string"
+        },
+        "repo": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "body": {
+          "type": "string"
+        },
+        "labels": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "delete_branch_demo",
+    "description": "Delete a branch from a GitHub repository.",
+    "inputSchema": {
+      "type": "object",
+      "required": [
+        "owner",
+        "repo",
+        "branch"
+      ],
+      "properties": {
+        "owner": {
+          "type": "string"
+        },
+        "repo": {
+          "type": "string"
+        },
+        "branch": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "merge_pull_request_demo",
+    "description": "Merge a pull request.",
+    "inputSchema": {
+      "type": "object",
+      "required": [
+        "owner",
+        "repo",
+        "pullNumber",
+        "baseRef",
+        "expectedHeadSha",
+        "mergeMethod"
+      ],
+      "properties": {
+        "owner": {
+          "type": "string"
+        },
+        "repo": {
+          "type": "string"
+        },
+        "pullNumber": {
+          "type": "integer"
+        },
+        "baseRef": {
+          "type": "string"
+        },
+        "expectedHeadSha": {
+          "type": "string"
+        },
+        "mergeMethod": {
+          "type": "string",
+          "enum": [
+            "merge",
+            "squash",
+            "rebase"
+          ]
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+]

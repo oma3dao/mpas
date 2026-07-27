@@ -96,7 +96,7 @@ describe("prepareMcpHttp", () => {
       return;
     }
     try {
-      const result = await prepared.session.transmit("create_issue_demo", {
+      const result = await prepared.session.transmit("create_issue_mirror", {
         owner: "oma3dao",
         repo: "app-registry",
         title: "hello",
@@ -105,7 +105,7 @@ describe("prepareMcpHttp", () => {
       expect(result).toMatchObject({
         ok: true,
         result: {
-          name: "create_issue_demo",
+          name: "create_issue_mirror",
           arguments: {
             owner: "oma3dao",
             repo: "app-registry",
@@ -131,7 +131,7 @@ describe("prepareMcpHttp", () => {
       return;
     }
     try {
-      const result = await prepared.session.transmit("create_issue_demo", {
+      const result = await prepared.session.transmit("create_issue_mirror", {
         owner: "oma3dao",
         repo: "app-registry",
         title: "hello",

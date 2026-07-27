@@ -279,7 +279,7 @@ The plugin and config give you a template you can customize for your MPAS implem
 
 ```sh
 cd ~/Projects/mpas/mpas/examples/demo
-cp plugins/github-demo-plugin.json "$MPAS_HOME/plugins/github-demo-plugin.json"
+cp plugins/github-mirror-plugin.json "$MPAS_HOME/plugins/github-mirror-plugin.json"
 cp configs/github-mirror-adapter-config.json "$MPAS_HOME/config/github-mirror-adapter-config.json"
 ```
 
@@ -323,10 +323,11 @@ You now need to paste the `did` and `publicJwk` values from the `key generate` o
 First, create the bridge config files with placeholders:
 
 ```sh
-cat > $MPAS_HOME/mcp-server-configs/github-mcp-bridge-config.json <<EOF
+cat > $MPAS_HOME/mcp-server-configs/github-mirror-mcp-bridge-config.json <<EOF
 {
   "mode": "proposer",
-  "plugin": "$MPAS_HOME/plugins/github-demo-plugin.json",
+  "plugin": "$MPAS_HOME/plugins/github-mirror-plugin.json",
+  "tools": "<absolute-path-to>/mpas/examples/demo/bridge-tools/github-mirror-tools.json",
   "adapter": {
     "url": "http://127.0.0.1:7544"
   },
@@ -335,13 +336,13 @@ cat > $MPAS_HOME/mcp-server-configs/github-mcp-bridge-config.json <<EOF
     "keyFile": "$MPAS_HOME/keys/proposer-key.json"
   },
   "target": {
-    "applicationDid": "did:web:github.example"
+    "applicationDid": "did:web:github-mirror.example"
   },
   "coordination": {
     "url": "http://127.0.0.1:7545"
   },
   "workflow": {
-    "dbPath": "$MPAS_HOME/workflows/proposer.db"
+    "dbPath": "$MPAS_HOME/workflows/mirror.db"
   }
 }
 EOF
@@ -397,7 +398,7 @@ And inside the `policy` object, set the `signerGroups`:
 }
 ```
 
-2. **`$MPAS_HOME/mcp-server-configs/github-mcp-bridge-config.json`** — replace `REPLACE_ME_WITH_PROPOSER_DID` with the proposer `did` value.
+2. **`$MPAS_HOME/mcp-server-configs/github-mirror-mcp-bridge-config.json`** — replace `REPLACE_ME_WITH_PROPOSER_DID` with the proposer `did` value.
 
 3. **`$MPAS_HOME/mcp-server-configs/maintainer-signer-config.json`** — replace `REPLACE_ME_WITH_MAINTAINER_DID` with the maintainer `did` value.
 
@@ -429,7 +430,7 @@ node dist/cli/index.js config validate github-mirror-adapter-config \
 
 This checks that each `signerKeys` entry has a DID that matches its `publicJwk`, that credentials exist, and that each bridge config's `agent.did` is listed in `signerKeys`. Fix any errors before proceeding.
 
-> **Expected warnings (safe to ignore in single-user mode):** You will see warnings that `github-mcp-bridge-config.json` and `maintainer-signer-config.json` use different DIDs. This is correct — they are two separate agents with distinct identities. The warning exists for the dual-role case where one agent runs both bridges with a shared DID (so self-approval prevention applies between them). In the single-user demo, you have two independent agents, so different DIDs are intentional.
+> **Expected warnings (safe to ignore in single-user mode):** You will see warnings that `github-mirror-mcp-bridge-config.json` and `maintainer-signer-config.json` use different DIDs. This is correct — they are two separate agents with distinct identities. The warning exists for the dual-role case where one agent runs both bridges with a shared DID (so self-approval prevention applies between them). In the single-user demo, you have two independent agents, so different DIDs are intentional.
 
 ## 2.2 Start Adapter and Coordination
 
@@ -525,12 +526,12 @@ command = "node"
 args = [
   "/Users/YOU/Projects/mpas/mpas/examples/demo/dist/bridge/github-bridge.js",
   "--config",
-  "/Users/YOU/.mpas/mcp-server-configs/github-mcp-bridge-config.json"
+  "/Users/YOU/.mpas/mcp-server-configs/github-mirror-mcp-bridge-config.json"
 ]
 enabled = true
 ```
 
-This agent sees `create_issue_demo`, `merge_pull_request_demo`, and `delete_branch_demo` — but cannot approve its own actions.
+This agent sees `create_issue_mirror`, `merge_pull_request_mirror`, and `delete_branch_mirror` — but cannot approve its own actions.
 
 ### Maintainer config
 
@@ -575,7 +576,7 @@ In each terminal, confirm only the intended server is registered:
 CODEX_HOME=~/.codex-proposer codex mcp list
 ```
 
-Expected: `github-mpas` (and nothing else — no direct GitHub MCP server).
+Expected: `github-mpas-mirror` (and nothing else — no direct GitHub MCP server).
 
 **Maintainer:**
 
@@ -647,10 +648,18 @@ A separate maintainer agent approves them before they execute.
 
 ### Your MPAS tools
 
-- `create_issue_demo` — Create a GitHub issue (pass-through, no approval needed)
-- `delete_branch_demo` — Delete a branch (requires 1 maintainer approval)
-- `merge_pull_request_demo` — Merge a PR (requires 1 maintainer approval)
-- `mpas_wait_for_action_result` — Retrieve the result of an Action you proposed
+**Mirror (`github-mpas-mirror`)** — dry run. Nothing reaches GitHub.
+
+- `create_issue_mirror` — Create an issue (pass-through, no approval needed)
+- `delete_branch_mirror` — Delete a branch (requires 1 maintainer approval)
+- `merge_pull_request_mirror` — Merge a PR (requires 2 maintainer approvals)
+
+**Live demo (`github-mpas-live-demo`)** — these act on the real repository.
+Only available after §4.4 setup.
+
+- `create_issue_demo`, `delete_branch_demo`, `merge_pull_request_demo`
+
+Each bridge also exposes its own `mpas_wait_for_action_result`.
 
 ### How approval works
 
@@ -691,6 +700,12 @@ When you get a deferred result:
 - Never call the same tool again to check on an action in progress. A repeated
   call proposes a **new** Action — it does not check the old one. Use
   `mpas_wait_for_action_result` for that.
+- Retrieve a result with the `mpas_wait_for_action_result` from the **same
+  server** that returned the Action. Each bridge keeps its own record of the
+  Actions it proposed, so asking the other one returns ACTION_NOT_FOUND.
+- The mirror and the live demo are separate applications. An approval for a
+  `*_mirror` action does not authorize the matching `*_demo` action; each is
+  proposed and approved on its own.
 - Telling the user, or a maintainer, that approval is needed is **not** approval.
   Only a signed MPAS Approval authorizes an action.
 - You cannot approve your own actions. A separate maintainer agent handles approvals.
@@ -728,7 +743,7 @@ other agents, review them for safety, and approve or reject them.
 ## Important
 
 - You cannot propose actions yourself — only review and approve/reject.
-- Be cautious with destructive operations (delete_branch_demo, merge_pull_request_demo).
+- Be cautious with destructive operations (delete_branch_mirror, merge_pull_request_mirror).
 - If an action looks suspicious, reject it and explain why.
 - Check for pending actions when prompted or when you receive a notification.
 EOF
@@ -747,12 +762,12 @@ Add both MPAS bridges. `openclaw config set` merges the value into your existing
 ```sh
 openclaw config set mcp.servers "$(cat <<'JSON'
 {
-  "github-mpas": {
+  "github-mpas-mirror": {
     "command": "/ABSOLUTE/PATH/TO/node",
     "args": [
       "/Users/YOU/Projects/mpas/mpas/examples/demo/dist/bridge/github-bridge.js",
       "--config",
-      "/Users/YOU/.mpas/mcp-server-configs/github-mcp-bridge-config.json"
+      "/Users/YOU/.mpas/mcp-server-configs/github-mirror-mcp-bridge-config.json"
     ],
     "requestTimeoutMs": 360000
   },
@@ -792,10 +807,10 @@ JSON
 The security hardening in Step 1 locked the tool policy to `minimal`. Now open access for the MPAS bridge tools, web search, and file reads:
 
 ```sh
-openclaw config set tools.allow '["github-mpas__*", "mpas-coordination__*", "group:web", "read"]' --strict-json
+openclaw config set tools.allow '["github-mpas-mirror__*", "mpas-coordination__*", "group:web", "read"]' --strict-json
 ```
 
-**Do not use `bundle-mcp`** — OpenClaw rejects it as an unknown entry and silently hides the bridge tools. Use the explicit server globs. MCP tools are exposed to the model namespaced as `<server>__<tool>` (e.g. `github-mpas__create_issue_demo`, `mpas-coordination__mpas_review_action`).
+**Do not use `bundle-mcp`** — OpenClaw rejects it as an unknown entry and silently hides the bridge tools. Use the explicit server globs. MCP tools are exposed to the model namespaced as `<server>__<tool>` (e.g. `github-mpas-mirror__create_issue_mirror`, `mpas-coordination__mpas_review_action`).
 
 ### Restart and verify
 
@@ -816,7 +831,7 @@ openclaw tui
 
 > what MCP tools do you have available?
 
-The proposer should report `create_issue_demo`, `delete_branch_demo`, `merge_pull_request_demo` (from `github-mpas`) plus the `mpas_*` approval tools (symmetric visibility).
+The proposer should report `create_issue_mirror`, `delete_branch_mirror`, `merge_pull_request_mirror` (from `github-mpas-mirror`) plus the `mpas_*` approval tools (symmetric visibility).
 
 ### Interacting with the agents
 
@@ -838,11 +853,11 @@ openclaw tui --session agent:maintainer:main
 
 Now run a wiring check in each session.
 
-In the **proposer** TUI, create an issue — `create_issue_demo` is a pass-through operation (not governed by the plugin), so it completes without any maintainer involvement and confirms the proposer bridge reaches the adapter:
+In the **proposer** TUI, create an issue — `create_issue_mirror` is a pass-through operation (not governed by the plugin), so it completes without any maintainer involvement and confirms the proposer bridge reaches the adapter:
 
 > Create an issue titled "MPAS demo test" in `example-org/mpas-demo-repository`.
 
-The proposer should call `create_issue_demo` and report success.
+The proposer should call `create_issue_mirror` and report success.
 
 In the **maintainer** TUI, poll for pending approvals:
 
@@ -858,7 +873,7 @@ That's the wiring check. The full approval flow — proposing an action that req
 | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
 | Agent not appearing in `openclaw agents list`        | Check `agents.list[]` syntax in openclaw.json. Validate JSON.                                     |
 | MCP tools not visible to agent                       | Check absolute paths in the top-level `mcp.servers` config. Run the node command manually.        |
-| Bridge tools not visible to the agent                | `tools.allow` uses `bundle-mcp` (rejected as unknown). Use explicit globs `github-mpas__*`, `mpas-coordination__*`. Restart the gateway. |
+| Bridge tools not visible to the agent                | `tools.allow` uses `bundle-mcp` (rejected as unknown). Use explicit globs `github-mpas-mirror__*`, `mpas-coordination__*`. Restart the gateway. |
 | `ECONNREFUSED` errors                                | Adapter/coordination not running. Start them per §2.2.                                            |
 | Agent doesn't know its role                          | Check that `AGENTS.md` exists in the agent's workspace directory.                                 |
 
@@ -873,12 +888,12 @@ Edit `~/Library/Application Support/Claude/claude_desktop_config.json`:
 ```json
 {
   "mcpServers": {
-    "github-mpas": {
+    "github-mpas-mirror": {
       "command": "node",
       "args": [
         "/Users/YOU/Projects/mpas/mpas/examples/demo/dist/bridge/github-bridge.js",
         "--config",
-        "/Users/YOU/.mpas/mcp-server-configs/github-mcp-bridge-config.json"
+        "/Users/YOU/.mpas/mcp-server-configs/github-mirror-mcp-bridge-config.json"
       ]
     },
     "mpas-coordination": {
@@ -909,11 +924,11 @@ After Part 3, you have two agents running: a proposer (with GitHub tools) and a 
 
 > Delete the branch `demo/branch-alpha` from `example-org/mpas-demo-repository`.
 
-The proposer bridge submits to the adapter → adapter returns `additionalApprovalsRequired` (policy requires 1 maintainer for `delete_branch_demo`) → bridge submits to coordination and waits.
+The proposer bridge submits to the adapter → adapter returns `additionalApprovalsRequired` (policy requires 1 maintainer for `delete_branch_mirror`) → bridge submits to coordination and waits.
 
 **In the maintainer agent:**
 
-> Check for pending MPAS approvals and approve any delete_branch_demo action.
+> Check for pending MPAS approvals and approve any delete_branch_mirror action.
 
 The maintainer calls `mpas_list_pending` → `mpas_review_action` → `mpas_approve`. The proposer bridge detects `readyForResubmission`, resubmits, and the adapter dispatches.
 
@@ -925,7 +940,7 @@ The maintainer calls `mpas_list_pending` → `mpas_review_action` → `mpas_appr
 
 > Create an issue titled "MPAS demo test" in `example-org/mpas-demo-repository`.
 
-`create_issue_demo` is not in the application plugin, so the adapter passes it through without policy evaluation — no maintainer involvement needed.
+`create_issue_mirror` is not in the application plugin, so the adapter passes it through without policy evaluation — no maintainer involvement needed.
 
 ## 4.3 Merge a PR (1 Maintainer Required)
 
@@ -935,7 +950,7 @@ The maintainer calls `mpas_list_pending` → `mpas_review_action` → `mpas_appr
 
 **In the maintainer agent:**
 
-> Check for pending MPAS approvals and approve any merge_pull_request_demo action.
+> Check for pending MPAS approvals and approve any merge_pull_request_mirror action.
 
 **Result:** PR merges after maintainer approval.
 
@@ -1010,24 +1025,18 @@ chmod 600 "$MPAS_HOME/credentials/github-live-demo-token.json"
 
 The `{{credential:github-live-demo-token}}` template in the live deployment config resolves to the `value` field from this file at dispatch time.
 
-### Install the live deployment config
+### Install the live demo application
 
-The live config is a separate file — you do not edit the mirror config. Both differ only in which upstream server they dispatch to and which credential they bind; the plugin, policy, and signer keys are identical.
+The live demo is a **separate MPAS application**, not a reconfigured mirror. It has its own `applicationDid`, plugin, tool names (`*_demo` rather than `*_mirror`), and credential. That separation is deliberate: an Approval binds to an Action Envelope, which names its application, so an approval you collected while testing against the mirror can never authorize a live GitHub action.
 
-```sh
-cp configs/github-live-demo-adapter-config.json \
-  "$MPAS_HOME/config/github-live-demo-adapter-config.json"
-```
-
-Copy the `signerKeys` array and `policy.signerGroups` from your mirror config into the live config, so both trust the same agents:
+Install its plugin and deployment config alongside the mirror's:
 
 ```sh
-node dist/cli/index.js config validate github-live-demo-adapter-config \
-  --config-dir "$MPAS_HOME/config" \
-  --plugin-dir "$MPAS_HOME/plugins"
+cp plugins/github-live-demo-plugin.json "$MPAS_HOME/plugins/github-live-demo-plugin.json"
+cp configs/github-live-demo-adapter-config.json "$MPAS_HOME/config/github-live-demo-adapter-config.json"
 ```
 
-Then point `executionTarget` at your clone. The `command` must be an absolute path — the adapter spawns child processes without a shell, so nvm's `PATH` is not available:
+Copy the `signerKeys` array and `policy.signerGroups` from your mirror config into the live config, so both applications trust the same agents. Then point `executionTarget` at your clone — `command` must be an absolute path, since the adapter spawns child processes without a shell and nvm's `PATH` is not available:
 
 ```json
 "executionTarget": {
@@ -1040,13 +1049,67 @@ Then point `executionTarget` at your clone. The `command` must be an absolute pa
 }
 ```
 
-Replace `<absolute-path-to-node>` with the output of `which node` (e.g., `/Users/you/.nvm/versions/node/v24.1.0/bin/node`), and `<absolute-path-to>` with the full path to your `mpas` clone.
+Replace `<absolute-path-to-node>` with the output of `which node`, and `<absolute-path-to>` with the full path to your `mpas` clone.
+
+```sh
+node dist/cli/index.js config validate github-live-demo \
+  --config-dir "$MPAS_HOME/config" \
+  --credential-dir "$MPAS_HOME/credentials" \
+  --bridge-dir "$MPAS_HOME/mcp-server-configs"
+```
+
+> The adapter routes purely by `target.applicationDid`, so it refuses to start if two configs claim the same one (`DUPLICATE_APPLICATION_DID`). Distinct DIDs are what let the mirror and live demo be installed side by side.
+
+### Add the live demo bridge
+
+The mirror bridge keeps running. Add a second bridge config for the live application — same binary, different tool surface and target:
+
+```sh
+cat > $MPAS_HOME/mcp-server-configs/github-live-demo-mcp-bridge-config.json <<EOF
+{
+  "mode": "proposer",
+  "plugin": "$MPAS_HOME/plugins/github-live-demo-plugin.json",
+  "tools": "<absolute-path-to>/mpas/examples/demo/bridge-tools/github-live-demo-tools.json",
+  "adapter": { "url": "http://127.0.0.1:7544" },
+  "agent": {
+    "did": "REPLACE_ME_WITH_PROPOSER_DID",
+    "keyFile": "$MPAS_HOME/keys/proposer-key.json"
+  },
+  "target": { "applicationDid": "did:web:github-live-demo.example" },
+  "coordination": { "url": "http://127.0.0.1:7545" },
+  "workflow": { "dbPath": "$MPAS_HOME/workflows/live-demo.db" }
+}
+EOF
+```
+
+Use the same proposer `did` as the mirror bridge — one agent identity, two applications.
+
+Register it as a second MCP server in your harness, keeping the mirror registered. For OpenClaw:
+
+```sh
+openclaw config set mcp.servers.github-mpas-live-demo "$(cat <<'JSON'
+{
+  "command": "/ABSOLUTE/PATH/TO/node",
+  "args": [
+    "/Users/YOU/Projects/mpas/mpas/examples/demo/dist/bridge/github-bridge.js",
+    "--config",
+    "/Users/YOU/.mpas/mcp-server-configs/github-live-demo-mcp-bridge-config.json"
+  ],
+  "requestTimeoutMs": 360000
+}
+JSON
+)" --strict-json
+```
+
+Add `"github-mpas-live-demo__*"` to `tools.allow`, then restart the agent.
 
 ### Restart the adapter and run the live demo
 
-Stop the daemon (Ctrl+C) and restart it per §2.2, this time against the live config. The adapter now spawns the demo GitHub MCP server, which dispatches to real GitHub.
+Restart the daemon per §2.2 so it picks up the new config. It now serves **both** applications — the mirror on `did:web:github-mirror.example` and the live demo on `did:web:github-live-demo.example` — routing each Action to the right upstream.
 
-The agent-side configs do not change: `github-mcp-bridge-config.json` points at the adapter, and the adapter decides which upstream to dispatch to. To go back to dry-run, restart the daemon against `github-mirror-adapter-config` — no file editing either way.
+Your agent now sees both tool sets. `*_mirror` tools stay dry-run; `*_demo` tools hit real GitHub. Nothing was replaced, so you can go back to dry-run at any time by using the mirror tools.
+
+> **Retrieving results with two bridges:** each bridge exposes its own `mpas_wait_for_action_result` and keeps its own workflow store. Retrieve a result using the wait tool from the **same server** that returned the deferred Action — Action IDs are not shared between bridges, and asking the wrong one returns `ACTION_NOT_FOUND`.
 
 **Test `create_issue_demo` (auto-approved):**
 
@@ -1107,7 +1170,7 @@ Before creating accounts, understand what each role needs on disk:
 | Deployment config (`github-mirror-adapter-config.json`).  | Yes      | —                    | —                    |
 | Application credential (PAT)               | Yes      | —                    | —                    |
 | Plugin (`github-demo-plugin.json`)         | Yes      | Yes (copy)           | —                    |
-| Bridge config (`github-mcp-bridge-config.json`)     | —        | Yes                  | —                    |
+| Bridge config (`github-mirror-mcp-bridge-config.json`)     | —        | Yes                  | —                    |
 | Bridge config (`maintainer-signer-config.json`) | —        | —                    | Yes                  |
 | Proposer signing key                       | —        | Yes                  | —                    |
 | Maintainer signing key                     | —        | —                    | Yes                  |
@@ -1264,7 +1327,7 @@ cp ~/Projects/mpas/mpas/examples/demo/plugins/github-demo-plugin.json ~/.mpas/pl
 Create the bridge config:
 
 ```sh
-cat > ~/.mpas/mcp-server-configs/github-mcp-bridge-config.json <<EOF
+cat > ~/.mpas/mcp-server-configs/github-mirror-mcp-bridge-config.json <<EOF
 {
   "mode": "proposer",
   "plugin": "$HOME/.mpas/plugins/github-demo-plugin.json",
@@ -1276,13 +1339,13 @@ cat > ~/.mpas/mcp-server-configs/github-mcp-bridge-config.json <<EOF
     "keyFile": "$HOME/.mpas/keys/proposer-key.json"
   },
   "target": {
-    "applicationDid": "did:web:github.example"
+    "applicationDid": "did:web:github-mirror.example"
   },
   "coordination": {
     "url": "http://127.0.0.1:7545"
   },
   "workflow": {
-    "dbPath": "$MPAS_HOME/workflows/proposer.db"
+    "dbPath": "$MPAS_HOME/workflows/mirror.db"
   }
 }
 EOF
@@ -1358,10 +1421,10 @@ Each agent account should only expose the bridge matching its role:
 
 | Account              | MCP server to configure | Tools exposed                                                     |
 | -------------------- | ----------------------- | ----------------------------------------------------------------- |
-| Agent A (proposer)   | `github-mpas`           | `create_issue_demo`, `delete_branch_demo`, `merge_pull_request_demo`             |
+| Agent A (proposer)   | `github-mpas-mirror`           | `create_issue_mirror`, `delete_branch_mirror`, `merge_pull_request_mirror`             |
 | Agent B (maintainer) | `mpas-coordination`     | `mpas_list_pending`, `mpas_review_action`, `mpas_approve`, `mpas_reject` |
 
-Do **not** add both MCP servers to one account. The proposer account should only have `github-mpas` (backed by `github-mcp-bridge-config.json`); the maintainer account should only have `mpas-coordination` (backed by `maintainer-signer-config.json`). This ensures each agent sees only the tools appropriate to its role.
+Do **not** add both MCP servers to one account. The proposer account should only have `github-mpas-mirror` (backed by `github-mirror-mcp-bridge-config.json`); the maintainer account should only have `mpas-coordination` (backed by `maintainer-signer-config.json`). This ensures each agent sees only the tools appropriate to its role.
 
 The single-user demo (Parts 2–4) configures both on one account for convenience, but in the multi-user topology, role separation is enforced at the harness level in addition to the protocol level.
 
@@ -1402,7 +1465,7 @@ Once you've verified the cross-account demo works, the operator account no longe
 rm -f $MPAS_HOME/keys/proposer-key.json $MPAS_HOME/keys/maintainer-key.json
 
 # Remove agent bridge configs
-rm -f $MPAS_HOME/mcp-server-configs/github-mcp-bridge-config.json $MPAS_HOME/mcp-server-configs/maintainer-signer-config.json
+rm -f $MPAS_HOME/mcp-server-configs/github-mirror-mcp-bridge-config.json $MPAS_HOME/mcp-server-configs/maintainer-signer-config.json
 
 # Uninstall the agent harness (operator doesn't run agents)
 npm uninstall -g openclaw   # or @openai/codex
@@ -1428,7 +1491,7 @@ node dist/cli/index.js key generate agent-1-key --key-dir ~/.mpas/keys
 
 ```sh
 # Proposer bridge
-cat > ~/.mpas/mcp-server-configs/github-mcp-bridge-config.json <<EOF
+cat > ~/.mpas/mcp-server-configs/github-mirror-mcp-bridge-config.json <<EOF
 {
   "mode": "proposer",
   "plugin": "$HOME/.mpas/plugins/github-demo-plugin.json",
@@ -1437,7 +1500,7 @@ cat > ~/.mpas/mcp-server-configs/github-mcp-bridge-config.json <<EOF
     "did": "<did from key generate>",
     "keyFile": "$HOME/.mpas/keys/agent-1-key.json"
   },
-  "target": { "applicationDid": "did:web:github.example" },
+  "target": { "applicationDid": "did:web:github-mirror.example" },
   "coordination": { "url": "http://127.0.0.1:7545" },
   "workflow": { "dbPath": "$HOME/.mpas/workflows/proposer.db" }
 }
@@ -1467,9 +1530,9 @@ agents. You cannot approve your own proposals — only actions from a different 
 
 ## Proposer tools (github-mpas)
 
-- `create_issue_demo` — Create a GitHub issue (pass-through, no other agent needed)
-- `delete_branch_demo` — Delete a branch (requires approval from another agent)
-- `merge_pull_request_demo` — Merge a PR (requires approval from another agent)
+- `create_issue_mirror` — Create a GitHub issue (pass-through, no other agent needed)
+- `delete_branch_mirror` — Delete a branch (requires approval from another agent)
+- `merge_pull_request_mirror` — Merge a PR (requires approval from another agent)
 - `mpas_wait_for_action_result` — Retrieve the result of an Action you proposed
 
 ## Maintainer tools (mpas-coordination)
@@ -1511,19 +1574,19 @@ When reviewing actions from other agents, evaluate whether the action is safe:
 EOF
 ```
 
-4. **Both MCP servers** configured in the agent's harness — this is the one case where an agent legitimately sees both `github-mpas` and `mpas-coordination`.
+4. **Both MCP servers** configured in the agent's harness — this is the one case where an agent legitimately sees both `github-mpas-mirror` and `mpas-coordination`.
 
 **OpenClaw** — configure both servers via CLI:
 
 ```sh
 openclaw config set mcp.servers "$(cat <<'JSON'
 {
-  "github-mpas": {
+  "github-mpas-mirror": {
     "command": "/ABSOLUTE/PATH/TO/node",
     "args": [
       "/Users/YOU/Projects/mpas/mpas/examples/demo/dist/bridge/github-bridge.js",
       "--config",
-      "/Users/YOU/.mpas/mcp-server-configs/github-mcp-bridge-config.json"
+      "/Users/YOU/.mpas/mcp-server-configs/github-mirror-mcp-bridge-config.json"
     ],
     "requestTimeoutMs": 360000
   },
@@ -1548,7 +1611,7 @@ command = "node"
 args = [
   "/Users/YOU/Projects/mpas/mpas/examples/demo/dist/bridge/github-bridge.js",
   "--config",
-  "/Users/YOU/.mpas/mcp-server-configs/github-mcp-bridge-config.json"
+  "/Users/YOU/.mpas/mcp-server-configs/github-mirror-mcp-bridge-config.json"
 ]
 enabled = true
 
@@ -1652,13 +1715,13 @@ This means symmetric signers require at least two agents to function. A single s
 **Part 3 — Harness:**
 
 - [ ] Bridges registered in harness config (config.toml / openclaw.json / claude_desktop_config.json)
-- [ ] Agent discovers proposer tools: `create_issue_demo`, `delete_branch_demo`, `merge_pull_request_demo`
+- [ ] Agent discovers proposer tools: `create_issue_mirror`, `delete_branch_mirror`, `merge_pull_request_mirror`
 - [ ] Agent discovers maintainer tools: `mpas_list_pending`, `mpas_review_action`, `mpas_approve`, `mpas_reject`
 
 **Part 4 — Demo:**
 
-- [ ] `create_issue_demo` executes immediately (auto-approved)
-- [ ] `delete_branch_demo` returns a deferred Action reference without blocking
+- [ ] `create_issue_mirror` executes immediately (auto-approved)
+- [ ] `delete_branch_mirror` returns a deferred Action reference without blocking
 - [ ] After maintainer approval, `mpas_wait_for_action_result` returns the execution result
 - [ ] Live GitHub (§4.4): branch actually deleted after approval
 

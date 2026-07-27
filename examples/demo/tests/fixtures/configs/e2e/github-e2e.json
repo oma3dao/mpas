@@ -3,13 +3,13 @@
   "type": "MpasAdapterDeploymentConfig",
   "name": "github-e2e",
   "target": {
-    "applicationDid": "did:web:github.example"
+    "applicationDid": "did:web:github-mirror.example"
   },
   "plugin": {
-    "pluginDid": "did:web:plugins.oma3.example:github-demo-plugin",
+    "pluginDid": "did:web:plugins.oma3.example:github-mirror-plugin",
     "pluginVersion": "0.1.0",
-    "artifactDid": "did:artifact:bafkreiddvecgiomvq6cgwdm7ccpctwjm3k5kfowd7blovwwg2kdhqcwtge",
-    "path": "../../plugins/github-demo-plugin.json"
+    "artifactDid": "did:artifact:bafkreibuuyyqyb7jqrlflorjiiko2efz2xgagwxxdgathcrdpcniiyzhfi",
+    "path": "../../plugins/github-mirror-plugin.json"
   },
   "credentialBindings": [
     {
@@ -30,24 +30,11 @@
   "policy": {
     "version": "1",
     "type": "MpasApplicationPolicy",
-    "policyProfileUrl": "https://oma3.org/mpas/policy/json/v0.2",
-    "applicationDid": "did:web:github.example",
+    "policyProfileUrl": "https://oma3.org/specs/mpas/policy-json/v1",
+    "applicationDid": "did:web:github-mirror.example",
     "executionProfile": {
-      "id": "did:web:profiles.oma3.org:mcp"
-    },
-    "signerGroups": {
-      "maintainers": [
-        "did:jwk:eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6IjhzRFY3NmI4aUY3NlBJbUF3NUk5V3ZlanNfOGJTOE4xMld2SHpQYTVWdzgifQ",
-        "did:jwk:eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6IjR2OGt4WEppRnBDSHBWeFd4SFJRTExxMGJqSWxVRi1zRTFVSU5veTUwLTgifQ"
-      ],
-      "all": [
-        "did:jwk:eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6Ims2TzdjaVFrbXBodUVFdDFpM3lBaW1KSldlR0ttT3EzdF9mc05renphNm8ifQ",
-        "did:jwk:eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6IjhzRFY3NmI4aUY3NlBJbUF3NUk5V3ZlanNfOGJTOE4xMld2SHpQYTVWdzgifQ",
-        "did:jwk:eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6IjR2OGt4WEppRnBDSHBWeFd4SFJRTExxMGJqSWxVRi1zRTFVSU5veTUwLTgifQ"
-      ],
-      "proposers": [
-        "did:jwk:eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6Ims2TzdjaVFrbXBodUVFdDFpM3lBaW1KSldlR0ttT3EzdF9mc05renphNm8ifQ"
-      ]
+      "id": "did:web:profiles.oma3.org:mcp",
+      "format": "mcp.toolsCall"
     },
     "defaultRequirement": {
       "type": "threshold",
@@ -56,8 +43,22 @@
       "decision": "approve",
       "description": "Default policy: requires 1 maintainer approval."
     },
+    "signerGroups": {
+      "all": [
+        "did:jwk:eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6Ims2TzdjaVFrbXBodUVFdDFpM3lBaW1KSldlR0ttT3EzdF9mc05renphNm8ifQ",
+        "did:jwk:eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6IjhzRFY3NmI4aUY3NlBJbUF3NUk5V3ZlanNfOGJTOE4xMld2SHpQYTVWdzgifQ",
+        "did:jwk:eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6IjR2OGt4WEppRnBDSHBWeFd4SFJRTExxMGJqSWxVRi1zRTFVSU5veTUwLTgifQ"
+      ],
+      "proposers": [
+        "did:jwk:eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6Ims2TzdjaVFrbXBodUVFdDFpM3lBaW1KSldlR0ttT3EzdF9mc05renphNm8ifQ"
+      ],
+      "maintainers": [
+        "did:jwk:eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6IjhzRFY3NmI4aUY3NlBJbUF3NUk5V3ZlanNfOGJTOE4xMld2SHpQYTVWdzgifQ",
+        "did:jwk:eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6IjR2OGt4WEppRnBDSHBWeFd4SFJRTExxMGJqSWxVRi1zRTFVSU5veTUwLTgifQ"
+      ]
+    },
     "policies": {
-      "delete_branch_demo": [
+      "delete_branch_mirror": [
         {
           "description": "Deleting a branch requires one maintainer approval.",
           "requirements": {
@@ -69,7 +70,7 @@
           }
         }
       ],
-      "merge_pull_request_demo": [
+      "merge_pull_request_mirror": [
         {
           "description": "Merging requires two maintainer approvals.",
           "requirements": {
@@ -81,7 +82,7 @@
           }
         }
       ],
-      "close_issue_demo": [
+      "close_issue_mirror": [
         {
           "description": "Operator-added policy: closing issues requires one maintainer approval.",
           "requirements": {
@@ -89,7 +90,7 @@
             "threshold": 1,
             "eligibleSignerGroup": "maintainers",
             "decision": "approve",
-            "description": "Operator policy (close_issue_demo): requires 1 maintainer approval."
+            "description": "Operator policy (close_issue_mirror): requires 1 maintainer approval."
           }
         }
       ]

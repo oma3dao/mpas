@@ -32,14 +32,14 @@ async function makeConfigDir() {
   await mkdir(pluginDir, { recursive: true });
 
   const plugin = JSON.parse(
-    await readFile(join(fixturesDir, "plugins", "github-demo-plugin.json"), "utf8"),
+    await readFile(join(fixturesDir, "plugins", "github-mirror-plugin.json"), "utf8"),
   ) as unknown;
   const config = JSON.parse(
-    await readFile(join(fixturesDir, "configs", "github-auto-approve.json"), "utf8"),
+    await readFile(join(fixturesDir, "configs", "policy-fixtures", "github-auto-approve.json"), "utf8"),
   ) as Record<string, unknown>;
-  (config.plugin as Record<string, unknown>).path = "../plugins/github-demo-plugin.json";
+  (config.plugin as Record<string, unknown>).path = "../plugins/github-mirror-plugin.json";
 
-  await writeFile(join(pluginDir, "github-demo-plugin.json"), `${JSON.stringify(plugin, null, 2)}\n`);
+  await writeFile(join(pluginDir, "github-mirror-plugin.json"), `${JSON.stringify(plugin, null, 2)}\n`);
   await writeFile(join(configDir, "github.json"), `${JSON.stringify(config, null, 2)}\n`);
   return configDir;
 }
@@ -106,7 +106,7 @@ describe("plugin trust confirmation during config loading", () => {
     const configDir = await makeConfigDir();
     const report = {
       artifactDid: "did:artifact:bafktest",
-      pluginDid: "did:web:plugins.oma3.example:github-demo-plugin",
+      pluginDid: "did:web:plugins.oma3.example:github-mirror-plugin",
       pluginVersion: "0.1.0",
       targetUrl: "github.example",
       verdict: {

@@ -86,7 +86,7 @@ async function makeActionPackage({
   actionId,
   resource,
   approvals,
-  applicationDid = "did:web:github.example",
+  applicationDid = "did:web:github-mirror.example",
   createdAt = "2026-06-05T18:00:00.000Z",
   expiresAt = "2030-01-01T00:00:00.000Z",
 }: {
@@ -149,7 +149,7 @@ const demoRoot = process.cwd();
 const packages = {
   "valid-no-approval-required.json": await makeActionPackage({
     payload: {
-      name: "create_issue_demo",
+      name: "create_issue_mirror",
       arguments: {
         owner: "example-org",
         repo: "mpas-demo-repository",
@@ -163,7 +163,7 @@ const packages = {
   }),
   "valid-two-approvals.json": await makeActionPackage({
     payload: {
-      name: "merge_pull_request_demo",
+      name: "merge_pull_request_mirror",
       arguments: {
         owner: "example-org",
         repo: "mpas-demo-repository",
@@ -183,7 +183,7 @@ const packages = {
   }),
   "valid-delete-branch.json": await makeActionPackage({
     payload: {
-      name: "delete_branch_demo",
+      name: "delete_branch_mirror",
       arguments: {
         owner: "example-org",
         repo: "mpas-demo-repository",
@@ -201,7 +201,7 @@ const packages = {
 
 const insufficientApprovals = await makeActionPackage({
   payload: {
-    name: "merge_pull_request_demo",
+    name: "merge_pull_request_mirror",
     arguments: {
       owner: "example-org",
       repo: "mpas-demo-repository",
@@ -218,7 +218,7 @@ const insufficientApprovals = await makeActionPackage({
 
 const invalidUnknownApplication = await makeActionPackage({
   payload: {
-    name: "create_issue_demo",
+    name: "create_issue_mirror",
     arguments: {
       owner: "example-org",
       repo: "mpas-demo-repository",
@@ -234,7 +234,7 @@ const invalidUnknownApplication = await makeActionPackage({
 
 const invalidDisabledOperation = await makeActionPackage({
   payload: {
-    name: "delete_branch_demo",
+    name: "delete_branch_mirror",
     arguments: {
       owner: "example-org",
       repo: "mpas-demo-repository",
@@ -251,7 +251,7 @@ const invalidDisabledOperation = await makeActionPackage({
 
 const invalidResourceRestricted = await makeActionPackage({
   payload: {
-    name: "create_issue_demo",
+    name: "create_issue_mirror",
     arguments: {
       owner: "outside-org",
       repo: "restricted-repo",
@@ -266,7 +266,7 @@ const invalidResourceRestricted = await makeActionPackage({
 
 const invalidExpiredEnvelope = await makeActionPackage({
   payload: {
-    name: "create_issue_demo",
+    name: "create_issue_mirror",
     arguments: {
       owner: "example-org",
       repo: "mpas-demo-repository",
@@ -309,77 +309,190 @@ const invalidPackages = {
   "invalid-resource-restricted.json": invalidResourceRestricted,
 };
 
-const githubPlugin = {
-  version: "1",
-  type: "MpasApplicationPlugin",
-  pluginDid: "did:web:plugins.oma3.example:github-demo-plugin",
-  pluginVersion: "0.1.0",
-  publisherDid: "did:web:oma3.example",
-  applicationDid: "did:web:github.example",
-  executionProfile: {
-    id: "did:web:profiles.oma3.org:mcp",
-    format: "mcp.toolsCall",
-    protocolVersion: "2024-11-05",
-  },
-  credentialRequirements: [
-    {
-      type: "oauthToken",
-      requiredCapabilities: ["issue.write", "pullRequest.merge", "pullRequest.read", "branch.delete"],
-      description: "GitHub OAuth token with repository access for configured repositories.",
-    },
-  ],
-  operations: {
-    delete_branch_demo: {
-      description: "Delete a branch from a GitHub repository.",
-      impact: "critical",
-      executionPayloadSchema: {
-        type: "object",
-        required: ["name", "arguments"],
-        properties: {
-          name: { const: "delete_branch_demo" },
-          arguments: {
-            type: "object",
-            required: ["owner", "repo", "branch"],
-            properties: {
-              owner: { type: "string" },
-              repo: { type: "string" },
-              branch: { type: "string" },
-            },
-            additionalProperties: false,
-          },
-        },
-        additionalProperties: false,
-      },
-    },
-    merge_pull_request_demo: {
-      description: "Merge a pull request into its base branch.",
-      impact: "high",
-      executionPayloadSchema: {
-        type: "object",
-        required: ["name", "arguments"],
-        properties: {
-          name: { const: "merge_pull_request_demo" },
-          arguments: {
-            type: "object",
-            required: ["owner", "repo", "pullNumber", "baseRef", "expectedHeadSha", "mergeMethod"],
-            properties: {
-              owner: { type: "string" },
-              repo: { type: "string" },
-              pullNumber: { type: "integer" },
-              baseRef: { type: "string" },
-              expectedHeadSha: { type: "string" },
-              mergeMethod: { type: "string", enum: ["merge", "squash", "rebase"] },
-            },
-            additionalProperties: false,
-          },
-        },
-        additionalProperties: false,
-      },
-    },
-  },
-};
+/**
+ * The demo ships two distinct MPAS applications sharing one operation set:
+ *
+ * - **mirror** — dry-run simulator (echo server). No credentials, no side effects.
+ * - **live demo** — dispatches to real GitHub via the demo MCP server.
+ *
+ * They MUST NOT share an applicationDid: an Approval is bound to an Action
+ * Envelope, which names its application, so a shared DID would make an approval
+ * collected during dry-run testing valid against live GitHub. Distinct DIDs also
+ * let the adapter route to the right config — it indexes solely by
+ * target.applicationDid.
+ *
+ * Tool names carry the variant suffix so both bridges can be registered at once
+ * without ambiguity in traces and logs.
+ */
+interface DemoVariant {
+  suffix: "_mirror" | "_demo";
+  applicationDid: string;
+  pluginDid: string;
+  pluginFile: string;
+  credentialHandle: string;
+  upstreamServer: string;
+}
 
-const pluginArtifactDid = await computeArtifactDid(githubPlugin);
+const VARIANTS = {
+  mirror: {
+    suffix: "_mirror",
+    applicationDid: "did:web:github-mirror.example",
+    pluginDid: "did:web:plugins.oma3.example:github-mirror-plugin",
+    pluginFile: "github-mirror-plugin.json",
+    credentialHandle: "github-mirror-token",
+    upstreamServer: "tests/fixtures/adapter/echo-mcp-server.mjs",
+  },
+  liveDemo: {
+    suffix: "_demo",
+    applicationDid: "did:web:github-live-demo.example",
+    pluginDid: "did:web:plugins.oma3.example:github-live-demo-plugin",
+    pluginFile: "github-live-demo-plugin.json",
+    credentialHandle: "github-live-demo-token",
+    upstreamServer: "tests/fixtures/adapter/github-mcp-server.mjs",
+  },
+} as const satisfies Record<string, DemoVariant>;
+
+function makeGithubPlugin(variant: DemoVariant) {
+  const deleteBranch = `delete_branch${variant.suffix}`;
+  const mergePullRequest = `merge_pull_request${variant.suffix}`;
+  return {
+    version: "1",
+    type: "MpasApplicationPlugin",
+    pluginDid: variant.pluginDid,
+    pluginVersion: "0.1.0",
+    publisherDid: "did:web:oma3.example",
+    applicationDid: variant.applicationDid,
+    executionProfile: {
+      id: "did:web:profiles.oma3.org:mcp",
+      format: "mcp.toolsCall",
+      protocolVersion: "2024-11-05",
+    },
+    credentialRequirements: [
+      {
+        type: "oauthToken",
+        requiredCapabilities: ["issue.write", "pullRequest.merge", "pullRequest.read", "branch.delete"],
+        description: "GitHub OAuth token with repository access for configured repositories.",
+      },
+    ],
+    operations: {
+      [deleteBranch]: {
+        description: "Delete a branch from a GitHub repository.",
+        impact: "critical",
+        executionPayloadSchema: {
+          type: "object",
+          required: ["name", "arguments"],
+          properties: {
+            name: { const: deleteBranch },
+            arguments: {
+              type: "object",
+              required: ["owner", "repo", "branch"],
+              properties: {
+                owner: { type: "string" },
+                repo: { type: "string" },
+                branch: { type: "string" },
+              },
+              additionalProperties: false,
+            },
+          },
+          additionalProperties: false,
+        },
+      },
+      [mergePullRequest]: {
+        description: "Merge a pull request into its base branch.",
+        impact: "high",
+        executionPayloadSchema: {
+          type: "object",
+          required: ["name", "arguments"],
+          properties: {
+            name: { const: mergePullRequest },
+            arguments: {
+              type: "object",
+              required: ["owner", "repo", "pullNumber", "baseRef", "expectedHeadSha", "mergeMethod"],
+              properties: {
+                owner: { type: "string" },
+                repo: { type: "string" },
+                pullNumber: { type: "integer" },
+                baseRef: { type: "string" },
+                expectedHeadSha: { type: "string" },
+                mergeMethod: { type: "string", enum: ["merge", "squash", "rebase"] },
+              },
+              additionalProperties: false,
+            },
+          },
+          additionalProperties: false,
+        },
+      },
+    },
+  };
+}
+
+
+/**
+ * Upstream tool surface each variant's MCP server exposes. The bridge preserves
+ * these names exactly (client profile §3.1); `create_issue*` is deliberately
+ * ungoverned to demonstrate the pass-through boundary.
+ */
+function makeBridgeTools(variant: DemoVariant) {
+  const s = variant.suffix;
+  return [
+    {
+      name: `create_issue${s}`,
+      description: "Create a new issue in a GitHub repository.",
+      inputSchema: {
+        type: "object",
+        required: ["owner", "repo", "title"],
+        properties: {
+          owner: { type: "string" },
+          repo: { type: "string" },
+          title: { type: "string" },
+          body: { type: "string" },
+          labels: { type: "array", items: { type: "string" } },
+        },
+        additionalProperties: false,
+      },
+    },
+    {
+      name: `delete_branch${s}`,
+      description: "Delete a branch from a GitHub repository.",
+      inputSchema: {
+        type: "object",
+        required: ["owner", "repo", "branch"],
+        properties: {
+          owner: { type: "string" },
+          repo: { type: "string" },
+          branch: { type: "string" },
+        },
+        additionalProperties: false,
+      },
+    },
+    {
+      name: `merge_pull_request${s}`,
+      description: "Merge a pull request.",
+      inputSchema: {
+        type: "object",
+        required: ["owner", "repo", "pullNumber", "baseRef", "expectedHeadSha", "mergeMethod"],
+        properties: {
+          owner: { type: "string" },
+          repo: { type: "string" },
+          pullNumber: { type: "integer" },
+          baseRef: { type: "string" },
+          expectedHeadSha: { type: "string" },
+          mergeMethod: { type: "string", enum: ["merge", "squash", "rebase"] },
+        },
+        additionalProperties: false,
+      },
+    },
+  ];
+}
+
+const mirrorPlugin = makeGithubPlugin(VARIANTS.mirror);
+const liveDemoPlugin = makeGithubPlugin(VARIANTS.liveDemo);
+/** Unit-test fixtures and signed Action Packages are built against the mirror. */
+const githubPlugin = mirrorPlugin;
+
+const mirrorArtifactDid = await computeArtifactDid(mirrorPlugin);
+const liveDemoArtifactDid = await computeArtifactDid(liveDemoPlugin);
+const pluginArtifactDid = mirrorArtifactDid;
 
 function signerKeys() {
   return [
@@ -401,12 +514,15 @@ function signerKeys() {
   ];
 }
 
-function makePolicy(overrides: { defaultRequirement?: Record<string, unknown>; policies?: Record<string, unknown[]> } = {}) {
+function makePolicy(
+  variant: DemoVariant,
+  overrides: { defaultRequirement?: Record<string, unknown>; policies?: Record<string, unknown[]> } = {},
+) {
   return {
     version: "1",
     type: "MpasApplicationPolicy",
     policyProfileUrl: "https://oma3.org/specs/mpas/policy-json/v1",
-    applicationDid: githubPlugin.applicationDid,
+    applicationDid: variant.applicationDid,
     executionProfile: {
       id: "did:web:profiles.oma3.org:mcp",
       format: "mcp.toolsCall",
@@ -426,39 +542,34 @@ function makePolicy(overrides: { defaultRequirement?: Record<string, unknown>; p
   };
 }
 
-function baseDeploymentConfig(
-  name: string,
-  policy: ReturnType<typeof makePolicy>,
-  target: { server: string; credentialHandle: string } = {
-    server: "tests/fixtures/adapter/echo-mcp-server.mjs",
-    credentialHandle: "github-mirror-token",
-  },
-) {
+function baseDeploymentConfig(variant: DemoVariant, name: string, policy: ReturnType<typeof makePolicy>) {
+  const plugin = variant.suffix === "_mirror" ? mirrorPlugin : liveDemoPlugin;
+  const artifactDid = variant.suffix === "_mirror" ? mirrorArtifactDid : liveDemoArtifactDid;
   return {
     version: "1",
     type: "MpasAdapterDeploymentConfig",
     name,
     target: {
-      applicationDid: githubPlugin.applicationDid,
+      applicationDid: variant.applicationDid,
     },
     plugin: {
-      pluginDid: githubPlugin.pluginDid,
-      pluginVersion: githubPlugin.pluginVersion,
-      artifactDid: pluginArtifactDid,
-      path: "../plugins/github-demo-plugin.json",
+      pluginDid: plugin.pluginDid,
+      pluginVersion: plugin.pluginVersion,
+      artifactDid,
+      path: `../plugins/${variant.pluginFile}`,
     },
     credentialBindings: [
       {
-        credentialHandle: target.credentialHandle,
+        credentialHandle: variant.credentialHandle,
         provider: "file",
       },
     ],
     executionTarget: {
       type: "mcp.stdio",
       command: "node",
-      args: [target.server],
+      args: [variant.upstreamServer],
       env: {
-        GITHUB_PERSONAL_ACCESS_TOKEN: `{{credential:${target.credentialHandle}}}`,
+        GITHUB_PERSONAL_ACCESS_TOKEN: `{{credential:${variant.credentialHandle}}}`,
       },
     },
     policy,
@@ -466,79 +577,56 @@ function baseDeploymentConfig(
   };
 }
 
+/** The demo policy, identical for both variants apart from operation names. */
+function demoPolicy(variant: DemoVariant) {
+  return makePolicy(variant, {
+    policies: {
+      [`merge_pull_request${variant.suffix}`]: [
+        {
+          description: "Merging into main requires two maintainer approvals.",
+          match: {
+            conditions: [
+              { source: "executionPayload", path: "/arguments/baseRef", op: "eq", value: "main" },
+            ],
+          },
+          requirements: {
+            type: "threshold",
+            threshold: 2,
+            eligibleSignerGroup: "maintainers",
+            decision: "approve",
+          },
+        },
+      ],
+      [`delete_branch${variant.suffix}`]: [
+        {
+          description: "Deleting a branch requires one maintainer approval.",
+          requirements: {
+            type: "threshold",
+            threshold: 1,
+            eligibleSignerGroup: "maintainers",
+            decision: "approve",
+          },
+        },
+      ],
+    },
+  });
+}
+
 const configs = {
   "github-auto-approve.json": baseDeploymentConfig(
+    VARIANTS.mirror,
     "github-auto-approve",
-    makePolicy({ defaultRequirement: { type: "proposerOnly" } }),
+    makePolicy(VARIANTS.mirror, { defaultRequirement: { type: "proposerOnly" } }),
   ),
   "github-mirror-adapter-config.json": baseDeploymentConfig(
+    VARIANTS.mirror,
     "github-mirror",
-    makePolicy({
-      policies: {
-        merge_pull_request_demo: [
-          {
-            description: "Merging into main requires two maintainer approvals.",
-            match: {
-              conditions: [
-                { source: "executionPayload", path: "/arguments/baseRef", op: "eq", value: "main" },
-              ],
-            },
-            requirements: {
-              type: "threshold",
-              threshold: 2,
-              eligibleSignerGroup: "maintainers",
-              decision: "approve",
-            },
-          },
-        ],
-        delete_branch_demo: [
-          {
-            description: "Deleting a branch requires one maintainer approval.",
-            requirements: {
-              type: "threshold",
-              threshold: 1,
-              eligibleSignerGroup: "maintainers",
-              decision: "approve",
-            },
-          },
-        ],
-      },
-    }),
+    demoPolicy(VARIANTS.mirror),
   ),
   "github-live-demo-adapter-config.json": baseDeploymentConfig(
+    VARIANTS.liveDemo,
     "github-live-demo",
-    makePolicy({
-      policies: {
-        merge_pull_request_demo: [
-          {
-            description: "Merging into main requires two maintainer approvals.",
-            match: {
-              conditions: [
-                { source: "executionPayload", path: "/arguments/baseRef", op: "eq", value: "main" },
-              ],
-            },
-            requirements: {
-              type: "threshold",
-              threshold: 2,
-              eligibleSignerGroup: "maintainers",
-              decision: "approve",
-            },
-          },
-        ],
-        delete_branch_demo: [
-          {
-            description: "Deleting a branch requires one maintainer approval.",
-            requirements: {
-              type: "threshold",
-              threshold: 1,
-              eligibleSignerGroup: "maintainers",
-              decision: "approve",
-            },
-          },
-        ],
-      },
-    }),
-    { server: "tests/fixtures/adapter/github-mcp-server.mjs", credentialHandle: "github-live-demo-token" },
+    demoPolicy(VARIANTS.liveDemo),
   ),
 };
 
@@ -620,15 +708,20 @@ for (const [file, value] of Object.entries(invalidPackages)) {
   await writeFile(join(fixtureRoot, "core", file), `${JSON.stringify(value, null, 2)}\n`);
 }
 
-await writeFile(join(fixtureRoot, "plugins", "github-demo-plugin.json"), `${JSON.stringify(githubPlugin, null, 2)}\n`);
+for (const plugin of [mirrorPlugin, liveDemoPlugin]) {
+  const file = plugin === mirrorPlugin ? VARIANTS.mirror.pluginFile : VARIANTS.liveDemo.pluginFile;
+  await writeFile(join(fixtureRoot, "plugins", file), `${JSON.stringify(plugin, null, 2)}\n`);
+}
 
-const OPERATOR_ONLY_CONFIGS = new Set(["github-live-demo-adapter-config.json"]);
+const POLICY_FIXTURE_CONFIGS = new Set(["github-auto-approve.json"]);
+const OPERATOR_CONFIGS = ["github-mirror-adapter-config.json", "github-live-demo-adapter-config.json"];
 
+await mkdir(join(fixtureRoot, "configs", "policy-fixtures"), { recursive: true });
 for (const [file, value] of Object.entries(configs)) {
-  if (OPERATOR_ONLY_CONFIGS.has(file)) {
-    continue;
-  }
-  await writeFile(join(fixtureRoot, "configs", file), `${JSON.stringify(value, null, 2)}\n`);
+  const dir = POLICY_FIXTURE_CONFIGS.has(file)
+    ? join(fixtureRoot, "configs", "policy-fixtures")
+    : join(fixtureRoot, "configs");
+  await writeFile(join(dir, file), `${JSON.stringify(value, null, 2)}\n`);
 }
 
 // Operator-facing copies. The setup guide copies these into $MPAS_HOME; keeping
@@ -636,8 +729,74 @@ for (const [file, value] of Object.entries(configs)) {
 // plugin they bind to and from each other.
 await mkdir(join(demoRoot, "plugins"), { recursive: true });
 await mkdir(join(demoRoot, "configs"), { recursive: true });
-await writeFile(join(demoRoot, "plugins", "github-demo-plugin.json"), `${JSON.stringify(githubPlugin, null, 2)}\n`);
-for (const file of ["github-mirror-adapter-config.json", "github-live-demo-adapter-config.json"]) {
+for (const plugin of [mirrorPlugin, liveDemoPlugin]) {
+  const file = plugin === mirrorPlugin ? VARIANTS.mirror.pluginFile : VARIANTS.liveDemo.pluginFile;
+  await writeFile(join(demoRoot, "plugins", file), `${JSON.stringify(plugin, null, 2)}\n`);
+}
+/**
+ * The e2e harness has its own policy: richer requirement descriptions (asserted
+ * by the tests) and an operator-added rule for an operation the plugin does not
+ * govern, which exercises the pass-through boundary. Generated so its plugin
+ * reference and artifactDid cannot drift.
+ */
+function e2ePolicy(variant: DemoVariant) {
+  const threshold = (n: number, description: string) => ({
+    type: "threshold",
+    threshold: n,
+    eligibleSignerGroup: "maintainers",
+    decision: "approve",
+    description,
+  });
+  return {
+    ...makePolicy(variant, {
+      policies: {
+        [`delete_branch${variant.suffix}`]: [
+          {
+            description: "Deleting a branch requires one maintainer approval.",
+            requirements: threshold(1, "Branch deletion: requires 1 maintainer approval."),
+          },
+        ],
+        [`merge_pull_request${variant.suffix}`]: [
+          {
+            description: "Merging requires two maintainer approvals.",
+            requirements: threshold(2, "PR merge: requires 2 maintainer approvals."),
+          },
+        ],
+        [`close_issue${variant.suffix}`]: [
+          {
+            description: "Operator-added policy: closing issues requires one maintainer approval.",
+            requirements: threshold(
+              1,
+              `Operator policy (close_issue${variant.suffix}): requires 1 maintainer approval.`,
+            ),
+          },
+        ],
+      },
+    }),
+    defaultRequirement: {
+      type: "threshold",
+      threshold: 1,
+      eligibleSignerGroup: "maintainers",
+      decision: "approve",
+      description: "Default policy: requires 1 maintainer approval.",
+    },
+  };
+}
+
+await mkdir(join(fixtureRoot, "configs", "e2e"), { recursive: true });
+const e2eBase = baseDeploymentConfig(VARIANTS.mirror, "github-e2e", e2ePolicy(VARIANTS.mirror));
+const e2eConfig = {
+  ...e2eBase,
+  plugin: { ...e2eBase.plugin, path: `../../plugins/${VARIANTS.mirror.pluginFile}` },
+};
+await writeFile(join(fixtureRoot, "configs", "e2e", "github-e2e.json"), `${JSON.stringify(e2eConfig, null, 2)}\n`);
+
+await mkdir(join(demoRoot, "bridge-tools"), { recursive: true });
+for (const [key, variant] of Object.entries(VARIANTS)) {
+  const file = key === "mirror" ? "github-mirror-tools.json" : "github-live-demo-tools.json";
+  await writeFile(join(demoRoot, "bridge-tools", file), `${JSON.stringify(makeBridgeTools(variant), null, 2)}\n`);
+}
+for (const file of OPERATOR_CONFIGS) {
   await writeFile(join(demoRoot, "configs", file), `${JSON.stringify(configs[file as keyof typeof configs], null, 2)}\n`);
 }
 

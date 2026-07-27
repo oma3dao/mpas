@@ -20,27 +20,27 @@ const mockCheckLinkage = vi.mocked(checkLinkage);
 const fakePlugin: MpasApplicationPlugin = {
   version: "1",
   type: "MpasApplicationPlugin",
-  pluginDid: "did:web:plugins.oma3.example:github-demo-plugin",
+  pluginDid: "did:web:plugins.oma3.example:github-mirror-plugin",
   pluginVersion: "0.1.0",
   publisherDid: "did:web:publisher.example",
-  applicationDid: "did:web:github.example",
+  applicationDid: "did:web:github-mirror.example",
   executionProfile: {
     id: "did:web:profiles.oma3.org:mcp",
     protocolVersion: "2024-11-05",
   },
-  operations: { create_issue_demo: { executionPayloadSchema: {} } },
+  operations: { create_issue_mirror: { executionPayloadSchema: {} } },
 };
 
 const fakeConfig: DeploymentConfig = {
   version: "1",
   type: "MpasAdapterDeploymentConfig",
   name: "github-test",
-  target: { applicationDid: "did:web:github.example" },
+  target: { applicationDid: "did:web:github-mirror.example" },
   plugin: {
-    pluginDid: "did:web:plugins.oma3.example:github-demo-plugin",
+    pluginDid: "did:web:plugins.oma3.example:github-mirror-plugin",
     pluginVersion: "0.1.0",
     artifactDid: "did:artifact:bafkreibfakeartifactdid",
-    path: "../plugins/github-demo-plugin.json",
+    path: "../plugins/github-mirror-plugin.json",
   },
   credentialBindings: [{ credentialHandle: "gh-token", provider: "file" }],
   executionTarget: { type: "mcp.stdio", command: "node", args: ["server.js"], env: {} },
@@ -48,7 +48,7 @@ const fakeConfig: DeploymentConfig = {
     version: "1",
     type: "MpasApplicationPolicy",
     policyProfileUrl: "https://oma3.org/specs/mpas/policy-json/v1",
-    applicationDid: "did:web:github.example",
+    applicationDid: "did:web:github-mirror.example",
     executionProfile: { id: "did:web:profiles.oma3.org:mcp", format: "mcp.toolsCall" },
     defaultRequirement: { type: "proposerOnly" },
     signerGroups: { all: ["did:web:agent.example"], proposers: ["did:web:agent.example"] },
@@ -199,7 +199,7 @@ describe("canTrust", () => {
 
 describe("extractTargetUrl", () => {
   it("extracts domain from did:web:domain", () => {
-    expect(extractTargetUrl("did:web:github.example")).toBe("github.example");
+    expect(extractTargetUrl("did:web:github-mirror.example")).toBe("github-mirror.example");
   });
 
   it("extracts domain with path from did:web:domain:path:segments", () => {

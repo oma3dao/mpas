@@ -86,7 +86,8 @@ export interface DeploymentConfigLoadError {
     | "PLUGIN_LOAD_FAILED"
     | "PLUGIN_REFERENCE_MISMATCH"
     | "PLUGIN_HASH_MISMATCH"
-    | "PLUGIN_TRUST_REJECTED";
+    | "PLUGIN_TRUST_REJECTED"
+  | "DUPLICATE_APPLICATION_DID";
   message: string;
   path: string;
   details?: unknown;
@@ -246,8 +247,23 @@ export async function loadDeploymentConfigs(
       return loaded;
     }
 
+    // Two configs claiming one applicationDid cannot both be routed to: the
+    // adapter dispatches solely by target.applicationDid. Silently keeping the
+    // last one loaded would send actions to the wrong upstream with no error,
+    // so refuse to start instead.
+    const applicationDid = loaded.config.config.target.applicationDid;
+    const existing = configsByApplicationDid.get(applicationDid);
+    if (existing) {
+      return loadError(
+        "DUPLICATE_APPLICATION_DID",
+        `Deployment configs "${existing.config.name}" and "${loaded.config.config.name}" both target ${applicationDid}. ` +
+          "Each application DID must be served by exactly one config.",
+        filePath,
+      );
+    }
+
     loadedConfigs.push(loaded.config);
-    configsByApplicationDid.set(loaded.config.config.target.applicationDid, loaded.config);
+    configsByApplicationDid.set(applicationDid, loaded.config);
   }
 
   return {

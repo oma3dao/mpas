@@ -47,7 +47,7 @@ async function trustedSigners(): Promise<TrustedSigner[]> {
 async function verificationConfig(): Promise<VerificationConfig> {
   return {
     trustedSigners: await trustedSigners(),
-    trustedApplicationDids: ["did:web:github.example"],
+    trustedApplicationDids: ["did:web:github-mirror.example"],
   };
 }
 
@@ -75,7 +75,7 @@ describe("evaluatePolicy", () => {
   it("satisfies valid-no-approval-required.json with auto-approve config", async () => {
     const { actionPackage, verifiedApprovals } = await verifiedFixture("valid-no-approval-required.json");
 
-    expect(evaluatePolicy(actionPackage, verifiedApprovals, await policyFromConfig("github-auto-approve.json"))).toEqual({
+    expect(evaluatePolicy(actionPackage, verifiedApprovals, await policyFromConfig("policy-fixtures/github-auto-approve.json"))).toEqual({
       status: "satisfied",
     });
   });
@@ -111,7 +111,7 @@ describe("evaluatePolicy", () => {
     // With enabledOperations removed, the policy engine no longer rejects operations
     // not in an allowlist. The auto-approve config has proposerOnly default, so any
     // operation passes through policy evaluation.
-    expect(evaluatePolicy(actionPackage, verifiedApprovals, await policyFromConfig("github-auto-approve.json"))).toMatchObject({
+    expect(evaluatePolicy(actionPackage, verifiedApprovals, await policyFromConfig("policy-fixtures/github-auto-approve.json"))).toMatchObject({
       status: "satisfied",
     });
   });

@@ -36,7 +36,7 @@ beforeAll(async () => {
   await writeFile(
     configPath,
     JSON.stringify({
-      plugin: join(demoRoot, "tests", "fixtures", "plugins", "github-demo-plugin.json"),
+      plugin: join(demoRoot, "tests", "fixtures", "plugins", "github-mirror-plugin.json"),
       adapter: { url: "http://127.0.0.1:9" },
       agent: { keyFile: join(demoRoot, "tests", "fixtures", "test-keys", "proposer.json") },
       workflow: { pollIntervalMs: 60_000 },

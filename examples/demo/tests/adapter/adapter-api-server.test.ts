@@ -39,8 +39,8 @@ async function credentialDir() {
 }
 
 async function makeApp(configDir?: string) {
-  // Default to only the auto-approve config to avoid strict overriding it (both
-  // target the same application DID, so the last loaded wins).
+  // The shared configs dir holds the mirror and live-demo applications. They
+  // have distinct applicationDids, so both route cleanly — no shadowing.
   const effectiveConfigDir = configDir ?? join(fixturesDir, "configs");
   const configs = await loadDeploymentConfigs(effectiveConfigDir, {
     confirmPluginUse: async () => true,
@@ -65,10 +65,10 @@ async function makeApp(configDir?: string) {
 /** Create a config dir with only the auto-approve config (for basic execution tests). */
 async function makeAutoApproveConfigDir() {
   const dir = await mkdtemp(join(tmpdir(), "mpas-http-configs-auto-"));
-  const config = await readJson<Record<string, unknown>>(join(fixturesDir, "configs", "github-auto-approve.json"));
+  const config = await readJson<Record<string, unknown>>(join(fixturesDir, "configs", "policy-fixtures", "github-auto-approve.json"));
   config.plugin = {
     ...(config.plugin as Record<string, unknown>),
-    path: join(fixturesDir, "plugins", "github-demo-plugin.json"),
+    path: join(fixturesDir, "plugins", "github-mirror-plugin.json"),
   };
   await writeFile(join(dir, "github-auto-approve.json"), `${JSON.stringify(config, null, 2)}\n`);
   return dir;
@@ -87,10 +87,10 @@ async function submitFixture(app: FastifyInstance, fixtureFile: string) {
 
 async function makeTargetConfigDir(server: string, timeoutMs: number, command = "node") {
   const dir = await mkdtemp(join(tmpdir(), "mpas-http-configs-"));
-  const config = await readJson<Record<string, unknown>>(join(fixturesDir, "configs", "github-auto-approve.json"));
+  const config = await readJson<Record<string, unknown>>(join(fixturesDir, "configs", "policy-fixtures", "github-auto-approve.json"));
   config.plugin = {
     ...(config.plugin as Record<string, unknown>),
-    path: join(fixturesDir, "plugins", "github-demo-plugin.json"),
+    path: join(fixturesDir, "plugins", "github-mirror-plugin.json"),
   };
   config.executionTarget = {
     type: "mcp.stdio",
@@ -124,7 +124,10 @@ describe("HTTP endpoint", () => {
     expect(response.statusCode).toBe(200);
     expect(response.json()).toMatchObject({
       status: "ok",
-      loadedConfigs: [{ applicationDid: "did:web:github.example" }],
+      loadedConfigs: expect.arrayContaining([
+        expect.objectContaining({ applicationDid: "did:web:github-mirror.example" }),
+        expect.objectContaining({ applicationDid: "did:web:github-live-demo.example" }),
+      ]),
     });
   });
 
@@ -293,13 +296,13 @@ describe("HTTP endpoint", () => {
 
   it("returns an immediate policy rejection for a blocked action without requesting approvals or dispatching", async () => {
     const dir = await mkdtemp(join(tmpdir(), "mpas-http-configs-policy-deny-"));
-    const config = await readJson<Record<string, unknown>>(join(fixturesDir, "configs", "github-auto-approve.json"));
+    const config = await readJson<Record<string, unknown>>(join(fixturesDir, "configs", "policy-fixtures", "github-auto-approve.json"));
     config.plugin = {
       ...(config.plugin as Record<string, unknown>),
-      path: join(fixturesDir, "plugins", "github-demo-plugin.json"),
+      path: join(fixturesDir, "plugins", "github-mirror-plugin.json"),
     };
     const policy = config.policy as { policies: Record<string, unknown[]> };
-    policy.policies.create_issue_demo = [
+    policy.policies.create_issue_mirror = [
       {
         reject: true,
         description: "This operator-only rationale must not be returned.",
@@ -316,7 +319,7 @@ describe("HTTP endpoint", () => {
       result: "rejected",
       error: {
         code: "ACTION_BLOCKED_BY_POLICY",
-        message: "Action create_issue_demo is blocked by policy.",
+        message: "Action create_issue_mirror is blocked by policy.",
       },
     });
     expect(firstBody.authorizationRequirements).toBeUndefined();
@@ -331,16 +334,16 @@ describe("HTTP endpoint", () => {
 
   it("rejects an ungoverned operation when passThrough is deny", async () => {
     const dir = await mkdtemp(join(tmpdir(), "mpas-http-configs-deny-"));
-    const config = await readJson<Record<string, unknown>>(join(fixturesDir, "configs", "github-auto-approve.json"));
+    const config = await readJson<Record<string, unknown>>(join(fixturesDir, "configs", "policy-fixtures", "github-auto-approve.json"));
     config.plugin = {
       ...(config.plugin as Record<string, unknown>),
-      path: join(fixturesDir, "plugins", "github-demo-plugin.json"),
+      path: join(fixturesDir, "plugins", "github-mirror-plugin.json"),
     };
     config.passThrough = "deny";
     await writeFile(join(dir, "github-deny.json"), `${JSON.stringify(config, null, 2)}\n`);
 
     const app = await makeApp(dir);
-    // create_issue_demo is deliberately absent from the demo plugin and policy —
+    // create_issue_mirror is deliberately absent from the demo plugin and policy —
     // the canonical pass-through operation.
     const response = await submitFixture(app, "valid-no-approval-required.json");
 
@@ -356,10 +359,10 @@ describe("HTTP endpoint", () => {
     // fixture proposer (maintainers only). The package still verifies
     // cryptographically; gating must reject it before policy evaluation.
     const dir = await mkdtemp(join(tmpdir(), "mpas-http-configs-gating-"));
-    const config = await readJson<Record<string, unknown>>(join(fixturesDir, "configs", "github-auto-approve.json"));
+    const config = await readJson<Record<string, unknown>>(join(fixturesDir, "configs", "policy-fixtures", "github-auto-approve.json"));
     config.plugin = {
       ...(config.plugin as Record<string, unknown>),
-      path: join(fixturesDir, "plugins", "github-demo-plugin.json"),
+      path: join(fixturesDir, "plugins", "github-mirror-plugin.json"),
     };
     const policy = config.policy as { signerGroups: Record<string, string[]> };
     policy.signerGroups.proposers = policy.signerGroups.maintainers;

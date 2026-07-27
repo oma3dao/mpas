@@ -3,13 +3,13 @@
   "type": "MpasAdapterDeploymentConfig",
   "name": "github-auto-approve",
   "target": {
-    "applicationDid": "did:web:github.example"
+    "applicationDid": "did:web:github-mirror.example"
   },
   "plugin": {
-    "pluginDid": "did:web:plugins.oma3.example:github-demo-plugin",
+    "pluginDid": "did:web:plugins.oma3.example:github-mirror-plugin",
     "pluginVersion": "0.1.0",
-    "artifactDid": "did:artifact:bafkreiddvecgiomvq6cgwdm7ccpctwjm3k5kfowd7blovwwg2kdhqcwtge",
-    "path": "../plugins/github-demo-plugin.json"
+    "artifactDid": "did:artifact:bafkreibuuyyqyb7jqrlflorjiiko2efz2xgagwxxdgathcrdpcniiyzhfi",
+    "path": "../plugins/github-mirror-plugin.json"
   },
   "credentialBindings": [
     {
@@ -31,7 +31,7 @@
     "version": "1",
     "type": "MpasApplicationPolicy",
     "policyProfileUrl": "https://oma3.org/specs/mpas/policy-json/v1",
-    "applicationDid": "did:web:github.example",
+    "applicationDid": "did:web:github-mirror.example",
     "executionProfile": {
       "id": "did:web:profiles.oma3.org:mcp",
       "format": "mcp.toolsCall"

@@ -12,7 +12,7 @@ async function readJson<T>(path: string): Promise<T> {
 }
 
 async function githubPlugin() {
-  const result = await loadPlugin(join(fixturesDir, "plugins", "github-demo-plugin.json"));
+  const result = await loadPlugin(join(fixturesDir, "plugins", "github-mirror-plugin.json"));
   if (!result.ok) {
     throw new Error(result.error.message);
   }
@@ -22,8 +22,8 @@ async function githubPlugin() {
 
 describe("validatePayloadAgainstPlugin", () => {
   it.each([
-    ["valid-two-approvals.json", "merge_pull_request_demo"],
-    ["valid-delete-branch.json", "delete_branch_demo"],
+    ["valid-two-approvals.json", "merge_pull_request_mirror"],
+    ["valid-delete-branch.json", "delete_branch_mirror"],
   ])("matches and validates %s", async (fixtureFile, operationName) => {
     const plugin = await githubPlugin();
     const actionPackage = await readJson<ActionPackage>(join(fixturesDir, "core", fixtureFile));
@@ -48,7 +48,7 @@ describe("validatePayloadAgainstPlugin", () => {
     });
   });
 
-  it("treats create_issue_demo as an unknown operation (pass-through)", async () => {
+  it("treats create_issue_mirror as an unknown operation (pass-through)", async () => {
     const plugin = await githubPlugin();
     const actionPackage = await readJson<ActionPackage>(join(fixturesDir, "core", "valid-no-approval-required.json"));
     const result = validatePayloadAgainstPlugin(actionPackage.executionPayload, plugin);
@@ -75,7 +75,7 @@ describe("validatePayloadAgainstPlugin", () => {
   it("rejects malformed arguments for a known operation", async () => {
     const result = validatePayloadAgainstPlugin(
       {
-        name: "merge_pull_request_demo",
+        name: "merge_pull_request_mirror",
         arguments: {
           owner: "oma3dao",
           repo: "app-registry",

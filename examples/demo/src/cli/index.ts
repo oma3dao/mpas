@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 
+import { existsSync } from "node:fs";
 import { chmod, copyFile, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
-import { basename, join, parse } from "node:path";
+import { basename, dirname, join, parse, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { homedir } from "node:os";
 import { daemonStatus, defaultAdapterKeyPath, defaultConfigDir, defaultCredentialDir, startDaemon } from "../adapter/daemon.js";
@@ -419,6 +420,10 @@ export async function validateConfig(name: string, options: Pick<ParsedOptions, 
     }
 
     const trustedDids = new Set(config.config.signerKeys.map((s) => s.did));
+    // Every application this adapter serves, so a bridge proposing to an
+    // unserved application is caught here rather than as a confusing
+    // UNKNOWN_APPLICATION at dispatch time.
+    const servedApplicationDids = new Set(loaded.configs.map((entry) => entry.config.target.applicationDid));
     const bridgeDids = new Map<string, string[]>(); // did → [file, file, ...]
     for (const file of bridgeFiles) {
       const filePath = join(bridgeDir, file);
@@ -431,12 +436,25 @@ export async function validateConfig(name: string, options: Pick<ParsedOptions, 
           ok: true,
         };
 
+        const bridgeTarget =
+          ((bridgeConfig.target as Record<string, unknown> | undefined)?.applicationDid as string | undefined) ??
+          (bridgeConfig.applicationDid as string | undefined);
+        const toolsPath = bridgeConfig.tools as string | undefined;
+
         if (!agentDid) {
           check.ok = false;
           check.error = "Bridge config missing agent.did";
         } else if (!trustedDids.has(agentDid as Did)) {
           check.ok = false;
           check.error = `agent.did ${agentDid} is not in signerKeys`;
+        } else if (bridgeTarget && !servedApplicationDids.has(bridgeTarget as Did)) {
+          check.ok = false;
+          check.error =
+            `target.applicationDid ${bridgeTarget} is not served by any deployment config in this directory. ` +
+            `Actions from this bridge would be rejected as UNKNOWN_APPLICATION. Served: ${[...servedApplicationDids].join(", ")}`;
+        } else if (toolsPath && !existsSync(resolve(dirname(filePath), toolsPath))) {
+          check.ok = false;
+          check.error = `tools file not found: ${toolsPath}`;
         } else {
           const files = bridgeDids.get(agentDid) ?? [];
           files.push(file);

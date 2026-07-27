@@ -17,7 +17,7 @@ function makeActionPackage(operationName: string, extraArgs: Record<string, unkn
       version: "1",
       type: "ActionEnvelope",
       proposer: { did: "did:web:agents.example:proposer" as Did },
-      target: { applicationDid: "did:web:github.example" as Did },
+      target: { applicationDid: "did:web:github-mirror.example" as Did },
       executionProfile: { id: "did:web:profiles.oma3.org:mcp" as Did, format: "mcp.toolsCall" },
       executionPayloadHash: { alg: "sha-256", value: "fake-hash" },
       actionId: { value: "test-action-id" },
@@ -51,15 +51,15 @@ const policyWithDefaultRequirement: PolicyConfig = {
     decision: "approve",
   },
   policies: {
-    create_issue_demo: [
+    create_issue_mirror: [
       {
-        description: "create_issue_demo is exempt (auto-approved).",
+        description: "create_issue_mirror is exempt (auto-approved).",
         requirements: { type: "threshold", threshold: 0, eligibleSignerGroup: "maintainers", decision: "approve" },
       },
     ],
-    merge_pull_request_demo: [
+    merge_pull_request_mirror: [
       {
-        description: "merge_pull_request_demo into main requires 2 maintainers.",
+        description: "merge_pull_request_mirror into main requires 2 maintainers.",
         match: {
           conditions: [
             { source: "executionPayload", path: "/arguments/baseRef", op: "eq", value: "main" },
@@ -68,7 +68,7 @@ const policyWithDefaultRequirement: PolicyConfig = {
         requirements: { type: "threshold", threshold: 2, eligibleSignerGroup: "maintainers", decision: "approve" },
       },
       {
-        description: "merge_pull_request_demo into main also requires 1 security reviewer.",
+        description: "merge_pull_request_mirror into main also requires 1 security reviewer.",
         match: {
           conditions: [
             { source: "executionPayload", path: "/arguments/baseRef", op: "eq", value: "main" },
@@ -86,9 +86,9 @@ const policyWithDefaultRequirement: PolicyConfig = {
 
 describe("evaluatePolicy — defaultRequirement", () => {
   describe("operation with no matching policy entry hits the default", () => {
-    it("requires approvals for delete_branch_demo when none provided", () => {
+    it("requires approvals for delete_branch_mirror when none provided", () => {
       const result = evaluatePolicy(
-        makeActionPackage("delete_branch_demo"),
+        makeActionPackage("delete_branch_mirror"),
         makeApprovals(0, []),
         policyWithDefaultRequirement,
       );
@@ -106,9 +106,9 @@ describe("evaluatePolicy — defaultRequirement", () => {
       });
     });
 
-    it("satisfies delete_branch_demo when 1 maintainer approves", () => {
+    it("satisfies delete_branch_mirror when 1 maintainer approves", () => {
       const result = evaluatePolicy(
-        makeActionPackage("delete_branch_demo"),
+        makeActionPackage("delete_branch_mirror"),
         makeApprovals(1, [MAINTAINER_A]),
         policyWithDefaultRequirement,
       );
@@ -118,9 +118,9 @@ describe("evaluatePolicy — defaultRequirement", () => {
   });
 
   describe("operation with a matching policy entry — default does not apply", () => {
-    it("satisfies create_issue_demo with zero approvals (threshold: 0 exemption)", () => {
+    it("satisfies create_issue_mirror with zero approvals (threshold: 0 exemption)", () => {
       const result = evaluatePolicy(
-        makeActionPackage("create_issue_demo"),
+        makeActionPackage("create_issue_mirror"),
         makeApprovals(0, []),
         policyWithDefaultRequirement,
       );
@@ -128,9 +128,9 @@ describe("evaluatePolicy — defaultRequirement", () => {
       expect(result).toEqual({ status: "satisfied" });
     });
 
-    it("the default requirement does NOT apply to create_issue_demo even with no approvals", () => {
+    it("the default requirement does NOT apply to create_issue_mirror even with no approvals", () => {
       const result = evaluatePolicy(
-        makeActionPackage("create_issue_demo"),
+        makeActionPackage("create_issue_mirror"),
         { actionEnvelopeHash: { alg: "sha-256", value: "fake-hash" }, approvals: [] },
         policyWithDefaultRequirement,
       );
@@ -141,9 +141,9 @@ describe("evaluatePolicy — defaultRequirement", () => {
   });
 
   describe("operation with two matching entries in its policy array — both must be satisfied, default does not apply", () => {
-    it("requires both entries satisfied for merge_pull_request_demo into main", () => {
+    it("requires both entries satisfied for merge_pull_request_mirror into main", () => {
       const result = evaluatePolicy(
-        makeActionPackage("merge_pull_request_demo", { baseRef: "main" }),
+        makeActionPackage("merge_pull_request_mirror", { baseRef: "main" }),
         makeApprovals(0, []),
         policyWithDefaultRequirement,
       );
@@ -170,7 +170,7 @@ describe("evaluatePolicy — defaultRequirement", () => {
       };
 
       const result = evaluatePolicy(
-        makeActionPackage("merge_pull_request_demo", { baseRef: "main" }),
+        makeActionPackage("merge_pull_request_mirror", { baseRef: "main" }),
         approvals,
         policyWithDefaultRequirement,
       );
@@ -197,7 +197,7 @@ describe("evaluatePolicy — defaultRequirement", () => {
       };
 
       const result = evaluatePolicy(
-        makeActionPackage("merge_pull_request_demo", { baseRef: "main" }),
+        makeActionPackage("merge_pull_request_mirror", { baseRef: "main" }),
         approvals,
         policyWithDefaultRequirement,
       );
@@ -215,7 +215,7 @@ describe("evaluatePolicy — defaultRequirement", () => {
       };
 
       const result = evaluatePolicy(
-        makeActionPackage("merge_pull_request_demo", { baseRef: "main" }),
+        makeActionPackage("merge_pull_request_mirror", { baseRef: "main" }),
         approvals,
         policyWithDefaultRequirement,
       );

@@ -40,7 +40,7 @@ async function trustedSigners(): Promise<TrustedSigner[]> {
 async function verificationConfig(): Promise<VerificationConfig> {
   return {
     trustedSigners: await trustedSigners(),
-    trustedApplicationDids: ["did:web:github.example"],
+    trustedApplicationDids: ["did:web:github-mirror.example"],
   };
 }
 
@@ -55,18 +55,18 @@ async function parseFixture(file: string): Promise<ActionPackage> {
 
 describe("verifyActionPackage", () => {
   it.each([
-    ["valid-no-approval-required.json", "create_issue_demo"],
-    ["valid-two-approvals.json", "merge_pull_request_demo"],
-    ["valid-delete-branch.json", "delete_branch_demo"],
-    ["insufficient-approvals.json", "merge_pull_request_demo"],
-    ["invalid-disabled-operation.json", "delete_branch_demo"],
-    ["invalid-resource-restricted.json", "create_issue_demo"],
+    ["valid-no-approval-required.json", "create_issue_mirror"],
+    ["valid-two-approvals.json", "merge_pull_request_mirror"],
+    ["valid-delete-branch.json", "delete_branch_mirror"],
+    ["insufficient-approvals.json", "merge_pull_request_mirror"],
+    ["invalid-disabled-operation.json", "delete_branch_mirror"],
+    ["invalid-resource-restricted.json", "create_issue_mirror"],
   ])("verifies core-valid fixture %s", async (fixtureFile, operationName) => {
     const result = await verifyActionPackage(await parseFixture(fixtureFile), await verificationConfig());
 
     expect(result).toMatchObject({
       status: "verified",
-      applicationDid: "did:web:github.example",
+      applicationDid: "did:web:github-mirror.example",
       operationName,
     });
   });

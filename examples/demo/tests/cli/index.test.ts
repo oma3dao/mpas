@@ -29,10 +29,10 @@ async function credentialDir() {
 }
 
 async function startFixtureDaemon() {
-  // Use only the auto-approve config so that create_issue_demo passes with proposerOnly.
+  // Use only the auto-approve config so that create_issue_mirror passes with proposerOnly.
   const tmpDir = await mkdtemp(join(tmpdir(), "mpas-cli-daemon-cfg-"));
-  const config = JSON.parse(await readFile(join(fixturesDir, "configs", "github-auto-approve.json"), "utf8")) as Record<string, unknown>;
-  (config.plugin as Record<string, unknown>).path = join(fixturesDir, "plugins", "github-demo-plugin.json");
+  const config = JSON.parse(await readFile(join(fixturesDir, "configs", "policy-fixtures", "github-auto-approve.json"), "utf8")) as Record<string, unknown>;
+  (config.plugin as Record<string, unknown>).path = join(fixturesDir, "plugins", "github-mirror-plugin.json");
   await writeFile(join(tmpDir, "github-auto-approve.json"), `${JSON.stringify(config, null, 2)}\n`);
 
   const journalDir = await mkdtemp(join(tmpdir(), "mpas-cli-journal-"));
@@ -68,22 +68,22 @@ describe("CLI daemon and testing commands", () => {
       },
       loadedConfigs: [
         {
-          name: "github-auto-approve",
-          applicationDid: "did:web:github.example",
+          name: "github-live-demo",
+          applicationDid: "did:web:github-live-demo.example",
         },
         {
           name: "github-mirror",
-          applicationDid: "did:web:github.example",
+          applicationDid: "did:web:github-mirror.example",
         },
       ],
     });
   });
 
   it("test dry-run reports satisfied for valid-no-approval-required.json", async () => {
-    // Use a single-config dir with auto-approve so create_issue_demo passes policy
+    // Use a single-config dir with auto-approve so create_issue_mirror passes policy
     const tmpDir = await mkdtemp(join(tmpdir(), "mpas-cli-dryrun-"));
-    const config = JSON.parse(await readFile(join(fixturesDir, "configs", "github-auto-approve.json"), "utf8")) as Record<string, unknown>;
-    (config.plugin as Record<string, unknown>).path = join(fixturesDir, "plugins", "github-demo-plugin.json");
+    const config = JSON.parse(await readFile(join(fixturesDir, "configs", "policy-fixtures", "github-auto-approve.json"), "utf8")) as Record<string, unknown>;
+    (config.plugin as Record<string, unknown>).path = join(fixturesDir, "plugins", "github-mirror-plugin.json");
     await writeFile(join(tmpDir, "github-auto-approve.json"), `${JSON.stringify(config, null, 2)}\n`);
 
     const result = await dryRunActionFile(join(fixturesDir, "core", "valid-no-approval-required.json"), {
@@ -92,7 +92,7 @@ describe("CLI daemon and testing commands", () => {
 
     expect(result).toMatchObject({
       result: "satisfied",
-      operationName: "create_issue_demo",
+      operationName: "create_issue_mirror",
     });
   });
 

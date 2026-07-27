@@ -7,7 +7,7 @@ describe("MPAS Core types", () => {
       version: "1",
       type: "ActionPackage",
       executionPayload: {
-        name: "create_issue_demo",
+        name: "create_issue_mirror",
         arguments: {
           owner: "oma3dao",
           repo: "app-registry",
@@ -22,7 +22,7 @@ describe("MPAS Core types", () => {
           did: "did:web:agents.example:proposer",
         },
         target: {
-          applicationDid: "did:web:github.example",
+          applicationDid: "did:web:github-mirror.example",
           resource: "repo:oma3dao/app-registry",
         },
         executionProfile: {

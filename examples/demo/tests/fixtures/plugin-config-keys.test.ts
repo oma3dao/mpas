@@ -128,15 +128,15 @@ async function readJson<T>(path: string): Promise<T> {
 
 describe("plugin, config, and key fixtures", () => {
   it("validates the GitHub plugin against MPAS Application Plugin Profile v0.2", async () => {
-    const plugin = await readJson<MpasApplicationPlugin>(join(fixturesDir, "plugins", "github-demo-plugin.json"));
+    const plugin = await readJson<MpasApplicationPlugin>(join(fixturesDir, "plugins", "github-mirror-plugin.json"));
     const ajv = new Ajv2020({ strict: false });
     const validate = ajv.compile(applicationPluginSchema);
 
     expect(validate(plugin), JSON.stringify(validate.errors, null, 2)).toBe(true);
     expect(typeof plugin.operations).toBe("object");
     expect(Object.keys(plugin.operations)).toEqual([
-      "delete_branch_demo",
-      "merge_pull_request_demo",
+      "delete_branch_mirror",
+      "merge_pull_request_mirror",
     ]);
     expect(JSON.stringify(plugin)).not.toContain("nativeBinding");
     expect(JSON.stringify(plugin)).not.toContain("policySuggestions");
@@ -144,7 +144,7 @@ describe("plugin, config, and key fixtures", () => {
   });
 
   it("valid Action Package payloads validate against plugin operation schemas", async () => {
-    const plugin = await readJson<MpasApplicationPlugin>(join(fixturesDir, "plugins", "github-demo-plugin.json"));
+    const plugin = await readJson<MpasApplicationPlugin>(join(fixturesDir, "plugins", "github-mirror-plugin.json"));
     const ajv = new Ajv2020({ strict: false });
 
     for (const file of [
@@ -161,22 +161,22 @@ describe("plugin, config, and key fixtures", () => {
   });
 
   it("deployment configs reference the plugin and artifact DID correctly", async () => {
-    const plugin = await readJson<MpasApplicationPlugin>(join(fixturesDir, "plugins", "github-demo-plugin.json"));
+    const plugin = await readJson<MpasApplicationPlugin>(join(fixturesDir, "plugins", "github-mirror-plugin.json"));
     const expectedArtifactDid = await computeArtifactDid(plugin);
 
-    for (const file of ["github-auto-approve.json", "github-mirror-adapter-config.json"]) {
+    for (const file of ["policy-fixtures/github-auto-approve.json", "github-mirror-adapter-config.json"]) {
       const config = await readJson<DeploymentConfig>(join(fixturesDir, "configs", file));
 
       expect(config.target.applicationDid).toBe(plugin.applicationDid);
       expect(config.plugin.pluginDid).toBe(plugin.pluginDid);
       expect(config.plugin.pluginVersion).toBe(plugin.pluginVersion);
       expect(config.plugin.artifactDid).toBe(expectedArtifactDid);
-      expect(config.plugin.path).toBe("../plugins/github-demo-plugin.json");
+      expect(config.plugin.path).toBe("../plugins/github-mirror-plugin.json");
     }
   });
 
   it("deployment configs have signerKeys with DID and publicJwk (no roles)", async () => {
-    for (const file of ["github-auto-approve.json", "github-mirror-adapter-config.json"]) {
+    for (const file of ["policy-fixtures/github-auto-approve.json", "github-mirror-adapter-config.json"]) {
       const config = await readJson<DeploymentConfig>(join(fixturesDir, "configs", file));
 
       expect(config.signerKeys).toBeDefined();
@@ -190,7 +190,7 @@ describe("plugin, config, and key fixtures", () => {
   });
 
   it("deployment configs embed a full MpasApplicationPolicy in the policy field", async () => {
-    for (const file of ["github-auto-approve.json", "github-mirror-adapter-config.json"]) {
+    for (const file of ["policy-fixtures/github-auto-approve.json", "github-mirror-adapter-config.json"]) {
       const config = await readJson<DeploymentConfig>(join(fixturesDir, "configs", file));
 
       expect(config.policy.signerGroups).toBeDefined();

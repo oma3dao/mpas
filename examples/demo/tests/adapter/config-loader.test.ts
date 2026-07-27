@@ -23,8 +23,8 @@ async function tempFixtureConfigDir() {
   await mkdir(configDir, { recursive: true });
   await mkdir(pluginDir, { recursive: true });
 
-  const plugin = await readJson<unknown>(join(fixturesDir, "plugins", "github-demo-plugin.json"));
-  await writeJson(join(pluginDir, "github-demo-plugin.json"), plugin);
+  const plugin = await readJson<unknown>(join(fixturesDir, "plugins", "github-mirror-plugin.json"));
+  await writeJson(join(pluginDir, "github-mirror-plugin.json"), plugin);
 
   return { root, configDir, pluginDir };
 }
@@ -36,11 +36,13 @@ describe("loadDeploymentConfigs", () => {
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.configs).toHaveLength(2);
-      expect(result.configsByApplicationDid.has("did:web:github.example")).toBe(true);
+      expect(result.configsByApplicationDid.has("did:web:github-mirror.example")).toBe(true);
       expect(result.configs.map((entry) => entry.config.name).sort()).toEqual([
-        "github-auto-approve",
+        "github-live-demo",
         "github-mirror",
       ]);
+      // Mirror and live demo are distinct applications, so both route cleanly.
+      expect(result.configsByApplicationDid.has("did:web:github-live-demo.example")).toBe(true);
       expect(result.configs.every((entry) => entry.plugin.type === "MpasApplicationPlugin")).toBe(true);
     }
   });
@@ -85,13 +87,13 @@ describe("loadDeploymentConfigs", () => {
 
   it("rejects a reject policy entry that also contains requirements", async () => {
     const { configDir } = await tempFixtureConfigDir();
-    const config = await readJson<Record<string, unknown>>(join(fixturesDir, "configs", "github-auto-approve.json"));
+    const config = await readJson<Record<string, unknown>>(join(fixturesDir, "configs", "policy-fixtures", "github-auto-approve.json"));
     config.plugin = {
       ...(config.plugin as Record<string, unknown>),
-      path: "../plugins/github-demo-plugin.json",
+      path: "../plugins/github-mirror-plugin.json",
     };
     const policy = config.policy as { policies: Record<string, unknown[]> };
-    policy.policies.create_issue_demo = [
+    policy.policies.create_issue_mirror = [
       {
         reject: true,
         requirements: { type: "proposerOnly" },
@@ -107,5 +109,28 @@ describe("loadDeploymentConfigs", () => {
         code: "CONFIG_SCHEMA_INVALID",
       },
     });
+  });
+});
+
+describe("duplicate applicationDid", () => {
+  it("refuses to load two configs claiming the same application", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "mpas-dup-did-"));
+    const mirror = JSON.parse(
+      await readFile(join(fixturesDir, "configs", "github-mirror-adapter-config.json"), "utf8"),
+    ) as Record<string, any>;
+    mirror.plugin.path = join(fixturesDir, "plugins", "github-mirror-plugin.json");
+
+    // Same application, two files — the adapter routes only by applicationDid,
+    // so this must fail loudly rather than silently keep one.
+    await writeFile(join(dir, "a-mirror.json"), JSON.stringify(mirror));
+    await writeFile(join(dir, "b-mirror-copy.json"), JSON.stringify({ ...mirror, name: "github-mirror-copy" }));
+
+    const result = await loadDeploymentConfigs(dir, { confirmPluginUse: approvePluginUse });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe("DUPLICATE_APPLICATION_DID");
+      expect(result.error.message).toContain("did:web:github-mirror.example");
+    }
   });
 });

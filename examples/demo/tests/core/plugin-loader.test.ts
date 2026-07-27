@@ -9,14 +9,14 @@ const pluginsDir = fileURLToPath(new URL("../fixtures/plugins/", import.meta.url
 
 describe("loadPlugin", () => {
   it("loads the valid GitHub plugin fixture", async () => {
-    const result = await loadPlugin(join(pluginsDir, "github-demo-plugin.json"));
+    const result = await loadPlugin(join(pluginsDir, "github-mirror-plugin.json"));
 
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.plugin.type).toBe("MpasApplicationPlugin");
       expect(Object.keys(result.plugin.operations)).toEqual([
-        "delete_branch_demo",
-        "merge_pull_request_demo",
+        "delete_branch_mirror",
+        "merge_pull_request_mirror",
       ]);
     }
   });
@@ -36,7 +36,7 @@ describe("loadPlugin", () => {
     const dir = await mkdtemp(join(tmpdir(), "mpas-plugin-loader-"));
     const path = join(dir, "missing-protocol-version.json");
     const plugin = JSON.parse(
-      await readFile(join(pluginsDir, "github-demo-plugin.json"), "utf8"),
+      await readFile(join(pluginsDir, "github-mirror-plugin.json"), "utf8"),
     ) as { executionProfile: { protocolVersion?: string } };
     delete plugin.executionProfile.protocolVersion;
     await writeFile(path, JSON.stringify(plugin));

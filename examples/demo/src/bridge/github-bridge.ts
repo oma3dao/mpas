@@ -42,106 +42,18 @@ import type {
 } from "@oma3/mpas";
 import { SqliteWorkflowStore } from "./sqlite-workflow-store.js";
 
-const TOOLS = [
-  {
-    "name": "create_issue_demo",
-    "description": "Create a new issue in a GitHub repository.",
-    "inputSchema": {
-      "type": "object",
-      "required": [
-        "owner",
-        "repo",
-        "title"
-      ],
-      "properties": {
-        "owner": {
-          "type": "string"
-        },
-        "repo": {
-          "type": "string"
-        },
-        "title": {
-          "type": "string"
-        },
-        "body": {
-          "type": "string"
-        },
-        "labels": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        }
-      },
-      "additionalProperties": false
-    }
-  },
-  {
-    "name": "delete_branch_demo",
-    "description": "Delete a branch from a GitHub repository.",
-    "inputSchema": {
-      "type": "object",
-      "required": [
-        "owner",
-        "repo",
-        "branch"
-      ],
-      "properties": {
-        "owner": {
-          "type": "string"
-        },
-        "repo": {
-          "type": "string"
-        },
-        "branch": {
-          "type": "string"
-        }
-      },
-      "additionalProperties": false
-    }
-  },
-  {
-    "name": "merge_pull_request_demo",
-    "description": "Merge a pull request.",
-    "inputSchema": {
-      "type": "object",
-      "required": [
-        "owner",
-        "repo",
-        "pullNumber",
-        "baseRef",
-        "expectedHeadSha",
-        "mergeMethod"
-      ],
-      "properties": {
-        "owner": {
-          "type": "string"
-        },
-        "repo": {
-          "type": "string"
-        },
-        "pullNumber": {
-          "type": "integer"
-        },
-        "baseRef": {
-          "type": "string"
-        },
-        "expectedHeadSha": {
-          "type": "string"
-        },
-        "mergeMethod": {
-          "type": "string",
-          "enum": [
-            "merge",
-            "squash",
-            "rebase"
-          ]
-        }
-      },
-      "additionalProperties": false
-    }
-  }
-] satisfies BridgeUpstreamTool[];
+/**
+ * The demo ships two applications — the dry-run mirror and the live demo — that
+ * differ in tool names and applicationDid. One bridge binary serves both: the
+ * tool surface is loaded from the path in `tools`. A real generated bridge bakes
+ * its tools.json in beside the binary, since it fronts exactly one application.
+ */
+const DEFAULT_TOOLS_FILE = new URL("../../bridge-tools/github-live-demo-tools.json", import.meta.url);
+
+function loadTools(path: string | undefined): BridgeUpstreamTool[] {
+  const source = path ? pathToFileURL(path) : DEFAULT_TOOLS_FILE;
+  return JSON.parse(readFileSync(source, "utf8")) as BridgeUpstreamTool[];
+}
 
 interface WorkflowConfig {
   /** SQLite database path. Omitted → in-memory store (no restart durability). */
@@ -155,6 +67,8 @@ interface WorkflowConfig {
 }
 
 interface BridgeConfig extends Omit<ProposerConfig, "approvalStrategy" | "approvalTimeoutMs"> {
+  /** Path to the upstream tool surface this bridge exposes. */
+  tools?: string;
   workflow?: WorkflowConfig;
 }
 
@@ -181,6 +95,7 @@ interface CliConfig {
     id: string;
     format: string;
   };
+  tools?: string;
   workflow?: WorkflowConfig;
   defaultExpirationMinutes?: number;
   /** @deprecated The bridge always returns a deferred result; no synchronous approval wait exists. */
@@ -197,8 +112,10 @@ function log(level: "info" | "warn" | "error", msg: string, data?: object): void
 export class GeneratedBridge {
   private readonly bridgePromise: Promise<ProposerBridge>;
   private readonly store: WorkflowStore;
+  private readonly tools: BridgeUpstreamTool[];
 
   constructor(config: BridgeConfig) {
+    this.tools = loadTools(config.tools);
     const plugin = loadPlugin(config.plugin);
     const adapterClient = new AdapterClient({ url: config.adapterUrl });
     const coordination: WorkflowCoordination = config.coordinationUrl
@@ -219,7 +136,7 @@ export class GeneratedBridge {
         format: plugin.executionProfile.format ?? "mcp.toolsCall",
       };
       return new ProposerBridge({
-        tools: [...TOOLS],
+        tools: [...this.tools],
         buildActionPackage: (toolName, args) =>
           new ActionPackageBuilder({
             applicationDid: config.applicationDid,
@@ -246,7 +163,7 @@ export class GeneratedBridge {
     // Static surface: profile notices and unions are deterministic, so expose
     // them without awaiting the key manager.
     return new ProposerBridge({
-      tools: [...TOOLS],
+      tools: [...this.tools],
       buildActionPackage: () => Promise.reject(new Error("static surface only")),
       store: new MemoryWorkflowStore(),
       adapter: { submit: () => Promise.reject(new Error("static surface only")) },
@@ -362,6 +279,7 @@ function toBridgeConfig(config: CliConfig, configDir: string): BridgeConfig {
     throw new Error('Proposer bridge config requires "agent.keyFile".');
   }
 
+  const toolsPath = config.tools ? resolve(configDir, config.tools) : undefined;
   const workflow: WorkflowConfig = { ...config.workflow };
   if (workflow.dbPath) {
     workflow.dbPath = resolve(configDir, workflow.dbPath);
@@ -378,6 +296,7 @@ function toBridgeConfig(config: CliConfig, configDir: string): BridgeConfig {
       format: plugin.executionProfile.format ?? "mcp.toolsCall",
     }) as BridgeConfig["executionProfile"],
     defaultExpirationMinutes: config.defaultExpirationMinutes,
+    ...(toolsPath !== undefined ? { tools: toolsPath } : {}),
     workflow,
   };
 }
