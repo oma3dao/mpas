@@ -270,7 +270,7 @@ This part sets up the entire MPAS demo on a single account: all signing keys, de
 
 ```sh
 export MPAS_HOME="$HOME/.mpas"
-mkdir -p "$MPAS_HOME/config" "$MPAS_HOME/plugins" "$MPAS_HOME/credentials" "$MPAS_HOME/keys" "$MPAS_HOME/journal" "$MPAS_HOME/bridge-configs"
+mkdir -p "$MPAS_HOME/config" "$MPAS_HOME/plugins" "$MPAS_HOME/credentials" "$MPAS_HOME/keys" "$MPAS_HOME/journal" "$MPAS_HOME/bridge-configs" "$MPAS_HOME/workflows"
 ```
 
 ### Copy the application plugin and deployment config
@@ -337,10 +337,11 @@ cat > $MPAS_HOME/bridge-configs/proposer-bridge.json <<EOF
   "target": {
     "applicationDid": "did:web:github.example"
   },
-  "approvalStrategy": "wait",
-  "approvalTimeoutMs": 300000,
   "coordination": {
     "url": "http://127.0.0.1:7545"
+  },
+  "workflow": {
+    "dbPath": "$MPAS_HOME/workflows/proposer.db"
   }
 }
 EOF
@@ -641,26 +642,57 @@ mkdir -p ~/.openclaw/agents/maintainer/workspace
 ```markdown
 ## MPAS Proposer Role
 
-You are a GitHub operations agent. You propose actions through the MPAS MCP bridge
-and wait for approval from a separate maintainer agent before they execute.
+You are a GitHub operations agent. You propose actions through the MPAS MCP bridge.
+A separate maintainer agent approves them before they execute.
 
 ### Your MPAS tools
 
 - `create_issue` — Create a GitHub issue (pass-through, no approval needed)
 - `delete_branch` — Delete a branch (requires 1 maintainer approval)
 - `merge_pull_request` — Merge a PR (requires 1 maintainer approval)
+- `mpas_wait_for_action_result` — Retrieve the result of an Action you proposed
 
 ### How approval works
 
-When you call a tool that requires approval, the bridge submits your request to
-the coordination service and waits up to 5 minutes for a maintainer to approve.
-You do not need to do anything — just wait for the result to come back.
+Tool calls do not block. A call either returns the GitHub result directly, or
+returns a **deferred Action reference** — a `structuredContent` object with
+`"type": "MpasBridgeDeferredResult"` — meaning the Action is active and needs
+approval.
 
-If the action is rejected or times out, you'll get an error response. Report it
-to the user and ask how they'd like to proceed.
+When you get a deferred result:
+
+1. **Save the Action ID** from `actionRef.actionId.value`. You need it to get
+   the result, and there is no way to look it up later if you lose it.
+2. **If `notificationRequired` is `true`, tell the maintainers** that the action needs
+   maintainer approval, and give them the Action ID. Answer any questions they may have.
+3. **Do other work, or wait.** The Action progresses on its own — you do not
+   need to keep the session open or poll continuously.
+4. **Retrieve the result or check progress** with `mpas_wait_for_action_result`, passing the saved
+   `actionId` and a `timeoutSeconds` between 0 and 300. Use `0` for an instant
+   check, or a larger value to wait. If it returns another deferred result, the
+   Action is still active — call it again later.
+
+### Reading results
+
+- **A normal GitHub result** — the action executed. Report it.
+- **`"type": "MpasBridgeActionOutcome"`** — the Action ended without executing
+  (rejected, expired, and so on). Read `actionResponse.result` and report why.
+  Proposing a new Action is safe, but ask the user first.
+- **`"type": "MpasBridgeError"`** — the *bridge* could not answer, which says
+  nothing about the Action. If `retryable` is `true`, try again shortly.
+- **`actionResponse.result` of `indeterminate`** — the action may or may not have
+  executed. Do **not** retry. Check GitHub to see what actually happened, and
+  tell the user what you find. 
+
+  At any time you can check the repository orign to see an Action executed or not.
 
 ### Important
 
+- Never call the same tool again to check on an action in progress. A repeated
+  call proposes a **new** Action — it does not check the old one. Use
+  `mpas_wait_for_action_result` for that.
+- Telling the user, or a maintainer, that approval is needed is **not** approval.
+  Only a signed MPAS Approval authorizes an action.
 - You cannot approve your own actions. A separate maintainer agent handles approvals.
 - All actions target the repository specified in the user's request.
 - Do not attempt to access GitHub directly (via curl, git push, or API calls).
@@ -706,6 +738,8 @@ EOF
 
 > **Absolute vs. `~` paths:** Use **absolute** paths for MCP server `command` and `args` — the bridge is launched without a shell, so `~` is passed through literally and the spawn fails. Paths that OpenClaw resolves itself (like agent `workspace` values) accept `~`.
 
+> **`requestTimeoutMs`:** application tool calls return immediately, but `mpas_wait_for_action_result` blocks by design for up to `workflow.maxTimeoutSeconds` (default 300 s). The host timeout must exceed that ceiling or a legitimate wait gets killed mid-call — 360000 ms leaves a 60-second margin. If you lower one, lower both.
+
 Add both MPAS bridges. `openclaw config set` merges the value into your existing `~/.openclaw/openclaw.json` — it won't overwrite other settings. In this single-account demo both agents see both bridges; role separation comes from instructions, signing keys, and protocol-level enforcement.
 
 > **Multi-user setups (Part 5):** each account configures only the single bridge matching its role — see §5.5 for details.
@@ -719,7 +753,8 @@ openclaw config set mcp.servers "$(cat <<'JSON'
       "/Users/YOU/Projects/mpas/mpas/examples/demo/dist/bridge/github-bridge.js",
       "--config",
       "/Users/YOU/.mpas/bridge-configs/proposer-bridge.json"
-    ]
+    ],
+    "requestTimeoutMs": 360000
   },
   "mpas-coordination": {
     "command": "/ABSOLUTE/PATH/TO/node",
@@ -1228,10 +1263,11 @@ cat > ~/.mpas/bridge-configs/proposer-bridge.json <<EOF
   "target": {
     "applicationDid": "did:web:github.example"
   },
-  "approvalStrategy": "wait",
-  "approvalTimeoutMs": 300000,
   "coordination": {
     "url": "http://127.0.0.1:7545"
+  },
+  "workflow": {
+    "dbPath": "$MPAS_HOME/workflows/proposer.db"
   }
 }
 EOF
@@ -1336,11 +1372,11 @@ Nothing is pending yet (the issue was auto-approved), so an empty list is the ex
 
 **Step 3 — Full approval flow across accounts:**
 
-1. In the **proposer's terminal**: ask it to delete a branch from YOUR_USER/YOUR_DEMO_REPO. The tool call will block, waiting for maintainer approval.
+1. In the **proposer's terminal**: ask it to delete a branch from YOUR_USER/YOUR_DEMO_REPO. The tool call returns immediately with a deferred Action reference — it does **not** block — and the proposer should tell you approval is required.
 2. **Switch to the maintainer's terminal**: check for pending approvals and approve.
-3. **Back in the proposer's terminal**: confirm the tool call resolved with the execution result.
+3. **Back in the proposer's terminal**: ask it to fetch the result. It calls `mpas_wait_for_action_result` with the Action ID and reports the execution result.
 
-If the proposer times out before you can switch and approve, increase `approvalTimeoutMs` in `~/.mpas/bridge-configs/proposer-bridge.json` (default is 5 minutes / `300000` ms).
+There is no approval timeout to tune: the Action stays active until the Action Envelope expires, and the result remains retrievable for at least `workflow.resultRetentionSeconds` (default 24 hours) after it resolves. Take as long as you need between steps 1 and 2.
 
 ## 5.7 Operator Cleanup (Optional)
 
@@ -1387,9 +1423,8 @@ cat > ~/.mpas/bridge-configs/proposer-bridge.json <<EOF
     "keyFile": "$HOME/.mpas/keys/agent-1.json"
   },
   "target": { "applicationDid": "did:web:github.example" },
-  "approvalStrategy": "wait",
-  "approvalTimeoutMs": 300000,
-  "coordination": { "url": "http://127.0.0.1:7545" }
+  "coordination": { "url": "http://127.0.0.1:7545" },
+  "workflow": { "dbPath": "$HOME/.mpas/workflows/proposer.db" }
 }
 EOF
 
@@ -1420,6 +1455,7 @@ agents. You cannot approve your own proposals — only actions from a different 
 - `create_issue` — Create a GitHub issue (pass-through, no other agent needed)
 - `delete_branch` — Delete a branch (requires approval from another agent)
 - `merge_pull_request` — Merge a PR (requires approval from another agent)
+- `mpas_wait_for_action_result` — Retrieve the result of an Action you proposed
 
 ## Maintainer tools (mpas-coordination)
 
@@ -1430,8 +1466,22 @@ agents. You cannot approve your own proposals — only actions from a different 
 
 ## How approval works
 
-When you propose an action that requires approval, the bridge submits your request
-and waits for a different agent to approve. You cannot approve it yourself.
+Tool calls do not block. A call either returns the GitHub result directly, or
+returns a **deferred Action reference** — a `structuredContent` object with
+`"type": "MpasBridgeDeferredResult"` — meaning the Action is active and needs
+approval from a different agent.
+
+When you get a deferred result: save the Action ID from
+`actionRef.actionId.value`, tell the user approval is required if
+`notificationRequired` is `true`, then retrieve the result later with
+`mpas_wait_for_action_result` (pass the saved `actionId` and a `timeoutSeconds`
+between 0 and 300). Never re-call the original tool to check progress — that
+proposes a **new** Action.
+
+If a result comes back as `"type": "MpasBridgeActionOutcome"`, the Action ended
+without executing; read `actionResponse.result` for why. If
+`actionResponse.result` is `indeterminate`, the action may or may not have run —
+do not retry, check GitHub and report what you find.
 
 When reviewing actions from other agents, evaluate whether the action is safe:
 - Is the target repository correct?
@@ -1459,7 +1509,8 @@ openclaw config set mcp.servers "$(cat <<'JSON'
       "/Users/YOU/Projects/mpas/mpas/examples/demo/dist/bridge/github-bridge.js",
       "--config",
       "/Users/YOU/.mpas/bridge-configs/proposer-bridge.json"
-    ]
+    ],
+    "requestTimeoutMs": 360000
   },
   "mpas-coordination": {
     "command": "/ABSOLUTE/PATH/TO/node",
@@ -1592,7 +1643,8 @@ This means symmetric signers require at least two agents to function. A single s
 **Part 4 — Demo:**
 
 - [ ] `create_issue` executes immediately (auto-approved)
-- [ ] `delete_branch` blocks until maintainer approves, then executes
+- [ ] `delete_branch` returns a deferred Action reference without blocking
+- [ ] After maintainer approval, `mpas_wait_for_action_result` returns the execution result
 - [ ] Live GitHub (§4.4): branch actually deleted after approval
 
 **Part 5 — Multi-User Hardening (optional):**
