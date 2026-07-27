@@ -56,6 +56,15 @@ Evaluate JSON policy configurations per the MPAS Policy Profile:
 - `KeyManager` — load Ed25519 keys from file, derive `did:jwk`, sign/verify JWS
 - `deriveDidKey`, `generateEd25519Key`, `didKeyToKid` — DID utilities
 
+### Proposer Bridge Runtime (`lib/bridge-runtime.ts`, `lib/workflow-engine.ts`, `lib/workflow-store.ts`, `lib/bridge-results.ts`)
+
+Build asynchronous proposer bridges per the MPAS MCP Proposer Bridge Client Interface Profile:
+
+- `ProposerBridge` — MCP tool surface: application tools plus `mpas_wait_for_action_result`
+- `BridgeWorkflowEngine` — background workflow: submission, coordination, resubmission, restart recovery
+- `WorkflowStore`, `MemoryWorkflowStore` — durable-store contract and in-memory reference (no database dependency)
+- `MpasBridgeDeferredResult`, `MpasBridgeActionOutcome`, `MpasBridgeError` — client-facing result objects
+
 ### Bridge Generation
 
 Static MCP bridges are generated outside the runtime SDK by the top-level

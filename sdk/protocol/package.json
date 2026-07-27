@@ -1,7 +1,7 @@
 {
   "name": "@oma3/mpas",
-  "version": "0.1.0-alpha.1",
-  "description": "MPAS protocol SDK \u2014 types, verification, policy evaluation, receipts, and protocol primitives",
+  "version": "0.1.0-alpha.2",
+  "description": "MPAS protocol SDK — types, verification, policy evaluation, receipts, and protocol primitives",
   "license": "MIT",
   "type": "module",
   "main": "./dist/index.js",
