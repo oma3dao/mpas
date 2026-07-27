@@ -1,9 +1,11 @@
 # MPAS Reorg 2: Static Bridge Generation
 
 **Status:** Implemented  
+**Created:** 2026-07-16
+**Implemented:** 2026-07-16
 **Scope:** Replace the SDK's dynamic bridge factory with a top-level code generator that produces static bridge MCP servers and draft application plugins  
 **Goal:** Bridge MCP servers are static, pre-built artifacts — not runtime-generated from plugin config  
-**Implemented:** `bridge-generator/`, `examples/demo/src/bridge/github-bridge.ts`, `examples/demo/plugins/github-demo-plugin.json`, and SDK bridge slimming are in place.
+**Implementation:** `bridge-generator/`, `examples/demo/src/bridge/github-bridge.ts`, `examples/demo/plugins/github-demo-plugin.json`, and SDK bridge slimming are in place.
 
 ---
 

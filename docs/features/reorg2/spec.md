@@ -1,6 +1,8 @@
 # Bridge Generator Specification
 
 **Status:** Implemented  
+**Created:** 2026-07-16
+**Implemented:** 2026-07-16
 **Package:** `bridge-generator/`  
 **Purpose:** Development-time CLI that produces a static MPAS bridge MCP server and a draft application plugin from a live upstream MCP server  
 **Implementation:** `bridge-generator/` generates the demo bridge at

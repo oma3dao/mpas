@@ -1,6 +1,7 @@
 # Bridge Generator v2 — Application Packaging Specification
 
 **Status:** Draft v0.1
+**Created:** 2026-07-18
 **Companion:** [plan.md](./plan.md) (what and when; this document defines the contracts)
 **Depends on:** MPAS Application Plugin Profile, MCP Execution Profile, Application Registry schema (`application-registry/README.md`)
 

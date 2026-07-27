@@ -467,7 +467,7 @@ If both `ActionResponse.actionEnvelopeHash` and `authorizationRequirements.actio
 
 #### 6.4.1 executionResult (Informative)
 
-`executionResult` carries the execution-profile-native response content the target produced. For `mcp.toolsCall`, it is the target MCP server's `tools/call` result object, **verbatim**, so a bridge can relay it to the calling agent untouched and drop-in equivalence holds end to end. It is INFORMATIVE only: it is not hash-bound, not covered by the Execution Receipt signature, and not an attestation of output (the MCP Execution Profile §7 reserves output commitment as future work). The bridge replaces the application's MCP server, so the canonical contract must be able to carry what that server would have returned.
+`executionResult` carries the execution-profile-native response content the target produced. For `mcp.toolsCall`, it is the target MCP server's `tools/call` result object, **verbatim**, so an upper-layer implementation can relay or retain exactly what the target returned. It is INFORMATIVE only: it is not hash-bound, not covered by the Execution Receipt signature, and not an attestation of output (the MCP Execution Profile §7 reserves output commitment as future work). This profile does not define how or when an upper-layer interface delivers that material to its client.
 
 Presence rule:
 
@@ -1186,7 +1186,7 @@ Rules:
 
 ### 8.8 Coordination States
 
-Coordination Services maintain a non-authoritative workflow view of action progress (per MPAS Core Section 6.9.4). Coordination states reflect the Coordination Service's local understanding and MUST NOT be conflated with the Verifier's authoritative lifecycle.
+Coordination Services maintain a non-authoritative workflow view of action progress (per MPAS Core Section 6.9.5). Coordination states reflect the Coordination Service's local understanding and MUST NOT be conflated with the Verifier's authoritative lifecycle.
 
 Coordination Services **MAY** use the following state values:
 
@@ -1199,9 +1199,26 @@ Coordination Services **MAY** use the following state values:
 | `expired`              | Action expired.                                                                                                                                                        |
 | `cancelled`            | Action was cancelled.                                                                                                                                                  |
 
-Coordination state is not Verifier policy. How the Coordination Service learns of final states (executed, rejected, expired) is deployment-specific.
+Coordination `state` and Verifier `ActionResponse.result` are separate typed
+contexts. In particular:
 
-`readyForResubmission` is a hint only. It is not final authorization and does not imply Verifier policy satisfaction. The Verifier performs authoritative verification when the Proposer re-submits the completed Action Package.
+- `state: awaitingApprovals` means the Coordination Service is maintaining an
+  approval-collection workflow; the Verifier result that initiated that
+  workflow is `additionalApprovalsRequired`.
+- `result: pending` means the Verifier has an `executing` dispatch-ledger
+  entry. It MUST NOT mean waiting for Approvals.
+- `state: readyForResubmission` is a coordination hint only. It is not final
+  authorization.
+- `state: cancelled` stops only the coordination workflow and MUST NOT be
+  interpreted as Verifier `result: cancelled`.
+
+Coordination state is not Verifier policy. How the Coordination Service learns
+of final states (`executed`, `rejected`, `expired`) is deployment-specific.
+When a state name reuses a Verifier result, its meaning MUST remain consistent
+with that result.
+
+The Verifier performs authoritative verification when the Proposer re-submits
+the completed Action Package.
 
 ---
 
@@ -1446,7 +1463,10 @@ Proposer -> Coordination Service: CoordinationActionCancelRequest(actionId, prop
 Coordination Service -> Proposer: CoordinationActionCancelResponse(state: cancelled, cancelledAt: ...)
 ```
 
-The Proposer may cancel a pending action while it is still in `awaitingApprovals` state. After cancellation, the action is no longer visible to Signers and subsequent approval submissions are rejected.
+The Proposer may cancel a pending action while it is still in
+`awaitingApprovals` state. After cancellation, the action is no longer visible
+to Signers and subsequent approval submissions are rejected. This affects only
+the coordination workflow and does not produce Verifier `result: cancelled`.
 
 ---
 

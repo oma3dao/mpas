@@ -16,6 +16,10 @@ MPAS Core deliberately does not define a universal action format. Instead, each 
 
 An action under this profile represents a single MCP tool invocation: "call tool `name` with `arguments` on the application identified by `target.applicationDid`." The Execution Payload is the native MCP tool-call content itself — not a translation of it — so what signers approve is byte-equivalent (after canonicalization) to what executes.
 
+This profile does not define any client-facing bridge or application interface.
+Deferred results, notification responsibility, background workflow processing,
+and later result retrieval are outside its scope.
+
 ### 1.1 Conformance Language
 
 The key words MUST, MUST NOT, REQUIRED, SHALL, SHALL NOT, SHOULD, SHOULD NOT, RECOMMENDED, MAY, and OPTIONAL in this document are to be interpreted as described in RFC 2119.

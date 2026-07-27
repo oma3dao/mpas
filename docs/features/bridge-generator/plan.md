@@ -1,5 +1,7 @@
 # MPAS Bridge and Application Builder
 
+**Created:** 2026-07-17
+
 ## Purpose
 
 This document describes a toolchain for generating MPAS-compatible bridge servers, application plugins, and registry entries from existing MCP servers.

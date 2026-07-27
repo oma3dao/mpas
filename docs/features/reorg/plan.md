@@ -1,6 +1,8 @@
 # MPAS Repository Reorganization Plan
 
 **Status:** Completed  
+**Created:** 2026-06-29
+**Implemented:** 2026-07-16
 **Scope:** Consolidate MPAS repositories (including Wivity's) into a single monorepo; preserve Wivity as an independent implementation provider  
 **Goal:** Establish @oma3dao as the canonical home of the MPAS standard and reference implementation
 

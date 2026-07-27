@@ -1,6 +1,7 @@
 # OMATrust Plugin Attestation Verification
 
 **Status:** Draft  
+**Created:** 2026-07-01
 **Scope:** Credential Adapter evaluates plugin trustworthiness via `canTrust` before loading  
 **Goal:** Give operators a clear trust/no-trust signal for each plugin at startup, prompting for confirmation when trust cannot be established
 
