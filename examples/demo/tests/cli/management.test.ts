@@ -45,31 +45,31 @@ describe("CLI management commands", () => {
   it("sets and lists credentials without exposing values", async () => {
     const credentialDir = await tempDir("mpas-cli-credentials-");
 
-    await expect(setCredential("github-test-token", "ghp_test", credentialDir)).resolves.toMatchObject({
+    await expect(setCredential("github-mirror-token", "ghp_test", credentialDir)).resolves.toMatchObject({
       stored: true,
-      handle: "github-test-token",
+      handle: "github-mirror-token",
     });
     await expect(listCredentials(credentialDir)).resolves.toEqual({
-      credentials: ["github-test-token"],
+      credentials: ["github-mirror-token"],
     });
   });
 
   it("validates a config including file credential handles", async () => {
     const credentialDir = await tempDir("mpas-cli-credentials-");
-    await setCredential("github-test-token", "ghp_test", credentialDir);
+    await setCredential("github-mirror-token", "ghp_test", credentialDir);
 
     await expect(
-      validateConfig("github-strict", {
+      validateConfig("github-mirror", {
         configDir: join(fixturesDir, "configs"),
         credentialDir,
       }),
     ).resolves.toMatchObject({
       valid: true,
-      name: "github-strict",
+      name: "github-mirror",
       pluginDid: "did:web:plugins.oma3.example:github-demo-plugin",
       credentials: [
         {
-          handle: "github-test-token",
+          handle: "github-mirror-token",
           ok: true,
         },
       ],
@@ -78,7 +78,7 @@ describe("CLI management commands", () => {
 
   it("warns when bridge configs use different DIDs (potential Sybil footgun)", async () => {
     const credentialDir = await tempDir("mpas-cli-credentials-");
-    await setCredential("github-test-token", "ghp_test", credentialDir);
+    await setCredential("github-mirror-token", "ghp_test", credentialDir);
     const bridgeDir = await tempDir("mpas-cli-bridges-");
 
     // Create two bridge configs with different DIDs from signerKeys
@@ -92,7 +92,7 @@ describe("CLI management commands", () => {
       JSON.stringify({ mode: "signer", agent: { did: "did:jwk:eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6IjhzRFY3NmI4aUY3NlBJbUF3NUk5V3ZlanNfOGJTOE4xMld2SHpQYTVWdzgifQ", keyFile: "x" } }),
     );
 
-    const result = await validateConfig("github-strict", {
+    const result = await validateConfig("github-mirror", {
       configDir: join(fixturesDir, "configs"),
       credentialDir,
       bridgeDir,
@@ -109,7 +109,7 @@ describe("CLI management commands", () => {
 
   it("bridge config validation fails for DID not in signerKeys", async () => {
     const credentialDir = await tempDir("mpas-cli-credentials-");
-    await setCredential("github-test-token", "ghp_test", credentialDir);
+    await setCredential("github-mirror-token", "ghp_test", credentialDir);
     const bridgeDir = await tempDir("mpas-cli-bridges-");
 
     const { writeFile } = await import("node:fs/promises");
@@ -118,7 +118,7 @@ describe("CLI management commands", () => {
       JSON.stringify({ mode: "proposer", agent: { did: "did:web:agents.example:unknowndid", keyFile: "x" } }),
     );
 
-    const result = await validateConfig("github-strict", {
+    const result = await validateConfig("github-mirror", {
       configDir: join(fixturesDir, "configs"),
       credentialDir,
       bridgeDir,
@@ -137,7 +137,7 @@ describe("CLI management commands", () => {
     const stderr = new MemoryWriter();
 
     const result = await runCli(
-      ["credential", "set", "github-test-token", "--credential-dir", credentialDir, "--value", "ghp_test"],
+      ["credential", "set", "github-mirror-token", "--credential-dir", credentialDir, "--value", "ghp_test"],
       { stdout, stderr },
     );
 
@@ -145,7 +145,7 @@ describe("CLI management commands", () => {
     expect(stderr.text).toBe("");
     expect(JSON.parse(stdout.text)).toMatchObject({
       stored: true,
-      handle: "github-test-token",
+      handle: "github-mirror-token",
     });
   });
 });

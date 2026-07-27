@@ -82,7 +82,7 @@ describe("evaluatePolicy", () => {
 
   it("requires additional approvals for insufficient-approvals.json with strict config", async () => {
     const { actionPackage, verifiedApprovals } = await verifiedFixture("insufficient-approvals.json");
-    const result = evaluatePolicy(actionPackage, verifiedApprovals, await policyFromConfig("github-strict.json"));
+    const result = evaluatePolicy(actionPackage, verifiedApprovals, await policyFromConfig("github-mirror-adapter-config.json"));
 
     expect(result).toMatchObject({
       status: "additionalApprovalsRequired",
@@ -100,7 +100,7 @@ describe("evaluatePolicy", () => {
   it("satisfies valid-two-approvals.json with strict config", async () => {
     const { actionPackage, verifiedApprovals } = await verifiedFixture("valid-two-approvals.json");
 
-    expect(evaluatePolicy(actionPackage, verifiedApprovals, await policyFromConfig("github-strict.json"))).toEqual({
+    expect(evaluatePolicy(actionPackage, verifiedApprovals, await policyFromConfig("github-mirror-adapter-config.json"))).toEqual({
       status: "satisfied",
     });
   });
@@ -128,7 +128,7 @@ describe("evaluatePolicy", () => {
       createdAt: "2026-06-05T18:03:00.000Z",
     });
 
-    const result = evaluatePolicy(actionPackage, verifiedApprovals, await policyFromConfig("github-strict.json"));
+    const result = evaluatePolicy(actionPackage, verifiedApprovals, await policyFromConfig("github-mirror-adapter-config.json"));
 
     // The self-approval should not satisfy the threshold — still requires additional approvals
     expect(result).toMatchObject({

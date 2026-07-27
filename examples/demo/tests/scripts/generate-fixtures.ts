@@ -143,6 +143,8 @@ async function makeActionPackage({
 
 async function main() {
 const fixtureRoot = join(process.cwd(), "tests", "fixtures");
+/** Operator-facing artifacts the setup guide copies into $MPAS_HOME. */
+const demoRoot = process.cwd();
 
 const packages = {
   "valid-no-approval-required.json": await makeActionPackage({
@@ -424,7 +426,14 @@ function makePolicy(overrides: { defaultRequirement?: Record<string, unknown>; p
   };
 }
 
-function baseDeploymentConfig(name: string, policy: ReturnType<typeof makePolicy>) {
+function baseDeploymentConfig(
+  name: string,
+  policy: ReturnType<typeof makePolicy>,
+  target: { server: string; credentialHandle: string } = {
+    server: "tests/fixtures/adapter/echo-mcp-server.mjs",
+    credentialHandle: "github-mirror-token",
+  },
+) {
   return {
     version: "1",
     type: "MpasAdapterDeploymentConfig",
@@ -440,16 +449,16 @@ function baseDeploymentConfig(name: string, policy: ReturnType<typeof makePolicy
     },
     credentialBindings: [
       {
-        credentialHandle: "github-test-token",
+        credentialHandle: target.credentialHandle,
         provider: "file",
       },
     ],
     executionTarget: {
       type: "mcp.stdio",
       command: "node",
-      args: ["tests/fixtures/adapter/echo-mcp-server.mjs"],
+      args: [target.server],
       env: {
-        GITHUB_PERSONAL_ACCESS_TOKEN: "{{credential:github-test-token}}",
+        GITHUB_PERSONAL_ACCESS_TOKEN: `{{credential:${target.credentialHandle}}}`,
       },
     },
     policy,
@@ -462,8 +471,8 @@ const configs = {
     "github-auto-approve",
     makePolicy({ defaultRequirement: { type: "proposerOnly" } }),
   ),
-  "github-strict.json": baseDeploymentConfig(
-    "github-strict",
+  "github-mirror-adapter-config.json": baseDeploymentConfig(
+    "github-mirror",
     makePolicy({
       policies: {
         merge_pull_request_demo: [
@@ -495,6 +504,41 @@ const configs = {
         ],
       },
     }),
+  ),
+  "github-live-demo-adapter-config.json": baseDeploymentConfig(
+    "github-live-demo",
+    makePolicy({
+      policies: {
+        merge_pull_request_demo: [
+          {
+            description: "Merging into main requires two maintainer approvals.",
+            match: {
+              conditions: [
+                { source: "executionPayload", path: "/arguments/baseRef", op: "eq", value: "main" },
+              ],
+            },
+            requirements: {
+              type: "threshold",
+              threshold: 2,
+              eligibleSignerGroup: "maintainers",
+              decision: "approve",
+            },
+          },
+        ],
+        delete_branch_demo: [
+          {
+            description: "Deleting a branch requires one maintainer approval.",
+            requirements: {
+              type: "threshold",
+              threshold: 1,
+              eligibleSignerGroup: "maintainers",
+              decision: "approve",
+            },
+          },
+        ],
+      },
+    }),
+    { server: "tests/fixtures/adapter/github-mcp-server.mjs", credentialHandle: "github-live-demo-token" },
   ),
 };
 
@@ -578,8 +622,23 @@ for (const [file, value] of Object.entries(invalidPackages)) {
 
 await writeFile(join(fixtureRoot, "plugins", "github-demo-plugin.json"), `${JSON.stringify(githubPlugin, null, 2)}\n`);
 
+const OPERATOR_ONLY_CONFIGS = new Set(["github-live-demo-adapter-config.json"]);
+
 for (const [file, value] of Object.entries(configs)) {
+  if (OPERATOR_ONLY_CONFIGS.has(file)) {
+    continue;
+  }
   await writeFile(join(fixtureRoot, "configs", file), `${JSON.stringify(value, null, 2)}\n`);
+}
+
+// Operator-facing copies. The setup guide copies these into $MPAS_HOME; keeping
+// them generated (rather than hand-synced) is what stops them drifting from the
+// plugin they bind to and from each other.
+await mkdir(join(demoRoot, "plugins"), { recursive: true });
+await mkdir(join(demoRoot, "configs"), { recursive: true });
+await writeFile(join(demoRoot, "plugins", "github-demo-plugin.json"), `${JSON.stringify(githubPlugin, null, 2)}\n`);
+for (const file of ["github-mirror-adapter-config.json", "github-live-demo-adapter-config.json"]) {
+  await writeFile(join(demoRoot, "configs", file), `${JSON.stringify(configs[file as keyof typeof configs], null, 2)}\n`);
 }
 
 for (const [file, value] of Object.entries(coordinationFixtures)) {

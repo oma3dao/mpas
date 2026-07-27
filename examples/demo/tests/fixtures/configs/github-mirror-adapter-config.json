@@ -1,7 +1,7 @@
 {
   "version": "1",
   "type": "MpasAdapterDeploymentConfig",
-  "name": "github-e2e",
+  "name": "github-mirror",
   "target": {
     "applicationDid": "did:web:github.example"
   },
@@ -9,7 +9,7 @@
     "pluginDid": "did:web:plugins.oma3.example:github-demo-plugin",
     "pluginVersion": "0.1.0",
     "artifactDid": "did:artifact:bafkreiddvecgiomvq6cgwdm7ccpctwjm3k5kfowd7blovwwg2kdhqcwtge",
-    "path": "../../plugins/github-demo-plugin.json"
+    "path": "../plugins/github-demo-plugin.json"
   },
   "credentialBindings": [
     {
@@ -30,16 +30,19 @@
   "policy": {
     "version": "1",
     "type": "MpasApplicationPolicy",
-    "policyProfileUrl": "https://oma3.org/mpas/policy/json/v0.2",
+    "policyProfileUrl": "https://oma3.org/specs/mpas/policy-json/v1",
     "applicationDid": "did:web:github.example",
     "executionProfile": {
-      "id": "did:web:profiles.oma3.org:mcp"
+      "id": "did:web:profiles.oma3.org:mcp",
+      "format": "mcp.toolsCall"
+    },
+    "defaultRequirement": {
+      "type": "threshold",
+      "threshold": 1,
+      "eligibleSignerGroup": "maintainers",
+      "decision": "approve"
     },
     "signerGroups": {
-      "maintainers": [
-        "did:jwk:eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6IjhzRFY3NmI4aUY3NlBJbUF3NUk5V3ZlanNfOGJTOE4xMld2SHpQYTVWdzgifQ",
-        "did:jwk:eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6IjR2OGt4WEppRnBDSHBWeFd4SFJRTExxMGJqSWxVRi1zRTFVSU5veTUwLTgifQ"
-      ],
       "all": [
         "did:jwk:eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6Ims2TzdjaVFrbXBodUVFdDFpM3lBaW1KSldlR0ttT3EzdF9mc05renphNm8ifQ",
         "did:jwk:eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6IjhzRFY3NmI4aUY3NlBJbUF3NUk5V3ZlanNfOGJTOE4xMld2SHpQYTVWdzgifQ",
@@ -47,16 +50,34 @@
       ],
       "proposers": [
         "did:jwk:eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6Ims2TzdjaVFrbXBodUVFdDFpM3lBaW1KSldlR0ttT3EzdF9mc05renphNm8ifQ"
+      ],
+      "maintainers": [
+        "did:jwk:eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6IjhzRFY3NmI4aUY3NlBJbUF3NUk5V3ZlanNfOGJTOE4xMld2SHpQYTVWdzgifQ",
+        "did:jwk:eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6IjR2OGt4WEppRnBDSHBWeFd4SFJRTExxMGJqSWxVRi1zRTFVSU5veTUwLTgifQ"
       ]
     },
-    "defaultRequirement": {
-      "type": "threshold",
-      "threshold": 1,
-      "eligibleSignerGroup": "maintainers",
-      "decision": "approve",
-      "description": "Default policy: requires 1 maintainer approval."
-    },
     "policies": {
+      "merge_pull_request_demo": [
+        {
+          "description": "Merging into main requires two maintainer approvals.",
+          "match": {
+            "conditions": [
+              {
+                "source": "executionPayload",
+                "path": "/arguments/baseRef",
+                "op": "eq",
+                "value": "main"
+              }
+            ]
+          },
+          "requirements": {
+            "type": "threshold",
+            "threshold": 2,
+            "eligibleSignerGroup": "maintainers",
+            "decision": "approve"
+          }
+        }
+      ],
       "delete_branch_demo": [
         {
           "description": "Deleting a branch requires one maintainer approval.",
@@ -64,32 +85,7 @@
             "type": "threshold",
             "threshold": 1,
             "eligibleSignerGroup": "maintainers",
-            "decision": "approve",
-            "description": "Branch deletion: requires 1 maintainer approval."
-          }
-        }
-      ],
-      "merge_pull_request_demo": [
-        {
-          "description": "Merging requires two maintainer approvals.",
-          "requirements": {
-            "type": "threshold",
-            "threshold": 2,
-            "eligibleSignerGroup": "maintainers",
-            "decision": "approve",
-            "description": "PR merge: requires 2 maintainer approvals."
-          }
-        }
-      ],
-      "close_issue_demo": [
-        {
-          "description": "Operator-added policy: closing issues requires one maintainer approval.",
-          "requirements": {
-            "type": "threshold",
-            "threshold": 1,
-            "eligibleSignerGroup": "maintainers",
-            "decision": "approve",
-            "description": "Operator policy (close_issue_demo): requires 1 maintainer approval."
+            "decision": "approve"
           }
         }
       ]

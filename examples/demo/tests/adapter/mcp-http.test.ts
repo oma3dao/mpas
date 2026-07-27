@@ -85,7 +85,7 @@ describe("prepareMcpHttp", () => {
       type: "mcp.http",
       url,
       headers: {
-        authorization: "Bearer {{credential:github-test-token}}",
+        authorization: "Bearer {{credential:github-mirror-token}}",
       },
     };
 

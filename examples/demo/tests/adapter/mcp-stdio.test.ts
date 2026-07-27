@@ -18,7 +18,7 @@ const target: McpStdioTarget = {
   command: "node",
   args: [fixtureServer],
   env: {
-    GITHUB_PERSONAL_ACCESS_TOKEN: "{{credential:github-test-token}}",
+    GITHUB_PERSONAL_ACCESS_TOKEN: "{{credential:github-mirror-token}}",
   },
 };
 
@@ -83,7 +83,7 @@ describe("prepareMcpStdio", () => {
         command: "node",
         args: [protocolVersionFixtureServer, "stdio"],
         env: {
-          GITHUB_PERSONAL_ACCESS_TOKEN: "{{credential:github-test-token}}",
+          GITHUB_PERSONAL_ACCESS_TOKEN: "{{credential:github-mirror-token}}",
           EXPECTED_MCP_PROTOCOL_VERSION: pluginProtocolVersion,
           REQUIRE_STDIO_ARGUMENT: "1",
         },

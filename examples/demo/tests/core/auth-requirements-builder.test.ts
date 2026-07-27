@@ -64,7 +64,7 @@ describe("buildAuthorizationRequirements", () => {
       throw new Error("fixture should verify before policy evaluation");
     }
 
-    const policyResult = evaluatePolicy(actionPackage, verification.verifiedApprovals, await policyFromConfig("github-strict.json"));
+    const policyResult = evaluatePolicy(actionPackage, verification.verifiedApprovals, await policyFromConfig("github-mirror-adapter-config.json"));
     if (policyResult.status !== "additionalApprovalsRequired") {
       throw new Error("fixture should require additional approvals");
     }

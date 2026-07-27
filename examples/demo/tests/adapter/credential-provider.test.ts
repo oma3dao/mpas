@@ -19,9 +19,9 @@ async function writeCredential(dir: string, handle: string, value: unknown, mode
 describe("FileCredentialProvider", () => {
   it("resolves an existing chmod 600 credential handle", async () => {
     const dir = await credentialDir();
-    await writeCredential(dir, "github-test-token", { value: "ghp_test" });
+    await writeCredential(dir, "github-mirror-token", { value: "ghp_test" });
 
-    await expect(new FileCredentialProvider(dir).getCredential("github-test-token")).resolves.toEqual({
+    await expect(new FileCredentialProvider(dir).getCredential("github-mirror-token")).resolves.toEqual({
       ok: true,
       value: "ghp_test",
     });

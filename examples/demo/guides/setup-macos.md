@@ -270,7 +270,7 @@ This part sets up the entire MPAS demo on a single account: all signing keys, de
 
 ```sh
 export MPAS_HOME="$HOME/.mpas"
-mkdir -p "$MPAS_HOME/config" "$MPAS_HOME/plugins" "$MPAS_HOME/credentials" "$MPAS_HOME/keys" "$MPAS_HOME/journal" "$MPAS_HOME/bridge-configs" "$MPAS_HOME/workflows"
+mkdir -p "$MPAS_HOME/config" "$MPAS_HOME/plugins" "$MPAS_HOME/credentials" "$MPAS_HOME/keys" "$MPAS_HOME/journal" "$MPAS_HOME/mcp-server-configs" "$MPAS_HOME/workflows"
 ```
 
 ### Copy the application plugin and deployment config
@@ -280,7 +280,7 @@ The plugin and config give you a template you can customize for your MPAS implem
 ```sh
 cd ~/Projects/mpas/mpas/examples/demo
 cp plugins/github-demo-plugin.json "$MPAS_HOME/plugins/github-demo-plugin.json"
-cp tests/fixtures/configs/github-strict.json "$MPAS_HOME/config/github-strict.json"
+cp configs/github-mirror-adapter-config.json "$MPAS_HOME/config/github-mirror-adapter-config.json"
 ```
 
 ### Generate signing keys
@@ -293,7 +293,7 @@ You need three keys:
 | ----------------------- | ---------- | ------------------------------------- |
 | `adapter-key.json`      | Adapter    | Signs Execution Receipts              |
 | `proposer-key.json`     | Proposer   | Signs Action Envelopes and proposals  |
-| `maintainer-a-key.json` | Maintainer | Signs approvals                       |
+| `maintainer-key.json` | Maintainer | Signs approvals                       |
 
 Generate them directly into `$MPAS_HOME/keys`:
 
@@ -301,7 +301,7 @@ Generate them directly into `$MPAS_HOME/keys`:
 cd ~/Projects/mpas/mpas/examples/demo
 node dist/cli/index.js key generate adapter-key --key-dir "$MPAS_HOME/keys"
 node dist/cli/index.js key generate proposer-key --key-dir "$MPAS_HOME/keys"
-node dist/cli/index.js key generate maintainer-a-key --key-dir "$MPAS_HOME/keys"
+node dist/cli/index.js key generate maintainer-key --key-dir "$MPAS_HOME/keys"
 chmod 600 "$MPAS_HOME"/keys/*.json
 ```
 
@@ -323,7 +323,7 @@ You now need to paste the `did` and `publicJwk` values from the `key generate` o
 First, create the bridge config files with placeholders:
 
 ```sh
-cat > $MPAS_HOME/bridge-configs/proposer-bridge.json <<EOF
+cat > $MPAS_HOME/mcp-server-configs/github-mcp-bridge-config.json <<EOF
 {
   "mode": "proposer",
   "plugin": "$MPAS_HOME/plugins/github-demo-plugin.json",
@@ -348,11 +348,11 @@ EOF
 ```
 
 ```sh
-cat > $MPAS_HOME/bridge-configs/maintainer-a-bridge.json <<EOF
+cat > $MPAS_HOME/mcp-server-configs/maintainer-signer-config.json <<EOF
 {
   "agent": {
-    "did": "REPLACE_ME_WITH_MAINTAINER_A_DID",
-    "keyFile": "$MPAS_HOME/keys/maintainer-a-key.json"
+    "did": "REPLACE_ME_WITH_MAINTAINER_DID",
+    "keyFile": "$MPAS_HOME/keys/maintainer-key.json"
   },
   "coordination": {
     "url": "http://127.0.0.1:7545"
@@ -363,7 +363,7 @@ EOF
 
 Now edit these three files using the `did` and `publicJwk` values from `key generate`:
 
-1. **`$MPAS_HOME/config/github-strict.json`** — replace the `signerKeys` array and update `policy.signerGroups`:
+1. **`$MPAS_HOME/config/github-mirror-adapter-config.json`** — replace the `signerKeys` array and update `policy.signerGroups`:
 
 ```json
 "signerKeys": [
@@ -373,9 +373,9 @@ Now edit these three files using the `did` and `publicJwk` values from `key gene
     "publicJwk": { <publicJwk from proposer key generate output> }
   },
   {
-    "did": "<did from maintainer-a key generate output>",
+    "did": "<did from maintainer key generate output>",
     "label": "Maintainer A",
-    "publicJwk": { <publicJwk from maintainer-a key generate output> }
+    "publicJwk": { <publicJwk from maintainer key generate output> }
   }
 ]
 ```
@@ -386,28 +386,28 @@ And inside the `policy` object, set the `signerGroups`:
 "signerGroups": {
   "all": [
     "<proposer did>",
-    "<maintainer-a did>"
+    "<maintainer did>"
   ],
   "proposers": [
     "<proposer did>"
   ],
   "maintainers": [
-    "<maintainer-a did>"
+    "<maintainer did>"
   ]
 }
 ```
 
-2. **`$MPAS_HOME/bridge-configs/proposer-bridge.json`** — replace `REPLACE_ME_WITH_PROPOSER_DID` with the proposer `did` value.
+2. **`$MPAS_HOME/mcp-server-configs/github-mcp-bridge-config.json`** — replace `REPLACE_ME_WITH_PROPOSER_DID` with the proposer `did` value.
 
-3. **`$MPAS_HOME/bridge-configs/maintainer-a-bridge.json`** — replace `REPLACE_ME_WITH_MAINTAINER_A_DID` with the maintainer-a `did` value.
+3. **`$MPAS_HOME/mcp-server-configs/maintainer-signer-config.json`** — replace `REPLACE_ME_WITH_MAINTAINER_DID` with the maintainer `did` value.
 
 ### Store a credential
 
 The credential is what the adapter uses to authenticate to the target (GitHub). For the echo fixture demo, a placeholder is fine:
 
 ```sh
-printf '%s\n' '{"value":"ghp_demo_placeholder"}' > "$MPAS_HOME/credentials/github-test-token.json"
-chmod 600 "$MPAS_HOME/credentials/github-test-token.json"
+printf '%s\n' '{"value":"ghp_demo_placeholder"}' > "$MPAS_HOME/credentials/github-mirror-token.json"
+chmod 600 "$MPAS_HOME/credentials/github-mirror-token.json"
 ```
 
 For live GitHub dispatch below (§4.4), we will replace this with a real GitHub PAT.
@@ -422,14 +422,14 @@ After editing the configs and storing the credential, run validate to check for 
 
 ```sh
 cd ~/Projects/mpas/mpas/examples/demo
-node dist/cli/index.js config validate github-strict \
+node dist/cli/index.js config validate github-mirror-adapter-config \
   --config-dir "$MPAS_HOME/config" --credential-dir "$MPAS_HOME/credentials" \
-  --bridge-dir "$MPAS_HOME/bridge-configs"
+  --bridge-dir "$MPAS_HOME/mcp-server-configs"
 ```
 
 This checks that each `signerKeys` entry has a DID that matches its `publicJwk`, that credentials exist, and that each bridge config's `agent.did` is listed in `signerKeys`. Fix any errors before proceeding.
 
-> **Expected warnings (safe to ignore in single-user mode):** You will see warnings that `proposer-bridge.json` and `maintainer-a-bridge.json` use different DIDs. This is correct — they are two separate agents with distinct identities. The warning exists for the dual-role case where one agent runs both bridges with a shared DID (so self-approval prevention applies between them). In the single-user demo, you have two independent agents, so different DIDs are intentional.
+> **Expected warnings (safe to ignore in single-user mode):** You will see warnings that `github-mcp-bridge-config.json` and `maintainer-signer-config.json` use different DIDs. This is correct — they are two separate agents with distinct identities. The warning exists for the dual-role case where one agent runs both bridges with a shared DID (so self-approval prevention applies between them). In the single-user demo, you have two independent agents, so different DIDs are intentional.
 
 ## 2.2 Start Adapter and Coordination
 
@@ -525,7 +525,7 @@ command = "node"
 args = [
   "/Users/YOU/Projects/mpas/mpas/examples/demo/dist/bridge/github-bridge.js",
   "--config",
-  "/Users/YOU/.mpas/bridge-configs/proposer-bridge.json"
+  "/Users/YOU/.mpas/mcp-server-configs/github-mcp-bridge-config.json"
 ]
 enabled = true
 ```
@@ -542,7 +542,7 @@ command = "node"
 args = [
   "/Users/YOU/Projects/mpas/mpas/examples/demo/dist/signer-server/index.js",
   "--config",
-  "/Users/YOU/.mpas/bridge-configs/maintainer-a-bridge.json"
+  "/Users/YOU/.mpas/mcp-server-configs/maintainer-signer-config.json"
 ]
 enabled = true
 ```
@@ -752,7 +752,7 @@ openclaw config set mcp.servers "$(cat <<'JSON'
     "args": [
       "/Users/YOU/Projects/mpas/mpas/examples/demo/dist/bridge/github-bridge.js",
       "--config",
-      "/Users/YOU/.mpas/bridge-configs/proposer-bridge.json"
+      "/Users/YOU/.mpas/mcp-server-configs/github-mcp-bridge-config.json"
     ],
     "requestTimeoutMs": 360000
   },
@@ -761,7 +761,7 @@ openclaw config set mcp.servers "$(cat <<'JSON'
     "args": [
       "/Users/YOU/Projects/mpas/mpas/examples/demo/dist/signer-server/index.js",
       "--config",
-      "/Users/YOU/.mpas/bridge-configs/maintainer-a-bridge.json"
+      "/Users/YOU/.mpas/mcp-server-configs/maintainer-signer-config.json"
     ]
   }
 }
@@ -878,7 +878,7 @@ Edit `~/Library/Application Support/Claude/claude_desktop_config.json`:
       "args": [
         "/Users/YOU/Projects/mpas/mpas/examples/demo/dist/bridge/github-bridge.js",
         "--config",
-        "/Users/YOU/.mpas/bridge-configs/proposer-bridge.json"
+        "/Users/YOU/.mpas/mcp-server-configs/github-mcp-bridge-config.json"
       ]
     },
     "mpas-coordination": {
@@ -886,7 +886,7 @@ Edit `~/Library/Application Support/Claude/claude_desktop_config.json`:
       "args": [
         "/Users/YOU/Projects/mpas/mpas/examples/demo/dist/signer-server/index.js",
         "--config",
-        "/Users/YOU/.mpas/bridge-configs/maintainer-a-bridge.json"
+        "/Users/YOU/.mpas/mcp-server-configs/maintainer-signer-config.json"
       ]
     }
   }
@@ -1001,18 +1001,33 @@ Click **Generate token** and copy the `github_pat_...` value immediately — you
 
 ### Store the PAT in the Credential Adapter
 
+The live PAT gets its own credential file, separate from the mirror's placeholder. Nothing that runs against the mirror can reach it.
+
 ```sh
-printf '%s\n' '{"value":"github_pat_YOUR_TOKEN_HERE"}' > "$MPAS_HOME/credentials/github-test-token.json"
-chmod 600 "$MPAS_HOME/credentials/github-test-token.json"
+printf '%s\n' '{"value":"github_pat_YOUR_TOKEN_HERE"}' > "$MPAS_HOME/credentials/github-live-demo-token.json"
+chmod 600 "$MPAS_HOME/credentials/github-live-demo-token.json"
 ```
 
-The `{{credential:github-test-token}}` template in the deployment config resolves to the `value` field from this file at dispatch time.
+The `{{credential:github-live-demo-token}}` template in the live deployment config resolves to the `value` field from this file at dispatch time.
 
-### Update the deployment config
+### Install the live deployment config
 
-Edit `$MPAS_HOME/config/github-strict.json`:
+The live config is a separate file — you do not edit the mirror config. Both differ only in which upstream server they dispatch to and which credential they bind; the plugin, policy, and signer keys are identical.
 
-Change `executionTarget` from the echo fixture to the demo GitHub MCP server:
+```sh
+cp configs/github-live-demo-adapter-config.json \
+  "$MPAS_HOME/config/github-live-demo-adapter-config.json"
+```
+
+Copy the `signerKeys` array and `policy.signerGroups` from your mirror config into the live config, so both trust the same agents:
+
+```sh
+node dist/cli/index.js config validate github-live-demo-adapter-config \
+  --config-dir "$MPAS_HOME/config" \
+  --plugin-dir "$MPAS_HOME/plugins"
+```
+
+Then point `executionTarget` at your clone. The `command` must be an absolute path — the adapter spawns child processes without a shell, so nvm's `PATH` is not available:
 
 ```json
 "executionTarget": {
@@ -1020,18 +1035,18 @@ Change `executionTarget` from the echo fixture to the demo GitHub MCP server:
   "command": "<absolute-path-to-node>",
   "args": ["<absolute-path-to>/mpas/examples/demo/tests/fixtures/adapter/github-mcp-server.mjs"],
   "env": {
-    "GITHUB_PERSONAL_ACCESS_TOKEN": "{{credential:github-test-token}}"
+    "GITHUB_PERSONAL_ACCESS_TOKEN": "{{credential:github-live-demo-token}}"
   }
 }
 ```
 
-Replace `<absolute-path-to-node>` with the output of `which node` (e.g., `/Users/you/.nvm/versions/node/v24.1.0/bin/node`). The `command` field must be an absolute path because the adapter spawns child processes without a shell, so nvm's PATH is not available.
-
-Replace `<absolute-path-to>` with the full path to `examples/demo` in your `mpas` clone (e.g., `/Users/you/Projects/mpas/mpas/examples/demo/tests/fixtures/adapter/github-mcp-server.mjs`).
+Replace `<absolute-path-to-node>` with the output of `which node` (e.g., `/Users/you/.nvm/versions/node/v24.1.0/bin/node`), and `<absolute-path-to>` with the full path to your `mpas` clone.
 
 ### Restart the adapter and run the live demo
 
-Stop the daemon (Ctrl+C) and restart per §2.2. The adapter will now spawn the real GitHub MCP server as its execution target.
+Stop the daemon (Ctrl+C) and restart it per §2.2, this time against the live config. The adapter now spawns the demo GitHub MCP server, which dispatches to real GitHub.
+
+The agent-side configs do not change: `github-mcp-bridge-config.json` points at the adapter, and the adapter decides which upstream to dispatch to. To go back to dry-run, restart the daemon against `github-mirror-adapter-config` — no file editing either way.
 
 **Test `create_issue_demo` (auto-approved):**
 
@@ -1070,7 +1085,7 @@ git push origin main:demo/branch-beta
 │                  │         │                      │        │                     │
 │  No SSH key      │───MCP──▶│  Holds the PAT       │──API──▶│  Executes action    │
 │  No GitHub PAT   │  bridge │  in credentials/     │        │  on demo repo       │
-│  Read-only access│         │  github-test-token   │        │                     │
+│  Read-only access│         │  github-mirror-token   │        │                     │
 └──────────────────┘         └──────────────────────┘        └─────────────────────┘
 ```
 
@@ -1089,11 +1104,11 @@ Before creating accounts, understand what each role needs on disk:
 | Material                                   | Operator | Proposer agent       | Maintainer agent     |
 | ------------------------------------------ | -------- | -------------------- | -------------------- |
 | Adapter key (`adapter-key.json`)           | Yes      | —                    | —                    |
-| Deployment config (`github-strict.json`).  | Yes      | —                    | —                    |
+| Deployment config (`github-mirror-adapter-config.json`).  | Yes      | —                    | —                    |
 | Application credential (PAT)               | Yes      | —                    | —                    |
 | Plugin (`github-demo-plugin.json`)         | Yes      | Yes (copy)           | —                    |
-| Bridge config (`proposer-bridge.json`)     | —        | Yes                  | —                    |
-| Bridge config (`maintainer-a-bridge.json`) | —        | —                    | Yes                  |
+| Bridge config (`github-mcp-bridge-config.json`)     | —        | Yes                  | —                    |
+| Bridge config (`maintainer-signer-config.json`) | —        | —                    | Yes                  |
 | Proposer signing key                       | —        | Yes                  | —                    |
 | Maintainer signing key                     | —        | —                    | Yes                  |
 | Running daemon (adapter + coordination).   | Yes      | —                    | —                    |
@@ -1205,13 +1220,13 @@ Each agent gets only what it needs (see §5.1 table).
 **On `agent-a` (proposer):**
 
 ```sh
-mkdir -p ~/.mpas/{keys,bridge-configs,plugins}
+mkdir -p ~/.mpas/{keys,mcp-server-configs,plugins}
 ```
 
 **On `agent-b` (maintainer):**
 
 ```sh
-mkdir -p ~/.mpas/{keys,bridge-configs}
+mkdir -p ~/.mpas/{keys,mcp-server-configs}
 ```
 
 ### Generate signing keys
@@ -1230,7 +1245,7 @@ chmod 600 ~/.mpas/keys/*.json
 
 ```sh
 cd ~/Projects/mpas/mpas/examples/demo
-node dist/cli/index.js key generate maintainer-a-key --key-dir ~/.mpas/keys
+node dist/cli/index.js key generate maintainer-key --key-dir ~/.mpas/keys
 chmod 600 ~/.mpas/keys/*.json
 ```
 
@@ -1249,7 +1264,7 @@ cp ~/Projects/mpas/mpas/examples/demo/plugins/github-demo-plugin.json ~/.mpas/pl
 Create the bridge config:
 
 ```sh
-cat > ~/.mpas/bridge-configs/proposer-bridge.json <<EOF
+cat > ~/.mpas/mcp-server-configs/github-mcp-bridge-config.json <<EOF
 {
   "mode": "proposer",
   "plugin": "$HOME/.mpas/plugins/github-demo-plugin.json",
@@ -1278,11 +1293,11 @@ Replace `REPLACE_WITH_YOUR_DID_FROM_KEY_GENERATE` with the `did` value from `key
 **On `agent-b` (maintainer):**
 
 ```sh
-cat > ~/.mpas/bridge-configs/maintainer-a-bridge.json <<EOF
+cat > ~/.mpas/mcp-server-configs/maintainer-signer-config.json <<EOF
 {
   "agent": {
     "did": "REPLACE_WITH_YOUR_DID_FROM_KEY_GENERATE",
-    "keyFile": "$HOME/.mpas/keys/maintainer-a-key.json"
+    "keyFile": "$HOME/.mpas/keys/maintainer-key.json"
   },
   "coordination": {
     "url": "http://127.0.0.1:7545"
@@ -1295,7 +1310,7 @@ Replace `REPLACE_WITH_YOUR_DID_FROM_KEY_GENERATE` with the `did` value from `key
 
 ## 5.4 Register DIDs on the Operator
 
-Back in the **operator** account, edit `$MPAS_HOME/config/github-strict.json` and update the `signerKeys` array and `policy.signerGroups` with the new agent DIDs:
+Back in the **operator** account, edit `$MPAS_HOME/config/github-mirror-adapter-config.json` and update the `signerKeys` array and `policy.signerGroups` with the new agent DIDs:
 
 > **Transferring DIDs between accounts:** macOS clipboard (copy/paste) does not work across user sessions. To get the `did` and `publicJwk` values from each agent account to the operator, use one of:
 > - **Shared temp file:** write the key generate output to `/tmp/agent-a-did.txt` (world-readable), then read it from the operator session. Delete after.
@@ -1346,7 +1361,7 @@ Each agent account should only expose the bridge matching its role:
 | Agent A (proposer)   | `github-mpas`           | `create_issue_demo`, `delete_branch_demo`, `merge_pull_request_demo`             |
 | Agent B (maintainer) | `mpas-coordination`     | `mpas_list_pending`, `mpas_review_action`, `mpas_approve`, `mpas_reject` |
 
-Do **not** add both MCP servers to one account. The proposer account should only have `github-mpas` (backed by `proposer-bridge.json`); the maintainer account should only have `mpas-coordination` (backed by `maintainer-a-bridge.json`). This ensures each agent sees only the tools appropriate to its role.
+Do **not** add both MCP servers to one account. The proposer account should only have `github-mpas` (backed by `github-mcp-bridge-config.json`); the maintainer account should only have `mpas-coordination` (backed by `maintainer-signer-config.json`). This ensures each agent sees only the tools appropriate to its role.
 
 The single-user demo (Parts 2–4) configures both on one account for convenience, but in the multi-user topology, role separation is enforced at the harness level in addition to the protocol level.
 
@@ -1384,10 +1399,10 @@ Once you've verified the cross-account demo works, the operator account no longe
 
 ```sh
 # Remove agent keys (operator only needs adapter-key.json)
-rm -f $MPAS_HOME/keys/proposer-key.json $MPAS_HOME/keys/maintainer-a-key.json
+rm -f $MPAS_HOME/keys/proposer-key.json $MPAS_HOME/keys/maintainer-key.json
 
 # Remove agent bridge configs
-rm -f $MPAS_HOME/bridge-configs/proposer-bridge.json $MPAS_HOME/bridge-configs/maintainer-a-bridge.json
+rm -f $MPAS_HOME/mcp-server-configs/github-mcp-bridge-config.json $MPAS_HOME/mcp-server-configs/maintainer-signer-config.json
 
 # Uninstall the agent harness (operator doesn't run agents)
 npm uninstall -g openclaw   # or @openai/codex
@@ -1406,21 +1421,21 @@ Each symmetric agent needs:
 1. **One signing key** — generate a single key per agent:
 
 ```sh
-node dist/cli/index.js key generate agent-1 --key-dir ~/.mpas/keys
+node dist/cli/index.js key generate agent-1-key --key-dir ~/.mpas/keys
 ```
 
 2. **Two bridge configs** pointing at the same key file:
 
 ```sh
 # Proposer bridge
-cat > ~/.mpas/bridge-configs/proposer-bridge.json <<EOF
+cat > ~/.mpas/mcp-server-configs/github-mcp-bridge-config.json <<EOF
 {
   "mode": "proposer",
   "plugin": "$HOME/.mpas/plugins/github-demo-plugin.json",
   "adapter": { "url": "http://127.0.0.1:7544" },
   "agent": {
     "did": "<did from key generate>",
-    "keyFile": "$HOME/.mpas/keys/agent-1.json"
+    "keyFile": "$HOME/.mpas/keys/agent-1-key.json"
   },
   "target": { "applicationDid": "did:web:github.example" },
   "coordination": { "url": "http://127.0.0.1:7545" },
@@ -1429,11 +1444,11 @@ cat > ~/.mpas/bridge-configs/proposer-bridge.json <<EOF
 EOF
 
 # Signer server config
-cat > ~/.mpas/bridge-configs/maintainer-a-bridge.json <<EOF
+cat > ~/.mpas/mcp-server-configs/maintainer-signer-config.json <<EOF
 {
   "agent": {
     "did": "<did from key generate>",
-    "keyFile": "$HOME/.mpas/keys/agent-1.json"
+    "keyFile": "$HOME/.mpas/keys/agent-1-key.json"
   },
   "coordination": { "url": "http://127.0.0.1:7545" }
 }
@@ -1508,7 +1523,7 @@ openclaw config set mcp.servers "$(cat <<'JSON'
     "args": [
       "/Users/YOU/Projects/mpas/mpas/examples/demo/dist/bridge/github-bridge.js",
       "--config",
-      "/Users/YOU/.mpas/bridge-configs/proposer-bridge.json"
+      "/Users/YOU/.mpas/mcp-server-configs/github-mcp-bridge-config.json"
     ],
     "requestTimeoutMs": 360000
   },
@@ -1517,7 +1532,7 @@ openclaw config set mcp.servers "$(cat <<'JSON'
     "args": [
       "/Users/YOU/Projects/mpas/mpas/examples/demo/dist/signer-server/index.js",
       "--config",
-      "/Users/YOU/.mpas/bridge-configs/maintainer-a-bridge.json"
+      "/Users/YOU/.mpas/mcp-server-configs/maintainer-signer-config.json"
     ]
   }
 }
@@ -1533,7 +1548,7 @@ command = "node"
 args = [
   "/Users/YOU/Projects/mpas/mpas/examples/demo/dist/bridge/github-bridge.js",
   "--config",
-  "/Users/YOU/.mpas/bridge-configs/proposer-bridge.json"
+  "/Users/YOU/.mpas/mcp-server-configs/github-mcp-bridge-config.json"
 ]
 enabled = true
 
@@ -1542,12 +1557,12 @@ command = "node"
 args = [
   "/Users/YOU/Projects/mpas/mpas/examples/demo/dist/signer-server/index.js",
   "--config",
-  "/Users/YOU/.mpas/bridge-configs/maintainer-a-bridge.json"
+  "/Users/YOU/.mpas/mcp-server-configs/maintainer-signer-config.json"
 ]
 enabled = true
 ```
 
-5. **Deployment config** — on the operator account, register the agent's DID in `$MPAS_HOME/config/github-strict.json`:
+5. **Deployment config** — on the operator account, register the agent's DID in `$MPAS_HOME/config/github-mirror-adapter-config.json`:
 
 In `signerKeys`:
 
@@ -1601,7 +1616,7 @@ This means symmetric signers require at least two agents to function. A single s
 | `ECONNREFUSED` on `:7544`                              | Adapter is not running                                | Start per §2.2.                                                                                  |
 | `ECONNREFUSED` on `:7545`                              | Coordination is not running                           | Start per §2.2 (unified daemon starts both).                                                     |
 | `PLUGIN_HASH_MISMATCH`                                 | Config and plugin fixture are out of sync             | Re-run `npx tsx tests/scripts/generate-fixtures.ts` and re-copy to `$MPAS_HOME`.                       |
-| `UNKNOWN_APPLICATION`                                  | Config target DID does not match the Action Package   | Ensure `github-strict.json` and plugin are from the same fixtures run.                           |
+| `UNKNOWN_APPLICATION`                                  | Config target DID does not match the Action Package   | Ensure `github-mirror-adapter-config.json` and plugin are from the same fixtures run.                           |
 | Agent does not see bridge tools                        | MCP server config paths are wrong                     | Check absolute paths. Run the bridge command manually to see errors.                             |
 | Bridge exits immediately                               | Missing key file or plugin                            | Run: `node dist/cli.js --config /path/to/config.json` manually and read the error.           |
 | Live GitHub dispatch fails                             | PAT/package/repo permission issue                     | Verify the echo fixture demo works first, then debug GitHub separately.                          |
@@ -1627,7 +1642,7 @@ This means symmetric signers require at least two agents to function. A single s
 
 **Part 2 — Single-User Demo Setup:**
 
-- [ ] Keys generated (adapter, proposer, maintainer-a)
+- [ ] Keys generated (adapter, proposer, maintainer)
 - [ ] `signerKeys` and `policy.signerGroups` populated in deployment config
 - [ ] Bridge configs created with correct DIDs and absolute paths
 - [ ] `config validate` passes

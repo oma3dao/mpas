@@ -39,7 +39,7 @@ describe("loadDeploymentConfigs", () => {
       expect(result.configsByApplicationDid.has("did:web:github.example")).toBe(true);
       expect(result.configs.map((entry) => entry.config.name).sort()).toEqual([
         "github-auto-approve",
-        "github-strict",
+        "github-mirror",
       ]);
       expect(result.configs.every((entry) => entry.plugin.type === "MpasApplicationPlugin")).toBe(true);
     }
@@ -47,12 +47,12 @@ describe("loadDeploymentConfigs", () => {
 
   it("rejects configs with missing plugin files", async () => {
     const { configDir } = await tempFixtureConfigDir();
-    const config = await readJson<Record<string, unknown>>(join(fixturesDir, "configs", "github-strict.json"));
+    const config = await readJson<Record<string, unknown>>(join(fixturesDir, "configs", "github-mirror-adapter-config.json"));
     config.plugin = {
       ...(config.plugin as Record<string, unknown>),
       path: "../plugins/missing.json",
     };
-    await writeJson(join(configDir, "github-strict.json"), config);
+    await writeJson(join(configDir, "github-mirror-adapter-config.json"), config);
 
     const result = await loadDeploymentConfigs(configDir, { confirmPluginUse: approvePluginUse });
 
@@ -66,12 +66,12 @@ describe("loadDeploymentConfigs", () => {
 
   it("rejects configs with plugin artifact DID mismatches", async () => {
     const { configDir } = await tempFixtureConfigDir();
-    const config = await readJson<Record<string, unknown>>(join(fixturesDir, "configs", "github-strict.json"));
+    const config = await readJson<Record<string, unknown>>(join(fixturesDir, "configs", "github-mirror-adapter-config.json"));
     config.plugin = {
       ...(config.plugin as Record<string, unknown>),
       artifactDid: "did:artifact:bafkreiaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     };
-    await writeJson(join(configDir, "github-strict.json"), config);
+    await writeJson(join(configDir, "github-mirror-adapter-config.json"), config);
 
     const result = await loadDeploymentConfigs(configDir, { confirmPluginUse: approvePluginUse });
 

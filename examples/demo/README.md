@@ -200,7 +200,7 @@ MPAS uses three types of configuration files:
 │  Declares: policy (signerGroups, approval thresholds, action-keyed         │
 │            policies), signer keys, execution target, credential bindings,  │
 │            resource restrictions                                           │
-│  File: $MPAS_HOME/config/github-strict.json                                │
+│  File: $MPAS_HOME/config/github-mirror-adapter-config.json                                │
 └───────────────────────────────────────┬────────────────────────────────────┘
                                         │ loaded at startup
                                         ▼
@@ -288,10 +288,10 @@ For evaluation semantics and the derived `TrustContext` structure, see the
 
 | Field                  | Purpose                                                                     |
 | ---------------------- | --------------------------------------------------------------------------- |
-| `name`                 | Human-readable label (e.g., `github-strict`)                                |
+| `name`                 | Human-readable label (e.g., `github-mirror`, `github-live-demo`)            |
 | `target.applicationDid`| Must match the plugin's `applicationDid`                                    |
 | `plugin`               | Reference to the plugin file: DID, version, path, and `artifactDid`         |
-| `credentialBindings`   | Maps credential handles to providers (`"github-test-token"` → `file`)       |
+| `credentialBindings`   | Maps credential handles to providers (`"github-mirror-token"` → `file`)       |
 | `executionTarget`      | How to call the real MCP server (`mcp.stdio` spawns a child process)        |
 | `policy`               | Full `MpasApplicationPolicy` object: signerGroups, policies (keyed by action name), defaultRequirement |
 | `signerKeys`           | Key registry: DID + label (+ publicJwk for non-did:jwk methods) for each participant |

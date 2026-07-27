@@ -329,7 +329,7 @@ async function loadBridgeModule(): Promise<BridgeModule> {
 async function credentialDir() {
   const dir = await mkdtemp(join(tmpdir(), "mpas-e2e-credentials-"));
   await mkdir(dir, { recursive: true });
-  const path = join(dir, "github-test-token.json");
+  const path = join(dir, "github-mirror-token.json");
   await writeFile(path, `${JSON.stringify({ value: "ghp_e2e" })}\n`, { mode: 0o600 });
   await chmod(path, 0o600);
   return dir;

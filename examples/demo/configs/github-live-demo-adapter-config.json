@@ -1,7 +1,7 @@
 {
   "version": "1",
   "type": "MpasAdapterDeploymentConfig",
-  "name": "github-strict",
+  "name": "github-live-demo",
   "target": {
     "applicationDid": "did:web:github.example"
   },
@@ -13,7 +13,7 @@
   },
   "credentialBindings": [
     {
-      "credentialHandle": "github-test-token",
+      "credentialHandle": "github-live-demo-token",
       "provider": "file"
     }
   ],
@@ -21,10 +21,10 @@
     "type": "mcp.stdio",
     "command": "node",
     "args": [
-      "tests/fixtures/adapter/echo-mcp-server.mjs"
+      "tests/fixtures/adapter/github-mcp-server.mjs"
     ],
     "env": {
-      "GITHUB_PERSONAL_ACCESS_TOKEN": "{{credential:github-test-token}}"
+      "GITHUB_PERSONAL_ACCESS_TOKEN": "{{credential:github-live-demo-token}}"
     }
   },
   "policy": {

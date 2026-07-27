@@ -13,7 +13,7 @@
   },
   "credentialBindings": [
     {
-      "credentialHandle": "github-test-token",
+      "credentialHandle": "github-mirror-token",
       "provider": "file"
     }
   ],
@@ -24,7 +24,7 @@
       "tests/fixtures/adapter/echo-mcp-server.mjs"
     ],
     "env": {
-      "GITHUB_PERSONAL_ACCESS_TOKEN": "{{credential:github-test-token}}"
+      "GITHUB_PERSONAL_ACCESS_TOKEN": "{{credential:github-mirror-token}}"
     }
   },
   "policy": {
