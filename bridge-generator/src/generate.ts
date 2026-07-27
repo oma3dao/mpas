@@ -28,7 +28,7 @@ import {
   type ClassificationDraft,
   type HarnessConfig,
 } from "./artifacts.js";
-import { generateBridge, generateToolsJson } from "./bridge-codegen.js";
+import { generateBridge, generateToolsJson, generateWorkflowStore } from "./bridge-codegen.js";
 import { generatePlugin } from "./plugin-codegen.js";
 import { discoverUpstream } from "./discovery.js";
 import type { GeneratedPlugin, McpToolDefinition, UpstreamInfo } from "./types.js";
@@ -157,6 +157,7 @@ export async function runGenerate(options: GenerateOptions): Promise<void> {
   // --- bridge/ ---
   await writeGenerated("bridge/src/index.ts", generateBridge(upstream));
   await writeGenerated("bridge/src/tools.json", generateToolsJson(upstream.tools));
+  await writeGenerated("bridge/src/sqlite-workflow-store.ts", generateWorkflowStore());
   await writeGenerated("bridge/package.json", jsonFile(bridgePackageJson(options.appName)));
   await writeGenerated("bridge/tsconfig.json", jsonFile(bridgeTsconfig()));
   await writeGenerated("bridge/README.md", bridgeReadme(options.appName, upstream));

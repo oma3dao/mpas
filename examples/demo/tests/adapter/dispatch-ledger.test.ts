@@ -36,6 +36,18 @@ describe("DispatchLedger", () => {
     expect(ledger.check(actionId, "hashB")).toMatchObject({ kind: "reject", code: "REPLAY_DETECTED" });
   });
 
+  it("a replay rejection carries no terminal result material (result recovery is best effort)", () => {
+    const ledger = new DispatchLedger();
+    ledger.authorizeDispatch(actionId, "hashA", expiresAt);
+    ledger.resolve(actionId, "executed");
+
+    const check = ledger.check(actionId, "hashA");
+    // Feature spec §11: the resolved-rejection rule stands as written. A bridge
+    // that lost the terminal response cannot recover it from the ledger; it
+    // marks the workflow unresolvable and the client reconciles.
+    expect(Object.keys(check).sort()).toEqual(["code", "kind", "message"]);
+  });
+
   it("never rolls back: resolve is the only transition out of executing", () => {
     const ledger = new DispatchLedger();
     ledger.authorizeDispatch(actionId, "hashA", expiresAt);

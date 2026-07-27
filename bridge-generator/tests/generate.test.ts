@@ -43,7 +43,11 @@ describe("runGenerate", () => {
       "tools-list.snapshot.json",
     ]);
     expect((await readdir(join(appDir, "bridge"))).sort()).toEqual(["README.md", "package.json", "src", "tsconfig.json"]);
-    expect((await readdir(join(appDir, "bridge", "src"))).sort()).toEqual(["index.ts", "tools.json"]);
+    expect((await readdir(join(appDir, "bridge", "src"))).sort()).toEqual([
+      "index.ts",
+      "sqlite-workflow-store.ts",
+      "tools.json",
+    ]);
   });
 
   it("keeps the bridge runtime small and writes the verbatim tool surface separately", async () => {

@@ -1,5 +1,17 @@
 import type { McpToolDefinition, UpstreamInfo } from "./types.js";
 
+/**
+ * Emits the proposer bridge (thin wiring around the SDK's ProposerBridge
+ * runtime), the tools.json it loads, and the SQLite workflow store as
+ * standalone repository code.
+ *
+ * The emitted bridge conforms to the MPAS MCP Proposer Bridge Client
+ * Interface Profile v0.1: application calls return control as soon as the
+ * Action is durably recorded, the workflow advances on a background loop,
+ * and results are retrieved through mpas_wait_for_action_result. The
+ * spec-compliance behavior itself lives in @oma3/mpas; the generated file
+ * only binds tool definitions, configuration, and a store choice to it.
+ */
 export function generateBridge(info: UpstreamInfo): string {
   const upstream = [info.command, ...info.args].join(" ");
   const serverName = `${info.serverName}-mpas-bridge`;
@@ -12,6 +24,11 @@ export function generateBridge(info: UpstreamInfo): string {
  * Upstream: ${escapeComment(upstream)}
  *
  * This file is generated then checked in. Edit freely.
+ *
+ * Conforms to the MPAS MCP Proposer Bridge Client Interface Profile v0.1:
+ * application calls return control as soon as the Action is durably recorded,
+ * the workflow advances on a background loop, and results are retrieved
+ * through the reserved mpas_wait_for_action_result tool.
  */
 
 import { readFileSync } from "node:fs";
@@ -24,22 +41,40 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
-import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 import {
   ActionPackageBuilder,
   AdapterClient,
   CoordinationClient,
   KeyManager,
+  MemoryWorkflowStore,
+  ProposerBridge,
 } from "@oma3/mpas";
 import type {
-  ActionReference,
-  AdapterResponse,
+  BridgeUpstreamTool,
   MpasApplicationPlugin,
   ProposerConfig,
   ToolCallResult,
+  WorkflowCoordination,
+  WorkflowStore,
 } from "@oma3/mpas";
+import { SqliteWorkflowStore } from "./sqlite-workflow-store.js";
 
 const TOOLS = loadTools();
+
+interface WorkflowConfig {
+  /** SQLite database path. Omitted → in-memory store (no restart durability). */
+  dbPath?: string;
+  /** Minimum post-resolution retention disclosed to clients. Default 86400. */
+  resultRetentionSeconds?: number;
+  /** Background tick interval. Default 2000ms. */
+  pollIntervalMs?: number;
+  /** Deployment assigns maintainer notification to the bridge or another component. */
+  notificationAssignedElsewhere?: boolean;
+}
+
+interface BridgeConfig extends Omit<ProposerConfig, "approvalStrategy" | "approvalTimeoutMs"> {
+  workflow?: WorkflowConfig;
+}
 
 interface CliConfig {
   mode?: "proposer" | "maintainer";
@@ -64,9 +99,12 @@ interface CliConfig {
     id: string;
     format: string;
   };
-  approvalStrategy?: "return" | "coordinate" | "wait";
-  approvalTimeoutMs?: number;
+  workflow?: WorkflowConfig;
   defaultExpirationMinutes?: number;
+  /** @deprecated The bridge always returns a deferred result; no synchronous approval wait exists. */
+  approvalStrategy?: string;
+  /** @deprecated See approvalStrategy. */
+  approvalTimeoutMs?: number;
 }
 
 function log(level: "info" | "warn" | "error", msg: string, data?: object): void {
@@ -75,44 +113,86 @@ function log(level: "info" | "warn" | "error", msg: string, data?: object): void
 }
 
 export class GeneratedBridge {
-  private readonly plugin: MpasApplicationPlugin;
-  private readonly adapterClient: AdapterClient;
-  private readonly coordinationClient?: CoordinationClient;
-  private readonly keyManagerPromise: Promise<KeyManager>;
+  private readonly bridgePromise: Promise<ProposerBridge>;
+  private readonly store: WorkflowStore;
 
-  constructor(private readonly config: ProposerConfig) {
-    this.plugin = loadPlugin(config.plugin);
-    this.adapterClient = new AdapterClient({ url: config.adapterUrl });
-    this.coordinationClient = config.coordinationUrl ? new CoordinationClient({ url: config.coordinationUrl }) : undefined;
-    this.keyManagerPromise = loadKeyManager(config.agentKey);
+  constructor(config: BridgeConfig) {
+    const plugin = loadPlugin(config.plugin);
+    const adapterClient = new AdapterClient({ url: config.adapterUrl });
+    const coordination: WorkflowCoordination = config.coordinationUrl
+      ? new CoordinationClient({ url: config.coordinationUrl })
+      : unconfiguredCoordination();
+    const keyManagerPromise = loadKeyManager(config.agentKey);
+    const workflow = config.workflow ?? {};
+    this.store = workflow.dbPath ? new SqliteWorkflowStore(workflow.dbPath) : new MemoryWorkflowStore();
+    if (!workflow.dbPath) {
+      log("warn", "memory_workflow_store", {
+        note: "No workflow.dbPath configured; active Actions will not survive a bridge restart.",
+      });
+    }
+
+    this.bridgePromise = keyManagerPromise.then((keyManager) => {
+      const executionProfile = config.executionProfile ?? {
+        id: plugin.executionProfile.id,
+        format: plugin.executionProfile.format ?? "mcp.toolsCall",
+      };
+      return new ProposerBridge({
+        tools: [...TOOLS],
+        buildActionPackage: (toolName, args) =>
+          new ActionPackageBuilder({
+            applicationDid: config.applicationDid,
+            executionProfile,
+            keyManager,
+            ...(config.defaultExpirationMinutes !== undefined
+              ? { defaultExpirationMinutes: config.defaultExpirationMinutes }
+              : {}),
+          }).buildFromToolCall(toolName, args),
+        store: this.store,
+        adapter: adapterClient,
+        coordination,
+        proposerDid: keyManager.did,
+        resultRetentionSeconds: workflow.resultRetentionSeconds ?? 86_400,
+        ...(workflow.notificationAssignedElsewhere !== undefined
+          ? { notificationAssignedElsewhere: workflow.notificationAssignedElsewhere }
+          : {}),
+        ...(workflow.pollIntervalMs !== undefined ? { pollIntervalMs: workflow.pollIntervalMs } : {}),
+      });
+    });
   }
 
-  getToolDefinitions(): Tool[] {
-    return [...TOOLS];
+  getToolDefinitions(): BridgeUpstreamTool[] {
+    // Static surface: profile notices and unions are deterministic, so expose
+    // them without awaiting the key manager.
+    return new ProposerBridge({
+      tools: [...TOOLS],
+      buildActionPackage: () => Promise.reject(new Error("static surface only")),
+      store: new MemoryWorkflowStore(),
+      adapter: { submit: () => Promise.reject(new Error("static surface only")) },
+      coordination: unconfiguredCoordination(),
+      proposerDid: "did:static",
+      resultRetentionSeconds: 86_400,
+    }).getToolDefinitions();
   }
 
   async handleToolCall(toolName: string, args: object): Promise<ToolCallResult> {
     log("info", "tool_call_received", { toolName });
-    if (!TOOLS.some((tool) => tool.name === toolName)) {
-      return errorResult("UNKNOWN_TOOL", \`Unknown tool: \${toolName}\`, { toolName });
-    }
+    const bridge = await this.bridgePromise;
+    const result = await bridge.handleToolCall(toolName, args);
+    return result as ToolCallResult;
+  }
 
-    const keyManager = await this.keyManagerPromise;
-    const builder = new ActionPackageBuilder({
-      applicationDid: this.config.applicationDid,
-      executionProfile: this.config.executionProfile ?? {
-        id: this.plugin.executionProfile.id,
-        format: this.plugin.executionProfile.format ?? "mcp.toolsCall",
-      },
-      keyManager,
-      defaultExpirationMinutes: this.config.defaultExpirationMinutes,
+  /** Startup reconciliation plus the background workflow loop. */
+  async start(): Promise<void> {
+    const bridge = await this.bridgePromise;
+    await bridge.start();
+    log("info", "bridge_started");
+  }
+
+  stop(): void {
+    void this.bridgePromise.then((bridge) => {
+      bridge.stop();
+      this.store.close();
     });
-    const actionPackage = await builder.buildFromToolCall(toolName, args);
-    log("info", "submitting_to_adapter", { toolName, actionId: actionPackage.actionEnvelope.actionId.value });
-    const response = await this.adapterClient.submit(actionPackage);
-    log("info", "adapter_response", { toolName, result: response.result });
-
-    return this.handleAdapterResponse(response, actionPackage);
   }
 
   buildMcpServer(): Server {
@@ -131,149 +211,40 @@ export class GeneratedBridge {
     server.setRequestHandler(ListToolsRequestSchema, () => ({
       tools: this.getToolDefinitions(),
     }));
-    server.setRequestHandler(CallToolRequestSchema, async (request) => {
-      if (!TOOLS.some((tool) => tool.name === request.params.name)) {
-        throw new Error(\`Unknown tool: \${request.params.name}\`);
-      }
-      return this.handleToolCall(request.params.name, toArgsObject(request.params.arguments));
-    });
+    server.setRequestHandler(CallToolRequestSchema, async (request) =>
+      this.handleToolCall(request.params.name, toArgsObject(request.params.arguments)),
+    );
 
     return server;
   }
+}
 
-  private async handleAdapterResponse(response: AdapterResponse, actionPackage: Awaited<ReturnType<ActionPackageBuilder["buildFromToolCall"]>>): Promise<ToolCallResult> {
-    if (response.result === "additionalApprovalsRequired") {
-      return this.handleAdditionalApprovals(response, actionPackage);
-    }
-    return mapTerminalResponse(response);
-  }
-
-  private async handleAdditionalApprovals(
-    response: AdapterResponse,
-    actionPackage: Awaited<ReturnType<ActionPackageBuilder["buildFromToolCall"]>>,
-  ): Promise<ToolCallResult> {
-    const strategy = this.config.approvalStrategy ?? "wait";
-    log("info", "additional_approvals_required", { strategy, hasCoordinationClient: !!this.coordinationClient });
-    let coordinationActionRef: ActionReference | undefined;
-
-    if (strategy === "coordinate" || strategy === "wait") {
-      if (!this.coordinationClient) {
-        log("error", "coordination_not_configured", { strategy });
-        return errorResult("COORDINATION_NOT_CONFIGURED", "Approval strategy requires coordinationUrl.", response);
-      }
-      if (!response.authorizationRequirements) {
-        log("error", "missing_auth_requirements");
-        return errorResult("MISSING_AUTH_REQUIREMENTS", "additionalApprovalsRequired without authorizationRequirements.", response);
-      }
-      log("info", "submitting_to_coordination");
-      const coordinationResponse = await this.coordinationClient.submitAction(
-        actionPackage,
-        response.authorizationRequirements,
-      );
-      coordinationActionRef = coordinationResponse.actionRef;
-      log("info", "coordination_submitted", { actionEnvelopeHash: coordinationActionRef?.actionEnvelopeHash?.value });
-    }
-
-    if (strategy === "wait" && this.coordinationClient && coordinationActionRef) {
-      log("info", "entering_wait_loop", { timeoutMs: this.config.approvalTimeoutMs ?? 300_000 });
-      return this.waitForCoordinatedResult(
-        actionPackage,
-        coordinationActionRef.actionEnvelopeHash.value,
-        response,
-      );
-    }
-
-    return {
-      content: [
-        {
-          type: "text",
-          text: "Additional approvals required.",
-        },
-      ],
-      structuredContent: {
-        status: "pending",
-        actionId: actionPackage.actionEnvelope.actionId.value,
-        coordinationActionRef,
-        authorizationRequirements: response.authorizationRequirements,
-      },
-    };
-  }
-
-  private async waitForCoordinatedResult(
-    originalActionPackage: Awaited<ReturnType<ActionPackageBuilder["buildFromToolCall"]>>,
-    actionEnvelopeHash: string,
-    response: AdapterResponse,
-  ): Promise<ToolCallResult> {
-    const timeoutMs = this.config.approvalTimeoutMs ?? 300_000;
-    const deadline = Date.now() + timeoutMs;
-    const keyManager = await this.keyManagerPromise;
-
-    while (Date.now() <= deadline) {
-      try {
-        const poll = await this.coordinationClient?.poll(keyManager.did);
-        const update = poll?.actionUpdates.find(
-          (candidate) => candidate.actionRef.actionEnvelopeHash.value === actionEnvelopeHash,
-        );
-        if (update?.state === "readyForResubmission" && update.actionPackage) {
-          log("info", "resubmitting_approved_action");
-          const adapterResponse = await this.adapterClient.submit(update.actionPackage);
-          log("info", "resubmission_response", { result: adapterResponse.result });
-          return this.handleResubmittedAdapterResponse(adapterResponse);
-        }
-        if (update?.state === "cancelled") {
-          return errorResult("COORDINATED_ACTION_CANCELLED", "Coordinated action was cancelled.", { update });
-        }
-        if (update?.state === "expired") {
-          return errorResult("COORDINATED_ACTION_EXPIRED", "Coordinated action expired before approvals were collected.", { update });
-        }
-      } catch (error) {
-        log("error", "poll_error", { error: error instanceof Error ? error.message : String(error) });
-      }
-
-      await sleep(Math.min(2000, Math.max(100, deadline - Date.now())));
-    }
-
-    log("warn", "wait_timeout", { timeoutMs });
-    return {
-      content: [
-        {
-          type: "text",
-          text: "Additional approvals still pending.",
-        },
-      ],
-      structuredContent: {
-        status: "pending",
-        actionId: originalActionPackage.actionEnvelope.actionId.value,
-        actionEnvelopeHash,
-        authorizationRequirements: response.authorizationRequirements,
-      },
-    };
-  }
-
-  private async handleResubmittedAdapterResponse(response: AdapterResponse): Promise<ToolCallResult> {
-    if (response.result === "additionalApprovalsRequired") {
-      return {
-        content: [
-          {
-            type: "text",
-            text: "Additional approvals still required after resubmission.",
-          },
-        ],
-        structuredContent: {
-          status: "pending",
-          authorizationRequirements: response.authorizationRequirements,
-        },
-      };
-    }
-    return mapTerminalResponse(response);
-  }
+/**
+ * Placeholder used when no coordinationUrl is configured. Approval-gated
+ * Actions stay durably recorded in created/awaitingApprovals and are retried
+ * by reconciliation; they cannot complete until coordination exists.
+ */
+function unconfiguredCoordination(): WorkflowCoordination {
+  return {
+    submitAction() {
+      return Promise.reject(new Error("Coordination Service is not configured (coordination.url)."));
+    },
+    poll() {
+      return Promise.resolve({
+        version: "1" as const,
+        type: "CoordinationPollResponse" as const,
+        approvalRequests: [],
+        actionUpdates: [],
+      });
+    },
+  };
 }
 
 export async function createBridgeFromConfig(configPath: string): Promise<GeneratedBridge> {
   const absoluteConfigPath = resolve(configPath);
   const configDir = dirname(absoluteConfigPath);
   const config = JSON.parse(await readFile(absoluteConfigPath, "utf8")) as CliConfig;
-  return new GeneratedBridge(toProposerConfig(config, configDir));
+  return new GeneratedBridge(toBridgeConfig(config, configDir));
 }
 
 export async function runBridge(argv = process.argv.slice(2)): Promise<void> {
@@ -282,15 +253,21 @@ export async function runBridge(argv = process.argv.slice(2)): Promise<void> {
   const server = bridge.buildMcpServer();
   const transport = new StdioServerTransport();
 
+  await bridge.start();
   await server.connect(transport);
 }
 
-function toProposerConfig(config: CliConfig, configDir: string): ProposerConfig {
+function toBridgeConfig(config: CliConfig, configDir: string): BridgeConfig {
   if (config.mode === "maintainer") {
     throw new Error("Maintainer/signer mode is not supported by this proposer bridge.");
   }
   if (!config.plugin) {
     throw new Error('Proposer bridge config requires "plugin".');
+  }
+  if (config.approvalStrategy !== undefined || config.approvalTimeoutMs !== undefined) {
+    log("warn", "deprecated_config_ignored", {
+      note: "approvalStrategy/approvalTimeoutMs are ignored: the bridge always returns a deferred result and serves results via mpas_wait_for_action_result.",
+    });
   }
   const pluginPath = resolve(configDir, config.plugin);
   const plugin = loadPlugin(pluginPath);
@@ -303,23 +280,32 @@ function toProposerConfig(config: CliConfig, configDir: string): ProposerConfig 
     throw new Error('Proposer bridge config requires "agent.keyFile".');
   }
 
+  const workflow: WorkflowConfig = { ...config.workflow };
+  if (workflow.dbPath) {
+    workflow.dbPath = resolve(configDir, workflow.dbPath);
+  }
+
   return {
     plugin: pluginPath,
-    applicationDid: (config.target?.applicationDid ?? config.applicationDid ?? plugin.applicationDid) as ProposerConfig["applicationDid"],
+    applicationDid: (config.target?.applicationDid ?? config.applicationDid ?? plugin.applicationDid) as BridgeConfig["applicationDid"],
     adapterUrl,
     agentKey: resolve(configDir, agentKey),
-    approvalStrategy: config.approvalStrategy,
     coordinationUrl: config.coordination?.url,
-    approvalTimeoutMs: config.approvalTimeoutMs,
     executionProfile: (config.executionProfile ?? {
       id: plugin.executionProfile.id,
       format: plugin.executionProfile.format ?? "mcp.toolsCall",
-    }) as ProposerConfig["executionProfile"],
+    }) as BridgeConfig["executionProfile"],
     defaultExpirationMinutes: config.defaultExpirationMinutes,
+    workflow,
   };
 }
 
-function loadPlugin(plugin: ProposerConfig["plugin"]): MpasApplicationPlugin {
+function loadTools(): BridgeUpstreamTool[] {
+  const raw = readFileSync(new URL("./tools.json", import.meta.url), "utf8");
+  return JSON.parse(raw) as BridgeUpstreamTool[];
+}
+
+function loadPlugin(plugin: BridgeConfig["plugin"]): MpasApplicationPlugin {
   if (typeof plugin === "string") {
     return JSON.parse(readFileSync(plugin, "utf8")) as MpasApplicationPlugin;
   }
@@ -327,20 +313,7 @@ function loadPlugin(plugin: ProposerConfig["plugin"]): MpasApplicationPlugin {
   return plugin;
 }
 
-function loadTools(): Tool[] {
-  const parsed: unknown = JSON.parse(
-    readFileSync(new URL("./tools.json", import.meta.url), "utf8"),
-  );
-  if (
-    !Array.isArray(parsed)
-    || parsed.some((tool) => !isRecord(tool) || typeof tool.name !== "string" || !isRecord(tool.inputSchema))
-  ) {
-    throw new Error("Generated bridge tools.json must contain an array of MCP Tool definitions.");
-  }
-  return parsed as Tool[];
-}
-
-function loadKeyManager(agentKey: ProposerConfig["agentKey"]): Promise<KeyManager> {
+function loadKeyManager(agentKey: BridgeConfig["agentKey"]): Promise<KeyManager> {
   if (typeof agentKey === "string") {
     return KeyManager.fromFile(agentKey);
   }
@@ -366,119 +339,6 @@ function toArgsObject(args: unknown): object {
   return {};
 }
 
-function mapTerminalResponse(response: AdapterResponse): ToolCallResult {
-  switch (response.result) {
-    case "executed":
-      return relayExecutionResult(response.executionResult);
-    case "failed":
-      return response.executionResult !== undefined
-        ? relayExecutionResult(response.executionResult)
-        : errorResult(response.error?.code ?? "EXECUTION_FAILED", response.error?.message ?? "Execution failed definitively.", response);
-    case "indeterminate":
-      return indeterminateResult(response);
-    case "pending":
-      return pendingResult(response);
-    case "rejected":
-      return errorResult(response.error?.code ?? "REJECTED", response.error?.message ?? "Action was rejected.", response);
-    case "expired":
-      return errorResult(response.error?.code ?? "EXPIRED", response.error?.message ?? "Action Envelope expired; a new Action Envelope is required.", response);
-    case "cancelled":
-      return errorResult(response.error?.code ?? "CANCELLED", response.error?.message ?? "Action was cancelled.", response);
-    case "malformed":
-      return errorResult(response.error?.code ?? "MALFORMED", response.error?.message ?? "Action Package is malformed.", response);
-    case "notSupported":
-      return errorResult(response.error?.code ?? "NOT_SUPPORTED", response.error?.message ?? "The Verifier does not support this action.", response);
-    case "policyUnavailable":
-      return errorResult(response.error?.code ?? "POLICY_UNAVAILABLE", response.error?.message ?? "The Verifier could not evaluate policy; retry later.", response);
-    default:
-      return errorResult("UNRECOGNIZED_RESULT", \`Adapter returned an unrecognized result: \${String((response as { result?: unknown }).result)}.\`, response as unknown as Record<string, unknown>);
-  }
-}
-
-function relayExecutionResult(result: unknown): ToolCallResult {
-  if (isRecord(result) && Array.isArray(result.content)) {
-    // The adapter returns the upstream MCP CallToolResult. Preserve it
-    // verbatim, including structuredContent, resource content, _meta, and
-    // future protocol fields, rather than wrapping or projecting it.
-    return result as unknown as ToolCallResult;
-  }
-
-  return {
-    content: [
-      {
-        type: "text",
-        text: result === undefined ? "Action executed." : JSON.stringify(result),
-      },
-    ],
-    ...(result === undefined ? {} : { structuredContent: isRecord(result) ? result : { value: result } }),
-  };
-}
-
-function errorResult(code: string, message: string, structuredContent?: object): ToolCallResult {
-  return {
-    isError: true,
-    content: [
-      {
-        type: "text",
-        text: \`\${code}: \${message}\`,
-      },
-    ],
-    structuredContent: structuredContent as Record<string, unknown> | undefined,
-  };
-}
-
-function indeterminateResult(response: AdapterResponse): ToolCallResult {
-  const diagnostic = response.context?.diagnostic;
-  const diagnosticMessage = diagnostic?.message ? \` \${diagnostic.message}\` : "";
-  const diagnosticText = diagnostic
-    ? \`INDETERMINATE (\${diagnostic.code}).\${diagnosticMessage}\`
-    : "INDETERMINATE.";
-  return {
-    isError: true,
-    content: [
-      {
-        type: "text",
-        text: [
-          \`\${diagnosticText} Execution was dispatched but the outcome could not be confirmed.\`,
-          "Do not automatically retry with the same actionId.",
-          "Reconcile out of band and submit a new Action Envelope if needed.",
-        ].join(" "),
-      },
-    ],
-    structuredContent: {
-      status: "indeterminate",
-      ...(diagnostic ? { diagnostic } : {}),
-      executionReceipt: response.executionReceipt,
-    },
-  };
-}
-
-function pendingResult(response: AdapterResponse): ToolCallResult {
-  return {
-    content: [
-      {
-        type: "text",
-        text: "Action is executing or awaiting execution. No second dispatch will occur for an identical resubmission.",
-      },
-    ],
-    structuredContent: {
-      status: "pending",
-      actionRequestId: response.actionRequestId,
-      pollAfter: response.pollAfter,
-    },
-  };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
-}
-
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   await runBridge();
 }
@@ -487,6 +347,278 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
 
 export function generateToolsJson(tools: McpToolDefinition[]): string {
   return `${JSON.stringify(tools, null, 2)}\n`;
+}
+
+/**
+ * Emits the SQLite workflow store as standalone repository code next to the
+ * bridge. The SDK ships only the WorkflowStore contract and an in-memory
+ * reference; durable persistence is deployment code, and this file is the
+ * reference implementation. Keep in sync with
+ * examples/demo/src/bridge/sqlite-workflow-store.ts.
+ */
+export function generateWorkflowStore(): string {
+  return `import { mkdirSync } from "node:fs";
+import { dirname } from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import type {
+  BridgeWorkflowState,
+  CreateWorkflowInput,
+  WorkflowRecord,
+  WorkflowResolution,
+  WorkflowStore,
+} from "@oma3/mpas";
+
+/**
+ * SQLite reference implementation of the SDK's WorkflowStore contract.
+ * Generated by bridge-generator; checked in. Edit freely.
+ *
+ * - one configured database path per bridge deployment;
+ * - transactional workflow transitions (single-statement check-and-write);
+ * - WAL mode so a persistent worker can share the file with a thin frontend;
+ * - schema versioning with fail-safe open;
+ * - no credentials or adapter secrets stored.
+ */
+
+const SCHEMA_VERSION = 1;
+
+const TERMINAL_STATES: ReadonlySet<BridgeWorkflowState> = new Set(["resolved", "unresolvable"]);
+
+export class SqliteWorkflowStore implements WorkflowStore {
+  private readonly db: DatabaseSync;
+  private readonly now: () => number;
+
+  constructor(path: string, options: { now?: () => number } = {}) {
+    this.now = options.now ?? (() => Date.now());
+    if (path !== ":memory:") {
+      mkdirSync(dirname(path), { recursive: true });
+    }
+    this.db = new DatabaseSync(path);
+    this.db.exec("PRAGMA journal_mode = WAL");
+    this.db.exec("PRAGMA busy_timeout = 5000");
+    this.migrate();
+  }
+
+  close(): void {
+    this.db.close();
+  }
+
+  createWorkflow(input: CreateWorkflowInput): WorkflowRecord {
+    const at = this.timestamp();
+    try {
+      this.db
+        .prepare(
+          \`INSERT INTO workflows (
+             action_id, envelope_hash, tool_name, state, action_package,
+             adapter_attempts, expires_at, created_at, updated_at
+           ) VALUES (?, ?, ?, 'created', ?, '[]', ?, ?, ?)\`,
+        )
+        .run(input.actionId, input.actionEnvelopeHash, input.toolName, toJson(input.actionPackage), input.expiresAt, at, at);
+    } catch (error) {
+      if (isUniqueViolation(error)) {
+        throw new Error(\`Workflow already exists for action \${input.actionId}.\`);
+      }
+      throw error;
+    }
+    return this.mustGet(input.actionId);
+  }
+
+  getWorkflow(actionId: string): WorkflowRecord | undefined {
+    const row = this.db.prepare("SELECT * FROM workflows WHERE action_id = ?").get(actionId) as
+      | Record<string, unknown>
+      | undefined;
+    return row ? rowToRecord(row) : undefined;
+  }
+
+  compareAndSetState(actionId: string, from: BridgeWorkflowState, to: BridgeWorkflowState): boolean {
+    if (TERMINAL_STATES.has(from) || TERMINAL_STATES.has(to)) {
+      return false;
+    }
+    const result = this.db
+      .prepare("UPDATE workflows SET state = ?, updated_at = ? WHERE action_id = ? AND state = ?")
+      .run(to, this.timestamp(), actionId, from);
+    return result.changes === 1;
+  }
+
+  claimWorkflow(actionId: string, workerId: string, leaseMs: number): boolean {
+    const nowMs = this.now();
+    const result = this.db
+      .prepare(
+        \`UPDATE workflows
+           SET claimed_by = ?, claim_expires_ms = ?, updated_at = ?
+         WHERE action_id = ?
+           AND (claimed_by IS NULL OR claimed_by = ? OR claim_expires_ms <= ?)\`,
+      )
+      .run(workerId, nowMs + leaseMs, this.timestamp(), actionId, workerId, nowMs);
+    return result.changes === 1;
+  }
+
+  saveCoordinationReference(actionId: string, ref: unknown): void {
+    this.setColumn(actionId, "coordination_ref", toJson(ref));
+  }
+
+  saveCompletedPackage(actionId: string, completedPackage: unknown): void {
+    this.setColumn(actionId, "completed_package", toJson(completedPackage));
+  }
+
+  saveAuthorizationRequirements(actionId: string, requirements: unknown): void {
+    this.setColumn(actionId, "authorization_requirements", toJson(requirements));
+  }
+
+  saveLastActionResponse(actionId: string, response: unknown): void {
+    this.setColumn(actionId, "last_action_response", toJson(response));
+  }
+
+  saveAdapterAttempt(actionId: string, attempt: unknown): void {
+    this.db
+      .prepare(
+        \`UPDATE workflows
+           SET adapter_attempts = json_insert(adapter_attempts, '$[#]', json(?)), updated_at = ?
+         WHERE action_id = ?\`,
+      )
+      .run(toJson(attempt), this.timestamp(), actionId);
+  }
+
+  resolveWorkflow(actionId: string, resolution: WorkflowResolution): void {
+    const state: BridgeWorkflowState = resolution.kind === "resolved" ? "resolved" : "unresolvable";
+    const at = this.timestamp();
+    this.db
+      .prepare(
+        \`UPDATE workflows
+           SET state = ?, resolution = ?, resolved_at = ?, updated_at = ?
+         WHERE action_id = ?
+           AND state NOT IN ('resolved', 'unresolvable')\`,
+      )
+      .run(state, toJson(resolution), at, at, actionId);
+  }
+
+  listRecoverableWorkflows(): WorkflowRecord[] {
+    const rows = this.db
+      .prepare("SELECT * FROM workflows WHERE state NOT IN ('resolved', 'unresolvable') ORDER BY created_at")
+      .all() as Record<string, unknown>[];
+    return rows.map(rowToRecord);
+  }
+
+  purgeExpiredResults(retentionMs: number = 24 * 60 * 60 * 1000): number {
+    const rows = this.db
+      .prepare("SELECT action_id, expires_at, resolved_at FROM workflows WHERE state IN ('resolved', 'unresolvable')")
+      .all() as { action_id: string; expires_at: string; resolved_at: string }[];
+
+    const nowMs = this.now();
+    let purged = 0;
+    for (const row of rows) {
+      const keepUntil = Math.max(Date.parse(row.expires_at), Date.parse(row.resolved_at) + retentionMs);
+      if (nowMs > keepUntil) {
+        purged += this.db.prepare("DELETE FROM workflows WHERE action_id = ?").run(row.action_id).changes as number;
+      }
+    }
+    return purged;
+  }
+
+  private setColumn(
+    actionId: string,
+    column: "coordination_ref" | "completed_package" | "authorization_requirements" | "last_action_response",
+    json: string,
+  ): void {
+    this.db
+      .prepare(\`UPDATE workflows SET \${column} = ?, updated_at = ? WHERE action_id = ?\`)
+      .run(json, this.timestamp(), actionId);
+  }
+
+  private mustGet(actionId: string): WorkflowRecord {
+    const record = this.getWorkflow(actionId);
+    if (!record) {
+      throw new Error(\`Workflow not found for action \${actionId}.\`);
+    }
+    return record;
+  }
+
+  private timestamp(): string {
+    return new Date(this.now()).toISOString();
+  }
+
+  private migrate(): void {
+    const { user_version: version } = this.db.prepare("PRAGMA user_version").get() as { user_version: number };
+    if (version > SCHEMA_VERSION) {
+      this.db.close();
+      throw new Error(
+        \`Workflow store schema version \${version} is newer than supported version \${SCHEMA_VERSION}; refusing to open.\`,
+      );
+    }
+    if (version === SCHEMA_VERSION) {
+      return;
+    }
+
+    this.db.exec(\`
+      CREATE TABLE IF NOT EXISTS workflows (
+        action_id                  TEXT PRIMARY KEY,
+        envelope_hash              TEXT NOT NULL,
+        tool_name                  TEXT NOT NULL,
+        state                      TEXT NOT NULL,
+        action_package             TEXT NOT NULL,
+        authorization_requirements TEXT,
+        coordination_ref           TEXT,
+        completed_package          TEXT,
+        adapter_attempts           TEXT NOT NULL DEFAULT '[]',
+        last_action_response       TEXT,
+        expires_at                 TEXT NOT NULL,
+        created_at                 TEXT NOT NULL,
+        updated_at                 TEXT NOT NULL,
+        claimed_by                 TEXT,
+        claim_expires_ms           INTEGER,
+        resolved_at                TEXT,
+        resolution                 TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_workflows_state ON workflows (state);
+    \`);
+    this.db.exec(\`PRAGMA user_version = \${SCHEMA_VERSION}\`);
+  }
+}
+
+function toJson(value: unknown): string {
+  return JSON.stringify(value ?? null);
+}
+
+function fromJson(value: unknown): unknown {
+  if (value === null || value === undefined) {
+    return undefined;
+  }
+  return JSON.parse(String(value));
+}
+
+function rowToRecord(row: Record<string, unknown>): WorkflowRecord {
+  const record: WorkflowRecord = {
+    actionId: String(row.action_id),
+    actionEnvelopeHash: String(row.envelope_hash),
+    toolName: String(row.tool_name),
+    state: String(row.state) as BridgeWorkflowState,
+    actionPackage: fromJson(row.action_package),
+    adapterAttempts: (fromJson(row.adapter_attempts) as unknown[]) ?? [],
+    expiresAt: String(row.expires_at),
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
+  };
+
+  const authorizationRequirements = fromJson(row.authorization_requirements);
+  if (authorizationRequirements !== undefined) record.authorizationRequirements = authorizationRequirements;
+  const coordinationRef = fromJson(row.coordination_ref);
+  if (coordinationRef !== undefined) record.coordinationRef = coordinationRef;
+  const completedPackage = fromJson(row.completed_package);
+  if (completedPackage !== undefined) record.completedPackage = completedPackage;
+  const lastActionResponse = fromJson(row.last_action_response);
+  if (lastActionResponse !== undefined) record.lastActionResponse = lastActionResponse;
+  if (row.claimed_by != null) record.claimedBy = String(row.claimed_by);
+  if (row.claim_expires_ms != null) record.claimExpiresAt = new Date(Number(row.claim_expires_ms)).toISOString();
+  if (row.resolved_at != null) record.resolvedAt = String(row.resolved_at);
+  const resolution = fromJson(row.resolution);
+  if (resolution !== undefined) record.resolution = resolution as WorkflowResolution;
+
+  return record;
+}
+
+function isUniqueViolation(error: unknown): boolean {
+  return error instanceof Error && /UNIQUE constraint failed/i.test(error.message);
+}
+`;
 }
 
 function escapeComment(value: string): string {

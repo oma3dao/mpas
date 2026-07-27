@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import ts from "typescript";
-import { generateBridge, generateToolsJson } from "../src/bridge-codegen.js";
+import { generateBridge, generateToolsJson, generateWorkflowStore } from "../src/bridge-codegen.js";
 import { generatePlugin, inferImpact } from "../src/plugin-codegen.js";
 import type { UpstreamInfo } from "../src/types.js";
 
@@ -34,8 +34,26 @@ describe("generateBridge", () => {
     expect(source).toContain("const TOOLS = loadTools();");
     expect(source).not.toContain('"name": "delete_branch"');
     expect(source).not.toContain('"example.test/category": "branches"');
-    // Unknown tools are rejected at both entry points.
-    expect(source).toContain("UNKNOWN_TOOL");
+  });
+
+  it("wires the shared client-profile runtime around the tool definitions", () => {
+    const source = generateBridge(upstream);
+    // The spec-compliance surface comes from the SDK, not inline logic.
+    expect(source).toContain("ProposerBridge");
+    expect(source).toContain('from "@oma3/mpas"');
+    // Durable store is emitted repository code, memory store is the fallback.
+    expect(source).toContain('from "./sqlite-workflow-store.js"');
+    expect(source).toContain("MemoryWorkflowStore");
+    // The background workflow loop starts with the server.
+    expect(source).toContain("await bridge.start();");
+  });
+
+  it("returns control without a synchronous approval wait", () => {
+    const source = generateBridge(upstream);
+    expect(source).not.toContain("waitForCoordinatedResult");
+    expect(source).not.toContain("approvalTimeoutMs ?? 300_000");
+    // Legacy blocking-wait config is accepted but ignored, with a warning.
+    expect(source).toContain("deprecated_config_ignored");
   });
 
   it("emits the complete discovered tool list as deterministic JSON", () => {
@@ -48,17 +66,18 @@ describe("generateBridge", () => {
     expect(generateToolsJson(upstream.tools)).toBe(json);
   });
 
-  it("relays upstream MCP tool results without reshaping them", () => {
-    const source = generateBridge(upstream);
-    expect(source).toContain("return result as unknown as ToolCallResult;");
-    expect(source).not.toContain("structuredContent: result,");
-  });
+  it("emits the SQLite workflow store as standalone repository code", () => {
+    const store = generateWorkflowStore();
+    expect(store).toContain('from "node:sqlite"');
+    expect(store).toContain("implements WorkflowStore");
+    expect(store).toContain("PRAGMA journal_mode = WAL");
+    expect(generateWorkflowStore()).toBe(store);
 
-  it("relays indeterminate diagnostics while preserving no-retry guidance", () => {
-    const source = generateBridge(upstream);
-    expect(source).toContain("response.context?.diagnostic");
-    expect(source).toContain("...(diagnostic ? { diagnostic } : {})");
-    expect(source).toContain("Do not automatically retry with the same actionId");
+    const result = ts.transpileModule(store, {
+      compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
+      reportDiagnostics: true,
+    });
+    expect(result.diagnostics ?? []).toEqual([]);
   });
 
   it("is deterministic: same input produces byte-identical output", () => {

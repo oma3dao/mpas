@@ -31,7 +31,7 @@ Other conforming bridges may use different internal mechanisms.
 | 2 | Durable workflow store and recovery engine | `mpas` | Not started |
 | 3 | Client-facing bridge tools and response schemas | `mpas` | Not started |
 | 4 | Generator and demo bridge integration | `mpas` | Not started |
-| 5 | Client-interface conformance tests | `mpas` | Not started |
+| 5 | Client-interface conformance tests | `mpas` | Deferred (§8) |
 | 6 | GitHub application bridge rollout and application harness updates | `mpas-applications` | Not started |
 | 7 | Migration, deployment, and temporary-stopgap documentation | Both | Not started |
 
@@ -177,7 +177,11 @@ Use SQLite for the OMA3 GitHub implementation:
 - stored diagnostics sanitized before persistence.
 
 The normative client profile does not require SQLite or another persistence
-mechanism.
+mechanism, and the SDK package carries no database dependency: it ships the
+`WorkflowStore` contract and an in-memory reference implementation only. The
+SQLite reference store is repository code
+(`examples/demo/src/bridge/sqlite-workflow-store.ts`) that concrete bridge
+deployments import or copy.
 
 ### 5.4 Process model
 
@@ -282,16 +286,19 @@ Implement:
 
 ---
 
-## 8. Phase 5 — Client-Interface Conformance Tests
+## 8. Phase 5 — Client-Interface Conformance Tests (Deferred)
 
-Create an implementation-independent proposer-bridge client-interface
-conformance role under `conformance/`.
+**Deferred.** The official conformance suite is a certification tool for
+third-party implementations; with exactly one implementation it would certify
+nothing (see `conformance/README.md`, which already records the program as
+future work). When a second implementation exists, extract the suite from the
+tests below rather than writing it from the spec.
 
-The harness interacts with the bridge under test only through MCP. A test
-deployment may provide controlled application outcomes, but the harness does
-not inspect or require its downstream services or internal mechanisms.
-
-Required scenarios:
+Until then, the profile §11 checklist is covered for the OMA3 implementation
+by the SDK unit tests (`sdk/protocol/tests/lib/bridge-results.test.ts`,
+`bridge-runtime.test.ts`, `workflow-engine.test.ts`) and the demo end-to-end
+suite (`examples/demo/tests/e2e/mcp-bridge-stack.test.ts`), which exercise the
+scenarios an eventual harness would codify:
 
 1. immediate native success;
 2. immediate native tool failure;

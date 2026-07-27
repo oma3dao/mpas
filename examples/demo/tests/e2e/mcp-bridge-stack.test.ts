@@ -15,6 +15,8 @@ interface ToolCallResult {
 
 interface BridgeInstance {
   handleToolCall(toolName: string, args: object): Promise<ToolCallResult>;
+  start?(): Promise<void>;
+  stop?(): void;
 }
 
 interface BridgeModule {
@@ -171,8 +173,10 @@ describe("MPAS E2E: Policy routing and dispatch", () => {
     expect(response.result).toBe("failed");
   });
 
-  // Full approval flow: proposer → adapter → coordination → signer → resubmit → executed
-  it("full approval flow: delete_branch with signer approval", async () => {
+  // Full approval flow (client profile): the application call returns a
+  // deferred result immediately; the workflow advances in the background; the
+  // client retrieves the native result through mpas_wait_for_action_result.
+  it("full approval flow: deferred delete_branch, signer approval, wait-tool retrieval", async () => {
     const { GeneratedBridge } = await loadBridgeModule();
     const { adapter, coordination } = await startStack();
 
@@ -183,29 +187,72 @@ describe("MPAS E2E: Policy routing and dispatch", () => {
       adapterUrl: adapter.address,
       agentKey: join(fixturesDir, "test-keys", "proposer.json"),
       coordinationUrl: coordination.address,
-      approvalStrategy: "wait",
-      approvalTimeoutMs: 5_000,
+      workflow: { pollIntervalMs: 100 },
     });
-    const signer = new SignerServer({
-      signerKey: join(fixturesDir, "test-keys", "maintainer-a.json"),
-      coordinationUrl: coordination.address,
+    await proposer.start?.();
+    try {
+      const signer = new SignerServer({
+        signerKey: join(fixturesDir, "test-keys", "maintainer-a.json"),
+        coordinationUrl: coordination.address,
+      });
+
+      // 1. The application call completes immediately with a deferred result.
+      const deferred = await proposer.handleToolCall("delete_branch", {
+        owner: "example-org",
+        repo: "mpas-demo-repository",
+        branch: "feature/e2e-coordination",
+      });
+      expect(deferred.isError).toBeUndefined();
+      expect(deferred.structuredContent).toMatchObject({
+        version: "1",
+        type: "MpasBridgeDeferredResult",
+        notificationRequired: true,
+        lastActionResponse: { result: "additionalApprovalsRequired" },
+      });
+      const actionId = (deferred.structuredContent as any).actionRef.actionId.value as string;
+
+      // 2. Maintainer approves out of band.
+      const approvalRequest = await waitForApprovalRequest(signer);
+      await signer.handleToolCall("mpas_approve", {
+        actionId: approvalRequest.actionRef.actionId.value,
+      });
+
+      // 3. The client retrieves the native result through the wait tool.
+      const result = await proposer.handleToolCall("mpas_wait_for_action_result", {
+        actionId,
+        timeoutSeconds: 10,
+      });
+      expect(result.isError).toBeUndefined();
+      const parsed = JSON.parse(result.content[0].text!);
+      expect(parsed.mode).toBe("dry_run");
+      expect(parsed.simulated_result).toMatchObject({ deleted: true, ref: "feature/e2e-coordination" });
+
+      // 4. Stable result: a repeated wait returns the same native result.
+      const again = await proposer.handleToolCall("mpas_wait_for_action_result", {
+        actionId,
+        timeoutSeconds: 0,
+      });
+      expect(JSON.parse(again.content[0].text!)).toEqual(parsed);
+    } finally {
+      proposer.stop?.();
+    }
+  });
+
+  it("advertises the reserved wait tool and MPAS notices on application tools", async () => {
+    const { GeneratedBridge } = await loadBridgeModule();
+    const plugin = await readJson(join(fixturesDir, "plugins", "github-demo-plugin.json"));
+    const proposer = new GeneratedBridge({
+      plugin,
+      applicationDid: plugin.applicationDid,
+      adapterUrl: "http://127.0.0.1:1",
+      agentKey: join(fixturesDir, "test-keys", "proposer.json"),
     });
 
-    const proposerResultPromise = proposer.handleToolCall("delete_branch", {
-      owner: "example-org",
-      repo: "mpas-demo-repository",
-      branch: "feature/e2e-coordination",
-    });
-    const approvalRequest = await waitForApprovalRequest(signer);
-    await signer.handleToolCall("mpas_approve", {
-      actionId: approvalRequest.actionRef.actionId.value,
-    });
-    const proposerResult = await proposerResultPromise;
-
-    expect(proposerResult.isError).toBeUndefined();
-    const parsed = JSON.parse(proposerResult.content[0].text!);
-    expect(parsed.mode).toBe("dry_run");
-    expect(parsed.simulated_result).toMatchObject({ deleted: true, ref: "feature/e2e-coordination" });
+    const tools = (proposer as unknown as { getToolDefinitions(): Array<{ name: string; description?: string }> }).getToolDefinitions();
+    const names = tools.map((tool) => tool.name);
+    expect(names).toContain("mpas_wait_for_action_result");
+    const merge = tools.find((tool) => tool.name === "merge_pull_request");
+    expect(merge?.description).toContain("mediated by MPAS");
   });
 
   // Replay detection: same actionId after dispatch → rejected
