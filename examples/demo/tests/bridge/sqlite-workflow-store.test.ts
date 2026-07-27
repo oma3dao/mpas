@@ -36,7 +36,7 @@ function createDefault(store: SqliteWorkflowStore, actionId = ACTION_ID): Workfl
   return store.createWorkflow({
     actionId,
     actionEnvelopeHash: HASH,
-    toolName: "merge_pull_request",
+    toolName: "merge_pull_request_demo",
     actionPackage: { fake: "initial-action-package", actionId },
     expiresAt: EXPIRES_AT,
   });
@@ -61,7 +61,7 @@ describe("createWorkflow / getWorkflow", () => {
     expect(created.state).toBe("created");
     expect(created.actionId).toBe(ACTION_ID);
     expect(created.actionEnvelopeHash).toBe(HASH);
-    expect(created.toolName).toBe("merge_pull_request");
+    expect(created.toolName).toBe("merge_pull_request_demo");
     expect(created.expiresAt).toBe(EXPIRES_AT);
     expect(created.createdAt).toBe("2026-07-26T18:00:00.000Z");
 

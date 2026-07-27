@@ -52,11 +52,11 @@ For the full protocol design, start with the base specification:
 
 ### How it works
 
-**The agent sees a normal MCP server.** The MCP Bridge abstracts the entire MPAS protocol — signing, envelope construction, coordination polling, resubmission — away from the agent. From the agent's perspective, it just calls tools like `create_issue` or `delete_branch` and gets results back.
+**The agent sees a normal MCP server.** The MCP Bridge abstracts the entire MPAS protocol — signing, envelope construction, coordination polling, resubmission — away from the agent. From the agent's perspective, it just calls tools like `create_issue_demo` or `delete_branch_demo` and gets results back.
 
 **Proposer flow:**
 
-1. Agent calls an MCP tool (e.g., `delete_branch`)
+1. Agent calls an MCP tool (e.g., `delete_branch_demo`)
 2. MCP Bridge (proposer mode) constructs and signs an Action Package, submits it to the Credential Adapter
 3. Credential Adapter verifies the signature, evaluates policy:
    - If auto-approved: dispatches immediately to the target (GitHub) and returns the result
@@ -299,7 +299,7 @@ For evaluation semantics and the derived `TrustContext` structure, see the
 
 **Relationship between plugin and policy:** The plugin describes what operations exist and their payload schemas. The `policy` object (an embedded `MpasApplicationPolicy`) defines who can propose, who can approve, and what thresholds apply. An operation is governed if it's in the plugin's `operations` OR has an entry in `policy.policies`.
 
-**The governance boundary:** anything outside the governed set is routed as pass-through — after proposer gating and signature verification it executes with the adapter's credential on the proposer's signature alone, and `defaultRequirement` does not apply. This is the plugin-anchored trust model: the plugin publisher decides which operations need governance, and the operator accepts that boundary after reviewing available OMATrust attestation and target-linkage evidence. The demo exposes `create_issue` this way on purpose to demonstrate the boundary. If you care about an operation, put it in the plugin or give it a policy entry; power users can refuse ungoverned operations entirely with `passThrough: "deny"`.
+**The governance boundary:** anything outside the governed set is routed as pass-through — after proposer gating and signature verification it executes with the adapter's credential on the proposer's signature alone, and `defaultRequirement` does not apply. This is the plugin-anchored trust model: the plugin publisher decides which operations need governance, and the operator accepts that boundary after reviewing available OMATrust attestation and target-linkage evidence. The demo exposes `create_issue_demo` this way on purpose to demonstrate the boundary. If you care about an operation, put it in the plugin or give it a policy entry; power users can refuse ungoverned operations entirely with `passThrough: "deny"`.
 
 ### Bridge Config
 
@@ -349,9 +349,9 @@ The filename (minus `.json`) is the credential handle. At dispatch time, the ada
 
 | Action                             | Approval requirement                        |
 | ---------------------------------- | ------------------------------------------- |
-| `create_issue`                     | Pass-through (not governed; proposer signature only — see governance boundary note) |
-| `delete_branch`                    | 1 maintainer approval                       |
-| `merge_pull_request` into `main`   | 1 maintainer approval                       |
+| `create_issue_demo`                     | Pass-through (not governed; proposer signature only — see governance boundary note) |
+| `delete_branch_demo`                    | 1 maintainer approval                       |
+| `merge_pull_request_demo` into `main`   | 1 maintainer approval                       |
 
 ## Local Services
 

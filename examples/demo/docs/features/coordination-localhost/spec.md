@@ -104,7 +104,7 @@ Request:
     "version": "1",
     "type": "ActionPackage",
     "executionPayload": {
-      "name": "delete_branch",
+      "name": "delete_branch_demo",
       "arguments": {
         "owner": "oma3dao",
         "repo": "app-registry",

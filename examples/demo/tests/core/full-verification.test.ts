@@ -55,12 +55,12 @@ async function parseFixture(file: string): Promise<ActionPackage> {
 
 describe("verifyActionPackage", () => {
   it.each([
-    ["valid-no-approval-required.json", "create_issue"],
-    ["valid-two-approvals.json", "merge_pull_request"],
-    ["valid-delete-branch.json", "delete_branch"],
-    ["insufficient-approvals.json", "merge_pull_request"],
-    ["invalid-disabled-operation.json", "delete_branch"],
-    ["invalid-resource-restricted.json", "create_issue"],
+    ["valid-no-approval-required.json", "create_issue_demo"],
+    ["valid-two-approvals.json", "merge_pull_request_demo"],
+    ["valid-delete-branch.json", "delete_branch_demo"],
+    ["insufficient-approvals.json", "merge_pull_request_demo"],
+    ["invalid-disabled-operation.json", "delete_branch_demo"],
+    ["invalid-resource-restricted.json", "create_issue_demo"],
   ])("verifies core-valid fixture %s", async (fixtureFile, operationName) => {
     const result = await verifyActionPackage(await parseFixture(fixtureFile), await verificationConfig());
 

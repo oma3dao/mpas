@@ -73,7 +73,7 @@ The MCP bridge E2E verifies the complete local approval path:
 1. Start the Credential Adapter on a random local port.
 2. Start the Coordination Service on a random local port.
 3. Load the generated GitHub proposer bridge and the standalone signer server.
-4. Submit a protected `delete_branch` call through the proposer.
+4. Submit a protected `delete_branch_demo` call through the proposer.
 5. Receive `additionalApprovalsRequired` from the adapter.
 6. Store the pending action in coordination.
 7. List, review, and approve from the maintainer bridge.

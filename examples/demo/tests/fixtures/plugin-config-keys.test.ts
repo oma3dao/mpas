@@ -135,8 +135,8 @@ describe("plugin, config, and key fixtures", () => {
     expect(validate(plugin), JSON.stringify(validate.errors, null, 2)).toBe(true);
     expect(typeof plugin.operations).toBe("object");
     expect(Object.keys(plugin.operations)).toEqual([
-      "delete_branch",
-      "merge_pull_request",
+      "delete_branch_demo",
+      "merge_pull_request_demo",
     ]);
     expect(JSON.stringify(plugin)).not.toContain("nativeBinding");
     expect(JSON.stringify(plugin)).not.toContain("policySuggestions");

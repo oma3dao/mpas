@@ -40,7 +40,7 @@ afterEach(async () => {
 
 describe("MPAS E2E: Policy routing and dispatch", () => {
   // Scenario 1: Action not in plugin or policy → pass-through
-  it("auto-executes create_issue (pass-through, not in reviewed plugin)", async () => {
+  it("auto-executes create_issue_demo (pass-through, not in reviewed plugin)", async () => {
     const { ActionPackageBuilder, KeyManager, AdapterClient } = await loadBridgeModule();
     const { adapter } = await startStack();
 
@@ -53,7 +53,7 @@ describe("MPAS E2E: Policy routing and dispatch", () => {
     });
     const client = new AdapterClient({ url: adapter.address });
 
-    const pkg = await builder.buildFromToolCall("create_issue", {
+    const pkg = await builder.buildFromToolCall("create_issue_demo", {
       owner: "example-org",
       repo: "mpas-demo-repository",
       title: "E2E: proposerOnly action",
@@ -67,7 +67,7 @@ describe("MPAS E2E: Policy routing and dispatch", () => {
   });
 
   // Scenario 2: Action in plugin with threshold 1 policy → needs 1 approval
-  it("requires 1 approval for delete_branch (in plugin, threshold 1 policy)", async () => {
+  it("requires 1 approval for delete_branch_demo (in plugin, threshold 1 policy)", async () => {
     const { ActionPackageBuilder, KeyManager, AdapterClient } = await loadBridgeModule();
     const { adapter, coordination } = await startStack();
 
@@ -80,7 +80,7 @@ describe("MPAS E2E: Policy routing and dispatch", () => {
     });
     const client = new AdapterClient({ url: adapter.address });
 
-    const pkg = await builder.buildFromToolCall("delete_branch", {
+    const pkg = await builder.buildFromToolCall("delete_branch_demo", {
       owner: "example-org",
       repo: "mpas-demo-repository",
       branch: "feature/e2e-test",
@@ -94,7 +94,7 @@ describe("MPAS E2E: Policy routing and dispatch", () => {
   });
 
   // Scenario 3: Action in plugin with threshold 2 policy → needs 2 approvals
-  it("requires 2 approvals for merge_pull_request (in plugin, threshold 2 policy)", async () => {
+  it("requires 2 approvals for merge_pull_request_demo (in plugin, threshold 2 policy)", async () => {
     const { ActionPackageBuilder, KeyManager, AdapterClient } = await loadBridgeModule();
     const { adapter } = await startStack();
 
@@ -107,7 +107,7 @@ describe("MPAS E2E: Policy routing and dispatch", () => {
     });
     const client = new AdapterClient({ url: adapter.address });
 
-    const pkg = await builder.buildFromToolCall("merge_pull_request", {
+    const pkg = await builder.buildFromToolCall("merge_pull_request_demo", {
       owner: "example-org",
       repo: "mpas-demo-repository",
       pullNumber: 42,
@@ -124,7 +124,7 @@ describe("MPAS E2E: Policy routing and dispatch", () => {
   });
 
   // Scenario 4: Action NOT in plugin, but operator added a policy → uses operator policy
-  it("uses operator policy for close_issue (not in plugin, operator-added threshold 1)", async () => {
+  it("uses operator policy for close_issue_demo (not in plugin, operator-added threshold 1)", async () => {
     const { ActionPackageBuilder, KeyManager, AdapterClient } = await loadBridgeModule();
     const { adapter } = await startStack();
 
@@ -137,7 +137,7 @@ describe("MPAS E2E: Policy routing and dispatch", () => {
     });
     const client = new AdapterClient({ url: adapter.address });
 
-    const pkg = await builder.buildFromToolCall("close_issue", {
+    const pkg = await builder.buildFromToolCall("close_issue_demo", {
       owner: "example-org",
       repo: "mpas-demo-repository",
       issueNumber: 7,
@@ -147,7 +147,7 @@ describe("MPAS E2E: Policy routing and dispatch", () => {
     expect(response.result).toBe("additionalApprovalsRequired");
     const authReqs = (response as any).authorizationRequirements;
     expect(authReqs.approvalRequirements.anyOf[0].threshold).toBe(1);
-    expect(authReqs.approvalRequirements.anyOf[0].description).toContain("Operator policy (close_issue)");
+    expect(authReqs.approvalRequirements.anyOf[0].description).toContain("Operator policy (close_issue_demo)");
   });
 
   // Scenario 5: Action NOT in plugin, NOT in policy, echo server doesn't know it → dispatch fails
@@ -176,7 +176,7 @@ describe("MPAS E2E: Policy routing and dispatch", () => {
   // Full approval flow (client profile): the application call returns a
   // deferred result immediately; the workflow advances in the background; the
   // client retrieves the native result through mpas_wait_for_action_result.
-  it("full approval flow: deferred delete_branch, signer approval, wait-tool retrieval", async () => {
+  it("full approval flow: deferred delete_branch_demo, signer approval, wait-tool retrieval", async () => {
     const { GeneratedBridge } = await loadBridgeModule();
     const { adapter, coordination } = await startStack();
 
@@ -197,7 +197,7 @@ describe("MPAS E2E: Policy routing and dispatch", () => {
       });
 
       // 1. The application call completes immediately with a deferred result.
-      const deferred = await proposer.handleToolCall("delete_branch", {
+      const deferred = await proposer.handleToolCall("delete_branch_demo", {
         owner: "example-org",
         repo: "mpas-demo-repository",
         branch: "feature/e2e-coordination",
@@ -251,7 +251,7 @@ describe("MPAS E2E: Policy routing and dispatch", () => {
     const tools = (proposer as unknown as { getToolDefinitions(): Array<{ name: string; description?: string }> }).getToolDefinitions();
     const names = tools.map((tool) => tool.name);
     expect(names).toContain("mpas_wait_for_action_result");
-    const merge = tools.find((tool) => tool.name === "merge_pull_request");
+    const merge = tools.find((tool) => tool.name === "merge_pull_request_demo");
     expect(merge?.description).toContain("mediated by MPAS");
   });
 
@@ -269,7 +269,7 @@ describe("MPAS E2E: Policy routing and dispatch", () => {
     });
     const client = new AdapterClient({ url: adapter.address });
 
-    const pkg = await builder.buildFromToolCall("create_issue", {
+    const pkg = await builder.buildFromToolCall("create_issue_demo", {
       owner: "example-org",
       repo: "mpas-demo-repository",
       title: "replay test",

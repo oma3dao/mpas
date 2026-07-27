@@ -1,9 +1,9 @@
 {
   "version": "1",
   "type": "MpasApplicationPlugin",
-  "pluginDid": "did:web:plugins.example.com:github-demo-plugin",
+  "pluginDid": "did:web:plugins.oma3.example:github-demo-plugin",
   "pluginVersion": "0.1.0",
-  "publisherDid": "did:web:wivity.example",
+  "publisherDid": "did:web:oma3.example",
   "applicationDid": "did:web:github.example",
   "executionProfile": {
     "id": "did:web:profiles.oma3.org:mcp",
@@ -23,7 +23,7 @@
     }
   ],
   "operations": {
-    "delete_branch": {
+    "delete_branch_demo": {
       "description": "Delete a branch from a GitHub repository.",
       "impact": "critical",
       "executionPayloadSchema": {
@@ -34,7 +34,7 @@
         ],
         "properties": {
           "name": {
-            "const": "delete_branch"
+            "const": "delete_branch_demo"
           },
           "arguments": {
             "type": "object",
@@ -60,7 +60,7 @@
         "additionalProperties": false
       }
     },
-    "merge_pull_request": {
+    "merge_pull_request_demo": {
       "description": "Merge a pull request into its base branch.",
       "impact": "high",
       "executionPayloadSchema": {
@@ -71,7 +71,7 @@
         ],
         "properties": {
           "name": {
-            "const": "merge_pull_request"
+            "const": "merge_pull_request_demo"
           },
           "arguments": {
             "type": "object",

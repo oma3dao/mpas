@@ -17,7 +17,7 @@ import { createInterface } from "node:readline";
 
 const tools = [
   {
-    name: "create_issue",
+    name: "create_issue_demo",
     description: "Create a new issue in a GitHub repository.",
     inputSchema: {
       type: "object",
@@ -33,7 +33,7 @@ const tools = [
     },
   },
   {
-    name: "delete_branch",
+    name: "delete_branch_demo",
     description: "Delete a branch from a GitHub repository.",
     inputSchema: {
       type: "object",
@@ -47,7 +47,7 @@ const tools = [
     },
   },
   {
-    name: "merge_pull_request",
+    name: "merge_pull_request_demo",
     description: "Merge a pull request.",
     inputSchema: {
       type: "object",
@@ -64,7 +64,7 @@ const tools = [
     },
   },
   {
-    name: "close_issue",
+    name: "close_issue_demo",
     description: "Close an existing issue.",
     inputSchema: {
       type: "object",
@@ -83,7 +83,7 @@ function handleToolCall(name, args) {
   const credentialPresent = Boolean(process.env.GITHUB_PERSONAL_ACCESS_TOKEN);
 
   switch (name) {
-    case "create_issue":
+    case "create_issue_demo":
       return {
         mode: "dry_run",
         pid: process.pid,
@@ -97,7 +97,7 @@ function handleToolCall(name, args) {
         },
       };
 
-    case "delete_branch":
+    case "delete_branch_demo":
       return {
         mode: "dry_run",
         pid: process.pid,
@@ -109,7 +109,7 @@ function handleToolCall(name, args) {
         },
       };
 
-    case "merge_pull_request":
+    case "merge_pull_request_demo":
       return {
         mode: "dry_run",
         pid: process.pid,
@@ -122,7 +122,7 @@ function handleToolCall(name, args) {
         },
       };
 
-    case "close_issue":
+    case "close_issue_demo":
       return {
         mode: "dry_run",
         pid: process.pid,

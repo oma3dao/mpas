@@ -30,7 +30,7 @@ describe("prepareMcpStdio", () => {
       return;
     }
     try {
-      const result = await prepared.session.transmit("create_issue", {
+      const result = await prepared.session.transmit("create_issue_demo", {
         owner: "example-org",
         repo: "mpas-demo-repository",
         title: "hello",
@@ -57,8 +57,8 @@ describe("prepareMcpStdio", () => {
       return;
     }
     try {
-      const first = await prepared.session.transmit("create_issue", { owner: "a", repo: "b", title: "first" });
-      const second = await prepared.session.transmit("create_issue", { owner: "a", repo: "b", title: "second" });
+      const first = await prepared.session.transmit("create_issue_demo", { owner: "a", repo: "b", title: "first" });
+      const second = await prepared.session.transmit("create_issue_demo", { owner: "a", repo: "b", title: "second" });
 
       expect(first.ok).toBe(true);
       expect(second.ok).toBe(true);
@@ -126,7 +126,7 @@ describe("prepareMcpStdio", () => {
       return;
     }
     try {
-      const result = await prepared.session.transmit("create_issue", {
+      const result = await prepared.session.transmit("create_issue_demo", {
         owner: "example-org",
         repo: "mpas-demo-repository",
         title: "hello",

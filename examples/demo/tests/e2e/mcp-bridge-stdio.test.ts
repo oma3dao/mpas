@@ -61,9 +61,9 @@ describe("MCP stdio transport smoke test", () => {
     const { tools } = await client.listTools();
     const names = tools.map((tool) => tool.name);
 
-    expect(names).toEqual(["create_issue", "delete_branch", "merge_pull_request", "mpas_wait_for_action_result"]);
+    expect(names).toEqual(["create_issue_demo", "delete_branch_demo", "merge_pull_request_demo", "mpas_wait_for_action_result"]);
 
-    const merge = tools.find((tool) => tool.name === "merge_pull_request")!;
+    const merge = tools.find((tool) => tool.name === "merge_pull_request_demo")!;
     expect(merge.description).toContain("Merge a pull request.");
     expect(merge.description).toContain("mediated by MPAS");
     // Upstream input schema unchanged after JSON round-trip.
@@ -80,7 +80,7 @@ describe("MCP stdio transport smoke test", () => {
 
   it("returns a deferred result for an application call, with readable content", async () => {
     const result = (await client.callTool({
-      name: "delete_branch",
+      name: "delete_branch_demo",
       arguments: { owner: "example-org", repo: "mpas-demo-repository", branch: "smoke-test" },
     })) as { isError?: boolean; content: Array<{ type: string; text?: string }>; structuredContent?: Record<string, unknown> };
 

@@ -2,7 +2,7 @@
   "version": "1",
   "type": "ActionPackage",
   "executionPayload": {
-    "name": "delete_branch",
+    "name": "delete_branch_demo",
     "arguments": {
       "owner": "example-org",
       "repo": "mpas-demo-repository",
@@ -25,7 +25,7 @@
     },
     "executionPayloadHash": {
       "alg": "sha-256",
-      "value": "lefiQH8YfaVujioPZc71ciVaDAfFMlsFVsUo0Ry7dSo"
+      "value": "T8sjh9MYatL-bsl3ry5qhI7Y8GMd-NTO3GD76EfcFJs"
     },
     "actionId": {
       "value": "urn:uuid:33333333-3333-4333-8333-333333333333"
@@ -38,7 +38,7 @@
     "type": "ApprovalBundle",
     "actionEnvelopeHash": {
       "alg": "sha-256",
-      "value": "ZE-U75cg5CsfSjBDS0KWB2fF_vJ79b2xbD2Nd6bDekY"
+      "value": "lTyhrjngO2sT5ZfSX23VjAS6U9HOGaVkvJGUsE-5FAM"
     },
     "approvals": [
       {
@@ -46,12 +46,12 @@
         "type": "Approval",
         "actionEnvelopeHash": {
           "alg": "sha-256",
-          "value": "ZE-U75cg5CsfSjBDS0KWB2fF_vJ79b2xbD2Nd6bDekY"
+          "value": "lTyhrjngO2sT5ZfSX23VjAS6U9HOGaVkvJGUsE-5FAM"
         },
         "decision": "propose",
         "signature": {
           "format": "jws",
-          "value": "eyJhbGciOiJFZERTQSIsImtpZCI6ImRpZDpqd2s6ZXlKamNuWWlPaUpGWkRJMU5URTVJaXdpYTNSNUlqb2lUMHRRSWl3aWVDSTZJbXMyVHpkamFWRnJiWEJvZFVWRmRERnBNM2xCYVcxS1NsZGxSMHR0VDNFemRGOW1jMDVyZW5waE5tOGlmUSMwIn0.eyJhY3Rpb25FbnZlbG9wZUhhc2giOnsiYWxnIjoic2hhLTI1NiIsInZhbHVlIjoiWkUtVTc1Y2c1Q3NmU2pCRFMwS1dCMmZGX3ZKNzliMnhiRDJOZDZiRGVrWSJ9LCJjcmVhdGVkQXQiOiIyMDI2LTA2LTA1VDE4OjAxOjAwLjAwMFoiLCJkZWNpc2lvbiI6InByb3Bvc2UiLCJzaWduZXJEaWQiOiJkaWQ6andrOmV5SmpjbllpT2lKRlpESTFOVEU1SWl3aWEzUjVJam9pVDB0UUlpd2llQ0k2SW1zMlR6ZGphVkZyYlhCb2RVVkZkREZwTTNsQmFXMUtTbGRsUjB0dFQzRXpkRjltYzA1cmVucGhObThpZlEiLCJ0eXBlIjoiQXBwcm92YWxQYXlsb2FkIn0.ckESOcGpLXcEOd4a9-F_WJOb7ph6qL4CUC1Nr-M1K-h4d6SngbnpvGJF8e87BG9KgS3pRELwazKzTUN535z8DQ"
+          "value": "eyJhbGciOiJFZERTQSIsImtpZCI6ImRpZDpqd2s6ZXlKamNuWWlPaUpGWkRJMU5URTVJaXdpYTNSNUlqb2lUMHRRSWl3aWVDSTZJbXMyVHpkamFWRnJiWEJvZFVWRmRERnBNM2xCYVcxS1NsZGxSMHR0VDNFemRGOW1jMDVyZW5waE5tOGlmUSMwIn0.eyJhY3Rpb25FbnZlbG9wZUhhc2giOnsiYWxnIjoic2hhLTI1NiIsInZhbHVlIjoibFR5aHJqbmdPMnNUNVpmU1gyM1ZqQVM2VTlIT0dhVmt2SkdVc0UtNUZBTSJ9LCJjcmVhdGVkQXQiOiIyMDI2LTA2LTA1VDE4OjAxOjAwLjAwMFoiLCJkZWNpc2lvbiI6InByb3Bvc2UiLCJzaWduZXJEaWQiOiJkaWQ6andrOmV5SmpjbllpT2lKRlpESTFOVEU1SWl3aWEzUjVJam9pVDB0UUlpd2llQ0k2SW1zMlR6ZGphVkZyYlhCb2RVVkZkREZwTTNsQmFXMUtTbGRsUjB0dFQzRXpkRjltYzA1cmVucGhObThpZlEiLCJ0eXBlIjoiQXBwcm92YWxQYXlsb2FkIn0.BWaiss3ooBXyyDDodlsJfsFOxU7EkQBJspkfDvglqrXJiNFkdNtpx0iI_8zTfitFdw210X1hfCjgKbRoNKqvBw"
         },
         "createdAt": "2026-06-05T18:01:00.000Z"
       },
@@ -60,12 +60,12 @@
         "type": "Approval",
         "actionEnvelopeHash": {
           "alg": "sha-256",
-          "value": "ZE-U75cg5CsfSjBDS0KWB2fF_vJ79b2xbD2Nd6bDekY"
+          "value": "lTyhrjngO2sT5ZfSX23VjAS6U9HOGaVkvJGUsE-5FAM"
         },
         "decision": "approve",
         "signature": {
           "format": "jws",
-          "value": "eyJhbGciOiJFZERTQSIsImtpZCI6ImRpZDpqd2s6ZXlKamNuWWlPaUpGWkRJMU5URTVJaXdpYTNSNUlqb2lUMHRRSWl3aWVDSTZJamh6UkZZM05tSTRhVVkzTmxCSmJVRjNOVWs1VjNabGFuTmZPR0pUT0U0eE1sZDJTSHBRWVRWV2R6Z2lmUSMwIn0.eyJhY3Rpb25FbnZlbG9wZUhhc2giOnsiYWxnIjoic2hhLTI1NiIsInZhbHVlIjoiWkUtVTc1Y2c1Q3NmU2pCRFMwS1dCMmZGX3ZKNzliMnhiRDJOZDZiRGVrWSJ9LCJjcmVhdGVkQXQiOiIyMDI2LTA2LTA1VDE4OjAyOjAwLjAwMFoiLCJkZWNpc2lvbiI6ImFwcHJvdmUiLCJzaWduZXJEaWQiOiJkaWQ6andrOmV5SmpjbllpT2lKRlpESTFOVEU1SWl3aWEzUjVJam9pVDB0UUlpd2llQ0k2SWpoelJGWTNObUk0YVVZM05sQkpiVUYzTlVrNVYzWmxhbk5mT0dKVE9FNHhNbGQyU0hwUVlUVldkemdpZlEiLCJ0eXBlIjoiQXBwcm92YWxQYXlsb2FkIn0.82ota18vmTWZhSzr4kB-I0usE7p_enAgdXAKX6OZ-VvJ0xDyPBtP2Vczn4lS-0XTDmh6yGGjRlxxCV1hG2U3DQ"
+          "value": "eyJhbGciOiJFZERTQSIsImtpZCI6ImRpZDpqd2s6ZXlKamNuWWlPaUpGWkRJMU5URTVJaXdpYTNSNUlqb2lUMHRRSWl3aWVDSTZJamh6UkZZM05tSTRhVVkzTmxCSmJVRjNOVWs1VjNabGFuTmZPR0pUT0U0eE1sZDJTSHBRWVRWV2R6Z2lmUSMwIn0.eyJhY3Rpb25FbnZlbG9wZUhhc2giOnsiYWxnIjoic2hhLTI1NiIsInZhbHVlIjoibFR5aHJqbmdPMnNUNVpmU1gyM1ZqQVM2VTlIT0dhVmt2SkdVc0UtNUZBTSJ9LCJjcmVhdGVkQXQiOiIyMDI2LTA2LTA1VDE4OjAyOjAwLjAwMFoiLCJkZWNpc2lvbiI6ImFwcHJvdmUiLCJzaWduZXJEaWQiOiJkaWQ6andrOmV5SmpjbllpT2lKRlpESTFOVEU1SWl3aWEzUjVJam9pVDB0UUlpd2llQ0k2SWpoelJGWTNObUk0YVVZM05sQkpiVUYzTlVrNVYzWmxhbk5mT0dKVE9FNHhNbGQyU0hwUVlUVldkemdpZlEiLCJ0eXBlIjoiQXBwcm92YWxQYXlsb2FkIn0.0SLjEQDRuOeGsW8Ut7lFfiwzJg86xCbpkXve5GNsXiVKtwkEp-eKePds3TZZQ4zO34proj2VLw1d4U9kb1PtBA"
         },
         "createdAt": "2026-06-05T18:02:00.000Z"
       }

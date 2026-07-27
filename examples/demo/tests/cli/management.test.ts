@@ -30,13 +30,13 @@ describe("CLI management commands", () => {
 
     expect(install).toMatchObject({
       installed: true,
-      pluginDid: "did:web:plugins.example.com:github-demo-plugin",
+      pluginDid: "did:web:plugins.oma3.example:github-demo-plugin",
     });
     expect(list).toMatchObject({
       plugins: [
         {
           file: "github-demo-plugin.json",
-          pluginDid: "did:web:plugins.example.com:github-demo-plugin",
+          pluginDid: "did:web:plugins.oma3.example:github-demo-plugin",
         },
       ],
     });
@@ -66,7 +66,7 @@ describe("CLI management commands", () => {
     ).resolves.toMatchObject({
       valid: true,
       name: "github-strict",
-      pluginDid: "did:web:plugins.example.com:github-demo-plugin",
+      pluginDid: "did:web:plugins.oma3.example:github-demo-plugin",
       credentials: [
         {
           handle: "github-test-token",

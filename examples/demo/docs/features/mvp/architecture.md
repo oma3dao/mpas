@@ -103,7 +103,7 @@ The MPAS MVP demonstrates multi-party agent governance end-to-end. Multiple agen
 
 ### 1.3 Default Flow (Proposer → Coordination → Signers → Adapter → Execute)
 
-1. **Agent A calls a tool** (e.g., `delete_branch`) on its Proposer Bridge.
+1. **Agent A calls a tool** (e.g., `delete_branch_demo`) on its Proposer Bridge.
 2. **Proposer Bridge constructs an Action Package** — Execution Payload + Action Envelope + Proposer Approval (signed with Agent A's key).
 3. **Proposer Bridge submits to the Credential Adapter** directly. The adapter pins the `actionId` (lifecycle: `open`), verifies, evaluates policy → returns `additionalApprovalsRequired`. The `actionId` remains `open` (bundle-level failure does not consume it per Core Section 6.9.2).
 4. **Proposer Bridge submits to the Coordination Service** (default `approvalStrategy: "coordinate"`). The coordination service stores the pending action (`awaitingApprovals` — a non-authoritative workflow state).
@@ -113,7 +113,7 @@ The MPAS MVP demonstrates multi-party agent governance end-to-end. Multiple agen
 8. **Coordination Service detects threshold is met** (2 maintainer approvals collected). Assembles the full Approval Bundle into a completed Action Package. Transitions to `readyForResubmission`.
 9. **Proposer Bridge polls, fetches the completed Action Package, and resubmits to the Credential Adapter** using the same `actionId` and same Action Envelope hash. Per Core Section 6.9.2, this resubmission is accepted because the action is `open` with matching hash.
 10. **Credential Adapter performs full re-verification** of the newly submitted package — signatures, hash bindings, expiration, policy. Policy satisfied → transitions to `executing`.
-11. **Policy satisfied → Adapter retrieves credentials** and dispatches `delete_branch` to the real GitHub MCP server.
+11. **Policy satisfied → Adapter retrieves credentials** and dispatches `delete_branch_demo` to the real GitHub MCP server.
 12. **Adapter issues an Execution Receipt** (lifecycle: `resolved(executed)`) and returns it to the Proposer Bridge.
 13. **Proposer Bridge returns the result to Agent A.** The Coordination Service learns the outcome when the Proposer relays it.
 
@@ -179,7 +179,7 @@ See `oma3/mpas-sdk/packages/mcp-bridge/docs/plan.md` for detailed tasks.
 - Handles responses and reports status to the agent.
 - Exposes signer tools (`mpas_approve`, `mpas_reject`, etc.).
 
-**Integration checkpoint after P4:** An agent (or test script) calls `create_issue` on the bridge, the bridge constructs an Action Package and submits to a mock coordination service. The coordination service forwards to the running adapter, and the adapter dispatches to the real GitHub MCP server. Issue is created.
+**Integration checkpoint after P4:** An agent (or test script) calls `create_issue_demo` on the bridge, the bridge constructs an Action Package and submits to a mock coordination service. The coordination service forwards to the running adapter, and the adapter dispatches to the real GitHub MCP server. Issue is created.
 
 ---
 
@@ -213,7 +213,7 @@ See `docs/features/coordination-localhost/plan.md` for detailed tasks.
 
 **Flow:**
 
-1. Agent A (cleanup bot) calls `delete_branch` on its Proposer Bridge.
+1. Agent A (cleanup bot) calls `delete_branch_demo` on its Proposer Bridge.
 2. Proposer Bridge constructs Action Package (Execution Payload + Action Envelope + Proposer Approval), submits to Coordination Service.
 3. Coordination Service stores the pending action and makes it available to eligible signers.
 4. Agent B's Maintainer Bridge polls the Coordination Service, sees the pending action via `mpas_list_pending`.
@@ -221,7 +221,7 @@ See `docs/features/coordination-localhost/plan.md` for detailed tasks.
 6. Agent C does the same.
 7. Coordination Service detects threshold met (2 maintainer approvals). Assembles completed Action Package.
 8. Coordination Service forwards completed Action Package to Credential Adapter.
-9. Adapter verifies independently → policy satisfied → dispatches `delete_branch` to the real GitHub MCP server.
+9. Adapter verifies independently → policy satisfied → dispatches `delete_branch_demo` to the real GitHub MCP server.
 10. Adapter returns Execution Receipt to Coordination Service.
 11. Coordination Service distributes receipt. All agents have confirmation.
 

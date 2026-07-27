@@ -91,7 +91,7 @@ describe("loadDeploymentConfigs", () => {
       path: "../plugins/github-demo-plugin.json",
     };
     const policy = config.policy as { policies: Record<string, unknown[]> };
-    policy.policies.create_issue = [
+    policy.policies.create_issue_demo = [
       {
         reject: true,
         requirements: { type: "proposerOnly" },

@@ -20,7 +20,7 @@ const mockCheckLinkage = vi.mocked(checkLinkage);
 const fakePlugin: MpasApplicationPlugin = {
   version: "1",
   type: "MpasApplicationPlugin",
-  pluginDid: "did:web:plugins.example.com:github-demo-plugin",
+  pluginDid: "did:web:plugins.oma3.example:github-demo-plugin",
   pluginVersion: "0.1.0",
   publisherDid: "did:web:publisher.example",
   applicationDid: "did:web:github.example",
@@ -28,7 +28,7 @@ const fakePlugin: MpasApplicationPlugin = {
     id: "did:web:profiles.oma3.org:mcp",
     protocolVersion: "2024-11-05",
   },
-  operations: { create_issue: { executionPayloadSchema: {} } },
+  operations: { create_issue_demo: { executionPayloadSchema: {} } },
 };
 
 const fakeConfig: DeploymentConfig = {
@@ -37,7 +37,7 @@ const fakeConfig: DeploymentConfig = {
   name: "github-test",
   target: { applicationDid: "did:web:github.example" },
   plugin: {
-    pluginDid: "did:web:plugins.example.com:github-demo-plugin",
+    pluginDid: "did:web:plugins.oma3.example:github-demo-plugin",
     pluginVersion: "0.1.0",
     artifactDid: "did:artifact:bafkreibfakeartifactdid",
     path: "../plugins/github-demo-plugin.json",

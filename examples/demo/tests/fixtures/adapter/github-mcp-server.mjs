@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Minimal MCP server that wraps the GitHub REST API for the MPAS demo.
- * Exposes: create_issue, delete_branch, merge_pull_request.
+ * Exposes: create_issue_demo, delete_branch_demo, merge_pull_request_demo.
  * Requires GITHUB_PERSONAL_ACCESS_TOKEN in the environment.
  */
 import { createInterface } from "node:readline";
@@ -11,7 +11,7 @@ const API = "https://api.github.com";
 
 const tools = [
   {
-    name: "create_issue",
+    name: "create_issue_demo",
     description: "Create a new issue in a GitHub repository.",
     inputSchema: {
       type: "object",
@@ -27,7 +27,7 @@ const tools = [
     },
   },
   {
-    name: "delete_branch",
+    name: "delete_branch_demo",
     description: "Delete a branch from a GitHub repository.",
     inputSchema: {
       type: "object",
@@ -41,7 +41,7 @@ const tools = [
     },
   },
   {
-    name: "merge_pull_request",
+    name: "merge_pull_request_demo",
     description: "Merge a pull request.",
     inputSchema: {
       type: "object",
@@ -61,7 +61,7 @@ const tools = [
 
 async function handleToolCall(name, args) {
   switch (name) {
-    case "create_issue": {
+    case "create_issue_demo": {
       const res = await gh("POST", `/repos/${args.owner}/${args.repo}/issues`, {
         title: args.title,
         body: args.body ?? "",
@@ -69,12 +69,12 @@ async function handleToolCall(name, args) {
       });
       return res;
     }
-    case "delete_branch": {
+    case "delete_branch_demo": {
       const ref = `heads/${args.branch}`;
       const res = await gh("DELETE", `/repos/${args.owner}/${args.repo}/git/refs/${ref}`);
       return res ?? { deleted: true, ref: args.branch };
     }
-    case "merge_pull_request": {
+    case "merge_pull_request_demo": {
       const res = await gh("PUT", `/repos/${args.owner}/${args.repo}/pulls/${args.pullNumber}/merge`, {
         merge_method: args.mergeMethod ?? "merge",
       });

@@ -15,8 +15,8 @@ describe("loadPlugin", () => {
     if (result.ok) {
       expect(result.plugin.type).toBe("MpasApplicationPlugin");
       expect(Object.keys(result.plugin.operations)).toEqual([
-        "delete_branch",
-        "merge_pull_request",
+        "delete_branch_demo",
+        "merge_pull_request_demo",
       ]);
     }
   });

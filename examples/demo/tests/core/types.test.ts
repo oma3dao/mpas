@@ -7,7 +7,7 @@ describe("MPAS Core types", () => {
       version: "1",
       type: "ActionPackage",
       executionPayload: {
-        name: "create_issue",
+        name: "create_issue_demo",
         arguments: {
           owner: "oma3dao",
           repo: "app-registry",

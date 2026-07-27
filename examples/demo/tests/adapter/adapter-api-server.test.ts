@@ -299,7 +299,7 @@ describe("HTTP endpoint", () => {
       path: join(fixturesDir, "plugins", "github-demo-plugin.json"),
     };
     const policy = config.policy as { policies: Record<string, unknown[]> };
-    policy.policies.create_issue = [
+    policy.policies.create_issue_demo = [
       {
         reject: true,
         description: "This operator-only rationale must not be returned.",
@@ -316,7 +316,7 @@ describe("HTTP endpoint", () => {
       result: "rejected",
       error: {
         code: "ACTION_BLOCKED_BY_POLICY",
-        message: "Action create_issue is blocked by policy.",
+        message: "Action create_issue_demo is blocked by policy.",
       },
     });
     expect(firstBody.authorizationRequirements).toBeUndefined();
@@ -340,7 +340,7 @@ describe("HTTP endpoint", () => {
     await writeFile(join(dir, "github-deny.json"), `${JSON.stringify(config, null, 2)}\n`);
 
     const app = await makeApp(dir);
-    // create_issue is deliberately absent from the demo plugin and policy —
+    // create_issue_demo is deliberately absent from the demo plugin and policy —
     // the canonical pass-through operation.
     const response = await submitFixture(app, "valid-no-approval-required.json");
 

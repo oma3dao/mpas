@@ -6,9 +6,9 @@
     "applicationDid": "did:web:github.example"
   },
   "plugin": {
-    "pluginDid": "did:web:plugins.example.com:github-demo-plugin",
+    "pluginDid": "did:web:plugins.oma3.example:github-demo-plugin",
     "pluginVersion": "0.1.0",
-    "artifactDid": "did:artifact:bafkreihafo43swp4jbl3gahyselcz5vie7ihd5atz7grw5crkiawhq6bpu",
+    "artifactDid": "did:artifact:bafkreiddvecgiomvq6cgwdm7ccpctwjm3k5kfowd7blovwwg2kdhqcwtge",
     "path": "../plugins/github-demo-plugin.json"
   },
   "credentialBindings": [
@@ -57,7 +57,7 @@
       ]
     },
     "policies": {
-      "merge_pull_request": [
+      "merge_pull_request_demo": [
         {
           "description": "Merging into main requires two maintainer approvals.",
           "match": {
@@ -78,7 +78,7 @@
           }
         }
       ],
-      "delete_branch": [
+      "delete_branch_demo": [
         {
           "description": "Deleting a branch requires one maintainer approval.",
           "requirements": {

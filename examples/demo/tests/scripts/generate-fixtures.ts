@@ -147,7 +147,7 @@ const fixtureRoot = join(process.cwd(), "tests", "fixtures");
 const packages = {
   "valid-no-approval-required.json": await makeActionPackage({
     payload: {
-      name: "create_issue",
+      name: "create_issue_demo",
       arguments: {
         owner: "example-org",
         repo: "mpas-demo-repository",
@@ -161,7 +161,7 @@ const packages = {
   }),
   "valid-two-approvals.json": await makeActionPackage({
     payload: {
-      name: "merge_pull_request",
+      name: "merge_pull_request_demo",
       arguments: {
         owner: "example-org",
         repo: "mpas-demo-repository",
@@ -181,7 +181,7 @@ const packages = {
   }),
   "valid-delete-branch.json": await makeActionPackage({
     payload: {
-      name: "delete_branch",
+      name: "delete_branch_demo",
       arguments: {
         owner: "example-org",
         repo: "mpas-demo-repository",
@@ -199,7 +199,7 @@ const packages = {
 
 const insufficientApprovals = await makeActionPackage({
   payload: {
-    name: "merge_pull_request",
+    name: "merge_pull_request_demo",
     arguments: {
       owner: "example-org",
       repo: "mpas-demo-repository",
@@ -216,7 +216,7 @@ const insufficientApprovals = await makeActionPackage({
 
 const invalidUnknownApplication = await makeActionPackage({
   payload: {
-    name: "create_issue",
+    name: "create_issue_demo",
     arguments: {
       owner: "example-org",
       repo: "mpas-demo-repository",
@@ -232,7 +232,7 @@ const invalidUnknownApplication = await makeActionPackage({
 
 const invalidDisabledOperation = await makeActionPackage({
   payload: {
-    name: "delete_branch",
+    name: "delete_branch_demo",
     arguments: {
       owner: "example-org",
       repo: "mpas-demo-repository",
@@ -249,7 +249,7 @@ const invalidDisabledOperation = await makeActionPackage({
 
 const invalidResourceRestricted = await makeActionPackage({
   payload: {
-    name: "create_issue",
+    name: "create_issue_demo",
     arguments: {
       owner: "outside-org",
       repo: "restricted-repo",
@@ -264,7 +264,7 @@ const invalidResourceRestricted = await makeActionPackage({
 
 const invalidExpiredEnvelope = await makeActionPackage({
   payload: {
-    name: "create_issue",
+    name: "create_issue_demo",
     arguments: {
       owner: "example-org",
       repo: "mpas-demo-repository",
@@ -310,9 +310,9 @@ const invalidPackages = {
 const githubPlugin = {
   version: "1",
   type: "MpasApplicationPlugin",
-  pluginDid: "did:web:plugins.example.com:github-demo-plugin",
+  pluginDid: "did:web:plugins.oma3.example:github-demo-plugin",
   pluginVersion: "0.1.0",
-  publisherDid: "did:web:wivity.example",
+  publisherDid: "did:web:oma3.example",
   applicationDid: "did:web:github.example",
   executionProfile: {
     id: "did:web:profiles.oma3.org:mcp",
@@ -327,14 +327,14 @@ const githubPlugin = {
     },
   ],
   operations: {
-    delete_branch: {
+    delete_branch_demo: {
       description: "Delete a branch from a GitHub repository.",
       impact: "critical",
       executionPayloadSchema: {
         type: "object",
         required: ["name", "arguments"],
         properties: {
-          name: { const: "delete_branch" },
+          name: { const: "delete_branch_demo" },
           arguments: {
             type: "object",
             required: ["owner", "repo", "branch"],
@@ -349,14 +349,14 @@ const githubPlugin = {
         additionalProperties: false,
       },
     },
-    merge_pull_request: {
+    merge_pull_request_demo: {
       description: "Merge a pull request into its base branch.",
       impact: "high",
       executionPayloadSchema: {
         type: "object",
         required: ["name", "arguments"],
         properties: {
-          name: { const: "merge_pull_request" },
+          name: { const: "merge_pull_request_demo" },
           arguments: {
             type: "object",
             required: ["owner", "repo", "pullNumber", "baseRef", "expectedHeadSha", "mergeMethod"],
@@ -466,7 +466,7 @@ const configs = {
     "github-strict",
     makePolicy({
       policies: {
-        merge_pull_request: [
+        merge_pull_request_demo: [
           {
             description: "Merging into main requires two maintainer approvals.",
             match: {
@@ -482,7 +482,7 @@ const configs = {
             },
           },
         ],
-        delete_branch: [
+        delete_branch_demo: [
           {
             description: "Deleting a branch requires one maintainer approval.",
             requirements: {

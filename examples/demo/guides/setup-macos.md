@@ -530,7 +530,7 @@ args = [
 enabled = true
 ```
 
-This agent sees `create_issue`, `merge_pull_request`, and `delete_branch` — but cannot approve its own actions.
+This agent sees `create_issue_demo`, `merge_pull_request_demo`, and `delete_branch_demo` — but cannot approve its own actions.
 
 ### Maintainer config
 
@@ -647,9 +647,9 @@ A separate maintainer agent approves them before they execute.
 
 ### Your MPAS tools
 
-- `create_issue` — Create a GitHub issue (pass-through, no approval needed)
-- `delete_branch` — Delete a branch (requires 1 maintainer approval)
-- `merge_pull_request` — Merge a PR (requires 1 maintainer approval)
+- `create_issue_demo` — Create a GitHub issue (pass-through, no approval needed)
+- `delete_branch_demo` — Delete a branch (requires 1 maintainer approval)
+- `merge_pull_request_demo` — Merge a PR (requires 1 maintainer approval)
 - `mpas_wait_for_action_result` — Retrieve the result of an Action you proposed
 
 ### How approval works
@@ -728,7 +728,7 @@ other agents, review them for safety, and approve or reject them.
 ## Important
 
 - You cannot propose actions yourself — only review and approve/reject.
-- Be cautious with destructive operations (delete_branch, merge_pull_request).
+- Be cautious with destructive operations (delete_branch_demo, merge_pull_request_demo).
 - If an action looks suspicious, reject it and explain why.
 - Check for pending actions when prompted or when you receive a notification.
 EOF
@@ -795,7 +795,7 @@ The security hardening in Step 1 locked the tool policy to `minimal`. Now open a
 openclaw config set tools.allow '["github-mpas__*", "mpas-coordination__*", "group:web", "read"]' --strict-json
 ```
 
-**Do not use `bundle-mcp`** — OpenClaw rejects it as an unknown entry and silently hides the bridge tools. Use the explicit server globs. MCP tools are exposed to the model namespaced as `<server>__<tool>` (e.g. `github-mpas__create_issue`, `mpas-coordination__mpas_review_action`).
+**Do not use `bundle-mcp`** — OpenClaw rejects it as an unknown entry and silently hides the bridge tools. Use the explicit server globs. MCP tools are exposed to the model namespaced as `<server>__<tool>` (e.g. `github-mpas__create_issue_demo`, `mpas-coordination__mpas_review_action`).
 
 ### Restart and verify
 
@@ -816,7 +816,7 @@ openclaw tui
 
 > what MCP tools do you have available?
 
-The proposer should report `create_issue`, `delete_branch`, `merge_pull_request` (from `github-mpas`) plus the `mpas_*` approval tools (symmetric visibility).
+The proposer should report `create_issue_demo`, `delete_branch_demo`, `merge_pull_request_demo` (from `github-mpas`) plus the `mpas_*` approval tools (symmetric visibility).
 
 ### Interacting with the agents
 
@@ -838,11 +838,11 @@ openclaw tui --session agent:maintainer:main
 
 Now run a wiring check in each session.
 
-In the **proposer** TUI, create an issue — `create_issue` is a pass-through operation (not governed by the plugin), so it completes without any maintainer involvement and confirms the proposer bridge reaches the adapter:
+In the **proposer** TUI, create an issue — `create_issue_demo` is a pass-through operation (not governed by the plugin), so it completes without any maintainer involvement and confirms the proposer bridge reaches the adapter:
 
 > Create an issue titled "MPAS demo test" in `example-org/mpas-demo-repository`.
 
-The proposer should call `create_issue` and report success.
+The proposer should call `create_issue_demo` and report success.
 
 In the **maintainer** TUI, poll for pending approvals:
 
@@ -909,11 +909,11 @@ After Part 3, you have two agents running: a proposer (with GitHub tools) and a 
 
 > Delete the branch `demo/branch-alpha` from `example-org/mpas-demo-repository`.
 
-The proposer bridge submits to the adapter → adapter returns `additionalApprovalsRequired` (policy requires 1 maintainer for `delete_branch`) → bridge submits to coordination and waits.
+The proposer bridge submits to the adapter → adapter returns `additionalApprovalsRequired` (policy requires 1 maintainer for `delete_branch_demo`) → bridge submits to coordination and waits.
 
 **In the maintainer agent:**
 
-> Check for pending MPAS approvals and approve any delete_branch action.
+> Check for pending MPAS approvals and approve any delete_branch_demo action.
 
 The maintainer calls `mpas_list_pending` → `mpas_review_action` → `mpas_approve`. The proposer bridge detects `readyForResubmission`, resubmits, and the adapter dispatches.
 
@@ -925,7 +925,7 @@ The maintainer calls `mpas_list_pending` → `mpas_review_action` → `mpas_appr
 
 > Create an issue titled "MPAS demo test" in `example-org/mpas-demo-repository`.
 
-`create_issue` is not in the application plugin, so the adapter passes it through without policy evaluation — no maintainer involvement needed.
+`create_issue_demo` is not in the application plugin, so the adapter passes it through without policy evaluation — no maintainer involvement needed.
 
 ## 4.3 Merge a PR (1 Maintainer Required)
 
@@ -935,13 +935,13 @@ The maintainer calls `mpas_list_pending` → `mpas_review_action` → `mpas_appr
 
 **In the maintainer agent:**
 
-> Check for pending MPAS approvals and approve any merge_pull_request action.
+> Check for pending MPAS approvals and approve any merge_pull_request_demo action.
 
 **Result:** PR merges after maintainer approval.
 
 ## 4.4 Live GitHub Dispatch
 
-The default demo uses an echo MCP server fixture that simulates GitHub responses. This section replaces the echo fixture with the real `@modelcontextprotocol/server-github` MCP server so that actions actually execute against GitHub.
+The default demo uses an echo MCP server fixture that simulates GitHub responses. This section replaces the echo fixture with a new demo MCP server that provides tools that actually execute against GitHub. 
 
 ### Prerequisites
 
@@ -986,9 +986,9 @@ Under **Repository permissions**, set:
 
 | Permission          | Access level   | Required for                                                                                      |
 | ------------------- | -------------- | ------------------------------------------------------------------------------------------------- |
-| **Contents**        | Read and write | `delete_branch` — uses `DELETE /repos/{owner}/{repo}/git/refs/heads/{branch}`                     |
-| **Issues**          | Read and write | `create_issue` — uses `POST /repos/{owner}/{repo}/issues`                                         |
-| **Pull requests**   | Read and write | `merge_pull_request` — uses `PUT /repos/{owner}/{repo}/pulls/{pull_number}/merge`                 |
+| **Contents**        | Read and write | `delete_branch_demo` — uses `DELETE /repos/{owner}/{repo}/git/refs/heads/{branch}`                     |
+| **Issues**          | Read and write | `create_issue_demo` — uses `POST /repos/{owner}/{repo}/issues`                                         |
+| **Pull requests**   | Read and write | `merge_pull_request_demo` — uses `PUT /repos/{owner}/{repo}/pulls/{pull_number}/merge`                 |
 | **Metadata**        | Read-only      | Auto-selected as a dependency of the above                                                        |
 
 Leave all other permissions at "No access."
@@ -1033,7 +1033,7 @@ Replace `<absolute-path-to>` with the full path to `examples/demo` in your `mpas
 
 Stop the daemon (Ctrl+C) and restart per §2.2. The adapter will now spawn the real GitHub MCP server as its execution target.
 
-**Test `create_issue` (auto-approved):**
+**Test `create_issue_demo` (auto-approved):**
 
 In the proposer agent:
 
@@ -1041,7 +1041,7 @@ In the proposer agent:
 
 This should succeed immediately — no maintainer needed. Verify the issue appears on GitHub.
 
-**Test `delete_branch` (requires 1 maintainer):**
+**Test `delete_branch_demo` (requires 1 maintainer):**
 
 In the proposer agent:
 
@@ -1343,7 +1343,7 @@ Each agent account should only expose the bridge matching its role:
 
 | Account              | MCP server to configure | Tools exposed                                                     |
 | -------------------- | ----------------------- | ----------------------------------------------------------------- |
-| Agent A (proposer)   | `github-mpas`           | `create_issue`, `delete_branch`, `merge_pull_request`             |
+| Agent A (proposer)   | `github-mpas`           | `create_issue_demo`, `delete_branch_demo`, `merge_pull_request_demo`             |
 | Agent B (maintainer) | `mpas-coordination`     | `mpas_list_pending`, `mpas_review_action`, `mpas_approve`, `mpas_reject` |
 
 Do **not** add both MCP servers to one account. The proposer account should only have `github-mpas` (backed by `proposer-bridge.json`); the maintainer account should only have `mpas-coordination` (backed by `maintainer-a-bridge.json`). This ensures each agent sees only the tools appropriate to its role.
@@ -1452,9 +1452,9 @@ agents. You cannot approve your own proposals — only actions from a different 
 
 ## Proposer tools (github-mpas)
 
-- `create_issue` — Create a GitHub issue (pass-through, no other agent needed)
-- `delete_branch` — Delete a branch (requires approval from another agent)
-- `merge_pull_request` — Merge a PR (requires approval from another agent)
+- `create_issue_demo` — Create a GitHub issue (pass-through, no other agent needed)
+- `delete_branch_demo` — Delete a branch (requires approval from another agent)
+- `merge_pull_request_demo` — Merge a PR (requires approval from another agent)
 - `mpas_wait_for_action_result` — Retrieve the result of an Action you proposed
 
 ## Maintainer tools (mpas-coordination)
@@ -1637,13 +1637,13 @@ This means symmetric signers require at least two agents to function. A single s
 **Part 3 — Harness:**
 
 - [ ] Bridges registered in harness config (config.toml / openclaw.json / claude_desktop_config.json)
-- [ ] Agent discovers proposer tools: `create_issue`, `delete_branch`, `merge_pull_request`
+- [ ] Agent discovers proposer tools: `create_issue_demo`, `delete_branch_demo`, `merge_pull_request_demo`
 - [ ] Agent discovers maintainer tools: `mpas_list_pending`, `mpas_review_action`, `mpas_approve`, `mpas_reject`
 
 **Part 4 — Demo:**
 
-- [ ] `create_issue` executes immediately (auto-approved)
-- [ ] `delete_branch` returns a deferred Action reference without blocking
+- [ ] `create_issue_demo` executes immediately (auto-approved)
+- [ ] `delete_branch_demo` returns a deferred Action reference without blocking
 - [ ] After maintainer approval, `mpas_wait_for_action_result` returns the execution result
 - [ ] Live GitHub (§4.4): branch actually deleted after approval
 
