@@ -115,7 +115,7 @@ examples/
       signer-server/            MPAS Signer MCP Server (standalone, per-agent)
       core/                     Re-exports from @oma3/mpas (thin barrel files)
       cli/                      CLI commands (daemon management, trace inspection)
-    tests/                      280+ tests (unit, integration, e2e)
+    tests/                      270+ tests (unit, integration, e2e)
 application-registry/
   *.json                        One JSON file per application
 conformance/
