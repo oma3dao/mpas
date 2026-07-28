@@ -53,7 +53,7 @@ Publish the prerelease:
 
 ```sh
 npm publish --access public --tag alpha
-npm dist-tag add @oma3/mpas@0.1.0-alpha.1 latest
+npm dist-tag add @oma3/mpas@0.1.0-alpha.N latest
 ```
 
 Confirm the published version and dist-tags:
