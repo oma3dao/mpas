@@ -5,6 +5,7 @@
 export {
   evaluatePolicy,
   checkProposerAuthorization,
+  validatePolicyConfig,
 } from "@oma3/mpas/policy-engine";
 
 export type {
@@ -17,6 +18,7 @@ export type {
   ConditionSource,
   ConditionOp,
   PolicyResult,
+  PolicyConfigValidationResult,
   UnsatisfiedThreshold,
   Requirement,
   ProposerOnlyRequirement,

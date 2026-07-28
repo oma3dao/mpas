@@ -77,6 +77,10 @@ export interface RejectPolicyEntry extends PolicyEntryBase {
 
 export type PolicyEntry = RequirementPolicyEntry | RejectPolicyEntry;
 
+export type PolicyConfigValidationResult =
+  | { ok: true }
+  | { ok: false; message: string };
+
 // ---------------------------------------------------------------------------
 // Conditions (per spec §5.4)
 // ---------------------------------------------------------------------------
@@ -137,6 +141,179 @@ export type PolicyResult =
 export type ProposerGateResult =
   | { allowed: true }
   | { allowed: false; code: "PROPOSER_NOT_AUTHORIZED"; message: string };
+
+/**
+ * Validates the executable subset of the MPAS JSON Verifier Policy Profile.
+ *
+ * TypeScript types alone are not validation: deployment policy arrives as
+ * JSON, so a conforming adapter must reject malformed requirement expressions
+ * before evaluating an Action Package. This function deliberately does not
+ * apply an organization's approval policy; it only enforces profile shape and
+ * deterministic requirement semantics.
+ */
+export function validatePolicyConfig(policy: PolicyConfig): PolicyConfigValidationResult {
+  if (!isRecord(policy) || !isRecord(policy.signerGroups)) {
+    return { ok: false, message: "Policy must define signerGroups." };
+  }
+  const rawPolicy = policy as unknown as Record<string, unknown>;
+  if ("context" in rawPolicy && rawPolicy.context !== undefined && !isRecord(rawPolicy.context)) {
+    return { ok: false, message: "Policy context must be an object." };
+  }
+
+  const signerGroups = policy.signerGroups;
+  if (!isDidArray(signerGroups.all)) {
+    return { ok: false, message: "Policy signerGroups.all must be a non-empty array of unique DIDs." };
+  }
+
+  for (const [groupName, signers] of Object.entries(signerGroups)) {
+    if (!isDidArray(signers)) {
+      return { ok: false, message: `Policy signerGroups.${groupName} must be a non-empty array of unique DIDs.` };
+    }
+  }
+
+  const defaultError = validateRequirement(policy.defaultRequirement, signerGroups, "defaultRequirement");
+  if (defaultError) return { ok: false, message: defaultError };
+
+  if (policy.policies !== undefined) {
+    if (!isRecord(policy.policies)) {
+      return { ok: false, message: "Policy policies must be an object keyed by operation name." };
+    }
+    for (const [operation, entries] of Object.entries(policy.policies)) {
+      if (!Array.isArray(entries)) {
+        return { ok: false, message: `Policy policies.${operation} must be an array.` };
+      }
+      for (const [index, entry] of entries.entries()) {
+        const entryError = validatePolicyEntry(entry, signerGroups, `policies.${operation}[${index}]`);
+        if (entryError) return { ok: false, message: entryError };
+      }
+    }
+  }
+
+  return { ok: true };
+}
+
+function validatePolicyEntry(
+  entry: unknown,
+  signerGroups: Record<string, Did[]>,
+  path: string,
+): string | null {
+  if (!isRecord(entry)) return `${path} must be an object.`;
+  if (hasUnexpectedKeys(entry, ["reject", "description", "match", "requirements", "context"])) {
+    return `${path} has unsupported fields.`;
+  }
+  const isReject = entry.reject === true;
+  const hasRequirements = "requirements" in entry;
+  if (isReject === hasRequirements) {
+    return `${path} must contain either reject: true or requirements, but not both.`;
+  }
+  if (entry.reject !== undefined && entry.reject !== true && entry.reject !== false) {
+    return `${path}.reject must be a boolean.`;
+  }
+  if (entry.description !== undefined && typeof entry.description !== "string") {
+    return `${path}.description must be a string.`;
+  }
+  if (entry.context !== undefined && !isRecord(entry.context)) {
+    return `${path}.context must be an object.`;
+  }
+  if (!isReject) {
+    if (entry.reject === true) return `${path}.reject must be false when requirements are present.`;
+    const requirementError = validateRequirement(entry.requirements, signerGroups, `${path}.requirements`);
+    if (requirementError) return requirementError;
+  }
+  return validateMatch(entry.match, `${path}.match`);
+}
+
+function validateMatch(value: unknown, path: string): string | null {
+  if (value === undefined) return null;
+  if (!isRecord(value)) return `${path} must be an object.`;
+  if (hasUnexpectedKeys(value, ["conditions"])) return `${path} has unsupported fields.`;
+  if (value.conditions !== undefined && !Array.isArray(value.conditions)) {
+    return `${path}.conditions must be an array.`;
+  }
+  for (const [index, condition] of ((value.conditions as unknown[] | undefined) ?? []).entries()) {
+    if (!isRecord(condition)) return `${path}.conditions[${index}] must be an object.`;
+    if (hasUnexpectedKeys(condition, ["source", "path", "op", "value"])) {
+      return `${path}.conditions[${index}] has unsupported fields.`;
+    }
+    if (condition.source !== "executionPayload" && condition.source !== "actionEnvelope") {
+      return `${path}.conditions[${index}].source is invalid.`;
+    }
+    if (typeof condition.op !== "string" || !CONDITION_OPERATORS.has(condition.op as ConditionOp)) {
+      return `${path}.conditions[${index}].op is invalid.`;
+    }
+    if (condition.op !== "exists" && condition.op !== "notExists" && typeof condition.path !== "string") {
+      return `${path}.conditions[${index}].path is required.`;
+    }
+  }
+  return null;
+}
+
+function validateRequirement(
+  requirement: unknown,
+  signerGroups: Record<string, Did[]>,
+  path: string,
+): string | null {
+  if (!isRecord(requirement) || typeof requirement.type !== "string") {
+    return `${path} must be an approval requirement object.`;
+  }
+  switch (requirement.type) {
+    case "proposerOnly":
+      return Object.keys(requirement).length === 1 ? null : `${path}.proposerOnly has unsupported fields.`;
+    case "threshold": {
+      if (hasUnexpectedKeys(requirement, ["type", "threshold", "eligibleSignerGroup", "eligibleSigners", "decision", "description"])) {
+        return `${path}.threshold has unsupported fields.`;
+      }
+      if (!Number.isInteger(requirement.threshold) || (requirement.threshold as number) < 1) {
+        return `${path}.threshold must be a positive integer.`;
+      }
+      const hasGroup = typeof requirement.eligibleSignerGroup === "string" && requirement.eligibleSignerGroup.length > 0;
+      const hasSigners = isDidArray(requirement.eligibleSigners);
+      if (hasGroup === hasSigners) {
+        return `${path} must define exactly one of eligibleSignerGroup or eligibleSigners.`;
+      }
+      if (hasGroup && !signerGroups[requirement.eligibleSignerGroup as string]) {
+        return `${path}.eligibleSignerGroup does not exist in signerGroups.`;
+      }
+      if (requirement.decision === "reject" ||
+          (requirement.decision !== undefined && !["approve", "propose", "abstain"].includes(requirement.decision as string))) {
+        return `${path}.decision is invalid.`;
+      }
+      if (requirement.description !== undefined && typeof requirement.description !== "string") {
+        return `${path}.description must be a string.`;
+      }
+      return null;
+    }
+    case "allOf":
+    case "anyOf": {
+      if (hasUnexpectedKeys(requirement, ["type", "requirements"])) {
+        return `${path}.${requirement.type} has unsupported fields.`;
+      }
+      if (!Array.isArray(requirement.requirements) || requirement.requirements.length === 0) {
+        return `${path}.requirements must be a non-empty array.`;
+      }
+      for (const [index, nested] of requirement.requirements.entries()) {
+        const nestedError = validateRequirement(nested, signerGroups, `${path}.requirements[${index}]`);
+        if (nestedError) return nestedError;
+      }
+      return null;
+    }
+    default:
+      return `${path}.type is invalid.`;
+  }
+}
+
+const CONDITION_OPERATORS = new Set<ConditionOp>([
+  "eq", "neq", "in", "notIn", "gt", "gte", "lt", "lte", "exists", "notExists", "contains", "prefix",
+]);
+
+function isDidArray(value: unknown): value is Did[] {
+  return Array.isArray(value) && value.length > 0 && value.every((did) => typeof did === "string" && did.length > 0) &&
+    new Set(value).size === value.length;
+}
+
+function hasUnexpectedKeys(value: Record<string, unknown>, allowed: string[]): boolean {
+  return Object.keys(value).some((key) => !allowed.includes(key));
+}
 
 /**
  * Proposer gating (JSON Verifier Policy Profile): the Verifier MUST reject any

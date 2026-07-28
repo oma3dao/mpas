@@ -8,7 +8,7 @@ import { sha256 } from "multiformats/hashes/sha2";
 import { base32 } from "multiformats/bases/base32";
 import { loadPlugin, type MpasApplicationPlugin } from "../core/plugin-loader.js";
 import type { Did } from "../core/types.js";
-import type { PolicyConfig, PolicyEntry } from "../core/policy-engine.js";
+import { validatePolicyConfig, type PolicyConfig, type PolicyEntry, type Requirement } from "../core/policy-engine.js";
 import type { McpHttpTarget } from "./dispatch/mcp-http.js";
 import type { McpStdioTarget } from "./dispatch/mcp-stdio.js";
 import { buildTrustReport, type TrustContext } from "./trust.js";
@@ -87,7 +87,9 @@ export interface DeploymentConfigLoadError {
     | "PLUGIN_REFERENCE_MISMATCH"
     | "PLUGIN_HASH_MISMATCH"
     | "PLUGIN_TRUST_REJECTED"
-  | "DUPLICATE_APPLICATION_DID";
+    | "POLICY_REFERENCE_MISMATCH"
+    | "DEFAULT_REQUIREMENT_UNSATISFIABLE"
+    | "DUPLICATE_APPLICATION_DID";
   message: string;
   path: string;
   details?: unknown;
@@ -181,13 +183,21 @@ const deploymentConfigSchema = {
     executionTarget: { type: "object", required: ["type"] },
     policy: {
       type: "object",
-      required: ["version", "type", "applicationDid", "executionProfile", "defaultRequirement", "signerGroups"],
+      required: ["version", "type", "policyProfileUrl", "applicationDid", "executionProfile", "defaultRequirement", "signerGroups"],
       properties: {
         version: { const: "1" },
         type: { const: "MpasApplicationPolicy" },
-        policyProfileUrl: { type: "string" },
+        policyProfileUrl: { const: "https://github.com/oma3dao/mpas/blob/main/specs/mpas-profile-policy-json.md" },
         applicationDid: { type: "string", pattern: "^did:[a-z0-9]+:.+" },
-        executionProfile: { type: "object", required: ["id"] },
+        executionProfile: {
+          type: "object",
+          required: ["id"],
+          properties: {
+            id: { type: "string", pattern: "^did:[a-z0-9]+:.+" },
+            format: { type: "string", minLength: 1 },
+          },
+          additionalProperties: false,
+        },
         defaultRequirement: { type: "object", required: ["type"] },
         signerGroups: {
           type: "object",
@@ -201,8 +211,9 @@ const deploymentConfigSchema = {
             items: policyEntrySchema,
           },
         },
-        context: {},
+        context: { type: "object", additionalProperties: true },
       },
+      additionalProperties: false,
     },
     signerKeys: {
       type: "array",
@@ -312,6 +323,14 @@ async function loadDeploymentConfigFile(
 
   const config = parsed as unknown as DeploymentConfig;
 
+  const policyValidation = validatePolicyConfig(config.policy);
+  if (!policyValidation.ok) {
+    return loadError("CONFIG_SCHEMA_INVALID", `Policy does not conform to the MPAS JSON Verifier Policy Profile: ${policyValidation.message}`, filePath);
+  }
+
+  const defaultRequirementError = validateDefaultRequirement(config, filePath);
+  if (defaultRequirementError) return defaultRequirementError;
+
   // Signer key validation. For did:jwk identities the DID is the source of
   // truth: a configured publicJwk must match the key embedded in the DID.
   // For other DID methods a publicJwk is required.
@@ -351,6 +370,26 @@ async function loadDeploymentConfigFile(
     pluginResult.plugin.applicationDid !== config.target.applicationDid
   ) {
     return loadError("PLUGIN_REFERENCE_MISMATCH", "Deployment config plugin reference does not match plugin.", filePath);
+  }
+
+  if (config.policy.applicationDid !== config.target.applicationDid) {
+    return loadError(
+      "POLICY_REFERENCE_MISMATCH",
+      "Policy applicationDid does not match the deployment target applicationDid.",
+      filePath,
+    );
+  }
+
+  if (
+    config.policy.executionProfile.id !== pluginResult.plugin.executionProfile.id ||
+    (config.policy.executionProfile.format !== undefined &&
+      config.policy.executionProfile.format !== pluginResult.plugin.executionProfile.format)
+  ) {
+    return loadError(
+      "POLICY_REFERENCE_MISMATCH",
+      "Policy executionProfile does not match the Application Plugin executionProfile.",
+      filePath,
+    );
   }
 
   const actualArtifactDid = await computeArtifactDid(pluginResult.plugin);
@@ -409,6 +448,66 @@ export async function computeArtifactDid(value: unknown): Promise<string> {
   const hash = await sha256.digest(bytes);
   const cid = CID.createV1(raw.code, hash);
   return `did:artifact:${cid.toString(base32)}`;
+}
+
+/**
+ * Threshold requirements are checked here so a daemon cannot start with an
+ * approval rule that no permitted proposer can ever satisfy because
+ * self-approval is excluded. `proposerOnly` is already an explicit choice in a
+ * required field and needs no second acknowledgement.
+ */
+function validateDefaultRequirement(
+  config: DeploymentConfig,
+  filePath: string,
+): { ok: false; error: DeploymentConfigLoadError } | null {
+  const requirement = config.policy.defaultRequirement;
+
+  const proposers = config.policy.signerGroups.proposers ?? config.policy.signerGroups.all;
+  const unsatisfiedProposer = proposers.find(
+    (proposerDid) => !isRequirementSatisfiableForProposer(requirement, config.policy, proposerDid),
+  );
+  if (unsatisfiedProposer) {
+    return loadError(
+      "DEFAULT_REQUIREMENT_UNSATISFIABLE",
+      `policy.defaultRequirement cannot be satisfied for permitted proposer ${unsatisfiedProposer}. ` +
+        "Check threshold signer groups and account for self-approval exclusion.",
+      filePath,
+    );
+  }
+
+  return null;
+}
+
+/**
+ * Mirrors threshold eligibility at configuration load time. It does not
+ * authorize an action; it only rejects a default that is impossible to meet.
+ */
+function isRequirementSatisfiableForProposer(
+  requirement: Requirement,
+  policy: MpasApplicationPolicy,
+  proposerDid: Did,
+): boolean {
+  switch (requirement.type) {
+    case "proposerOnly":
+      return true;
+    case "threshold": {
+      if (!Number.isInteger(requirement.threshold) || requirement.threshold < 1) return false;
+      const eligibleSigners = requirement.eligibleSigners ??
+        (requirement.eligibleSignerGroup ? policy.signerGroups[requirement.eligibleSignerGroup] : undefined);
+      if (!eligibleSigners) return false;
+      return eligibleSigners.filter((signerDid) => signerDid !== proposerDid).length >= requirement.threshold;
+    }
+    case "allOf":
+      return requirement.requirements.every((nested) =>
+        isRequirementSatisfiableForProposer(nested, policy, proposerDid),
+      );
+    case "anyOf":
+      return requirement.requirements.some((nested) =>
+        isRequirementSatisfiableForProposer(nested, policy, proposerDid),
+      );
+    default:
+      return false;
+  }
 }
 
 function loadError(

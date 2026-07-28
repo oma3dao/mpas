@@ -119,6 +119,14 @@ Production deployments SHOULD require at least one non-proposer approval as the 
 }
 ```
 
+### 4.5.1 Explicit Single-Party Defaults
+
+`proposerOnly` is a valid policy requirement, but it permits a governed
+operation to execute without an independent Approval. This is explicit by
+construction: `defaultRequirement` is mandatory, there is no implicit default,
+and threshold requirements MUST use a positive integer. An operator therefore
+selects a single-party default by deliberately authoring `proposerOnly`.
+
 The default requirement MUST NOT be used to execute an unknown, unsupported, or malformed action. Operation support and payload validation are determined by the Verifier under the declared execution profile, not by the absence of a matching policy.
 
 **Scope — governed operations only.** `defaultRequirement` is the baseline for *governed* operations: those present in the Application Plugin or named by a policy entry. It does not apply to operations a deployment routes as pass-through (see the MCP Execution Profile §5 step 2): a pass-through operation executes on the Proposer's verified signature alone, after proposer gating (4.6), with no schema validation and no policy evaluation. This is the plugin-anchored trust model: the plugin publisher defines the governed surface, and `defaultRequirement` is the operator's baseline within it. Operators who instead require every conceivable operation to be governed should enumerate all operations in the plugin/policy or configure their deployment to deny pass-through routing (a hardening option, not the default).
@@ -141,7 +149,7 @@ Example shape:
 {
   "version": "1",
   "type": "MpasApplicationPolicy",
-  "policyProfileUrl": "https://oma3.org/specs/mpas/policy-json/v1",
+  "policyProfileUrl": "https://github.com/oma3dao/mpas/blob/main/specs/mpas-profile-policy-json.md",
   "applicationDid": "did:web:payments.example",
   "executionProfile": {
     "id": "did:web:profiles.oma3.org:mcp",
@@ -205,7 +213,7 @@ Field definitions:
 | :--- | :---: | :--- |
 | `version` | Yes | Policy schema version. For this profile, MUST be `"1"`. |
 | `type` | Yes | MUST be `"MpasApplicationPolicy"`. |
-| `policyProfileUrl` | Yes | URL identifying the policy profile this document conforms to. For this profile, MUST be `"https://oma3.org/specs/mpas/policy-json/v1"`. |
+| `policyProfileUrl` | Yes | URL identifying the policy profile this document conforms to. For this profile, MUST be `"https://github.com/oma3dao/mpas/blob/main/specs/mpas-profile-policy-json.md"`. |
 | `applicationDid` | Yes | DID of the Application governed by this policy. |
 | `executionProfile.id` | Yes | DID of the execution profile this policy assumes. Conditions referencing `executionPayload` paths are only meaningful under this profile. |
 | `executionProfile.format` | Optional | Specific payload format under the execution profile for narrower matching. |
@@ -630,7 +638,7 @@ A development or testing environment where the operator accepts self-approval ri
 {
   "version": "1",
   "type": "MpasApplicationPolicy",
-  "policyProfileUrl": "https://oma3.org/specs/mpas/policy-json/v1",
+  "policyProfileUrl": "https://github.com/oma3dao/mpas/blob/main/specs/mpas-profile-policy-json.md",
   "applicationDid": "did:web:dev-tools.example",
   "executionProfile": {
     "id": "did:web:profiles.oma3.org:mcp",
@@ -653,7 +661,7 @@ This does not mean arbitrary actions are supported. The Verifier or Application 
 {
   "version": "1",
   "type": "MpasApplicationPolicy",
-  "policyProfileUrl": "https://oma3.org/specs/mpas/policy-json/v1",
+  "policyProfileUrl": "https://github.com/oma3dao/mpas/blob/main/specs/mpas-profile-policy-json.md",
   "applicationDid": "did:web:treasury.example",
   "executionProfile": {
     "id": "did:web:profiles.oma3.org:mcp",
@@ -752,7 +760,7 @@ Because policies are keyed by action name and the value is an array, all matchin
 {
   "version": "1",
   "type": "MpasApplicationPolicy",
-  "policyProfileUrl": "https://oma3.org/specs/mpas/policy-json/v1",
+  "policyProfileUrl": "https://github.com/oma3dao/mpas/blob/main/specs/mpas-profile-policy-json.md",
   "applicationDid": "did:web:storage.example",
   "executionProfile": {
     "id": "did:web:profiles.oma3.org:mcp",
@@ -799,7 +807,7 @@ Because policies are keyed by action name and the value is an array, all matchin
 {
   "version": "1",
   "type": "MpasApplicationPolicy",
-  "policyProfileUrl": "https://oma3.org/specs/mpas/policy-json/v1",
+  "policyProfileUrl": "https://github.com/oma3dao/mpas/blob/main/specs/mpas-profile-policy-json.md",
   "applicationDid": "did:web:github-adapter.example",
   "executionProfile": {
     "id": "did:web:profiles.oma3.org:mcp",
@@ -918,6 +926,9 @@ A Verifier conforming to this profile MUST:
 
 - parse and validate `MpasApplicationPolicy` objects with `version: "1"`;
 - reject policies that omit required fields (`defaultRequirement`, `signerGroups`, `signerGroups.all`);
+- validate requirement expressions, including positive threshold values,
+  exactly-one eligible-signer source, non-empty composed requirements, and
+  references to defined signer groups;
 - reject invalid `reject`/`requirements` combinations;
 - reject or ignore unsupported policy versions according to deployment policy;
 - ensure `applicationDid` matches the Action Envelope target Application DID and `executionProfile.id` matches the Action Envelope execution profile;
@@ -1079,7 +1090,7 @@ This appendix defines a JSON Schema for structural validation of `MpasApplicatio
       "const": "MpasApplicationPolicy"
     },
     "policyProfileUrl": {
-      "const": "https://oma3.org/specs/mpas/policy-json/v1"
+      "const": "https://github.com/oma3dao/mpas/blob/main/specs/mpas-profile-policy-json.md"
     },
     "applicationDid": {
       "type": "string",

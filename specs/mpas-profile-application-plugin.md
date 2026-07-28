@@ -706,11 +706,16 @@ This profile does not define the artifact method or distribution record format.
 
 An operator uses the plugin's operation catalog and impact metadata to author an `MpasApplicationPolicy`. The plugin does not contain or suggest policy — the operator defines requirements appropriate to their organization.
 
+For a normal multi-party deployment, the operator SHOULD use a threshold of at
+least one independent maintainer as `defaultRequirement`, so every plugin
+operation is reviewed unless a stricter operation-specific rule applies. An
+operator may intentionally select `proposerOnly`.
+
 ```json
 {
   "version": "1",
   "type": "MpasApplicationPolicy",
-  "policyProfileUrl": "https://oma3.org/specs/mpas/policy-json/v1",
+  "policyProfileUrl": "https://github.com/oma3dao/mpas/blob/main/specs/mpas-profile-policy-json.md",
   "applicationDid": "did:web:github.com",
   "executionProfile": {
     "id": "did:web:profiles.oma3.org:mcp",

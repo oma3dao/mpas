@@ -28,6 +28,7 @@ export * from "./lib/mcp-payload.js";
 export {
   evaluatePolicy,
   checkProposerAuthorization,
+  validatePolicyConfig,
   UnparseableNumericValueError,
   type ProposerGateResult,
   type PolicyConfig,
@@ -38,6 +39,7 @@ export {
   type ConditionSource,
   type ConditionOp,
   type PolicyResult,
+  type PolicyConfigValidationResult,
   type UnsatisfiedThreshold,
   type Requirement,
   type ProposerOnlyRequirement,

@@ -85,6 +85,141 @@ describe("loadDeploymentConfigs", () => {
     });
   });
 
+  it("rejects a policy that omits policyProfileUrl", async () => {
+    const { configDir } = await tempFixtureConfigDir();
+    const config = await readJson<Record<string, unknown>>(
+      join(fixturesDir, "configs", "github-mirror-adapter-config.json"),
+    );
+    delete (config.policy as Record<string, unknown>).policyProfileUrl;
+    await writeJson(join(configDir, "github-mirror.json"), config);
+
+    const result = await loadDeploymentConfigs(configDir, { confirmPluginUse: approvePluginUse });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "CONFIG_SCHEMA_INVALID" },
+    });
+  });
+
+  it("rejects a policy with an unsupported policyProfileUrl", async () => {
+    const { configDir } = await tempFixtureConfigDir();
+    const config = await readJson<Record<string, unknown>>(
+      join(fixturesDir, "configs", "github-mirror-adapter-config.json"),
+    );
+    (config.policy as Record<string, unknown>).policyProfileUrl = "https://example.invalid/policy-profile";
+    await writeJson(join(configDir, "github-mirror.json"), config);
+
+    const result = await loadDeploymentConfigs(configDir, { confirmPluginUse: approvePluginUse });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "CONFIG_SCHEMA_INVALID" },
+    });
+  });
+
+  it("rejects a policy that omits defaultRequirement", async () => {
+    const { configDir } = await tempFixtureConfigDir();
+    const config = await readJson<Record<string, unknown>>(
+      join(fixturesDir, "configs", "github-mirror-adapter-config.json"),
+    );
+    delete (config.policy as Record<string, unknown>).defaultRequirement;
+    await writeJson(join(configDir, "github-mirror.json"), config);
+
+    const result = await loadDeploymentConfigs(configDir, { confirmPluginUse: approvePluginUse });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "CONFIG_SCHEMA_INVALID" },
+    });
+  });
+
+  it("rejects a policy applicationDid that differs from the deployment target", async () => {
+    const { configDir } = await tempFixtureConfigDir();
+    const config = await readJson<Record<string, unknown>>(
+      join(fixturesDir, "configs", "github-mirror-adapter-config.json"),
+    );
+    (config.policy as Record<string, unknown>).applicationDid = "did:web:other.example";
+    await writeJson(join(configDir, "github-mirror.json"), config);
+
+    const result = await loadDeploymentConfigs(configDir, { confirmPluginUse: approvePluginUse });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "POLICY_REFERENCE_MISMATCH" },
+    });
+  });
+
+  it("rejects a policy execution-profile ID that differs from the plugin", async () => {
+    const { configDir } = await tempFixtureConfigDir();
+    const config = await readJson<Record<string, unknown>>(
+      join(fixturesDir, "configs", "github-mirror-adapter-config.json"),
+    );
+    const policy = config.policy as { executionProfile: Record<string, unknown> };
+    policy.executionProfile.id = "did:web:profiles.example:other";
+    await writeJson(join(configDir, "github-mirror.json"), config);
+
+    const result = await loadDeploymentConfigs(configDir, { confirmPluginUse: approvePluginUse });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "POLICY_REFERENCE_MISMATCH" },
+    });
+  });
+
+  it("rejects a policy execution-profile format that differs from the plugin", async () => {
+    const { configDir } = await tempFixtureConfigDir();
+    const config = await readJson<Record<string, unknown>>(
+      join(fixturesDir, "configs", "github-mirror-adapter-config.json"),
+    );
+    const policy = config.policy as { executionProfile: Record<string, unknown> };
+    policy.executionProfile.format = "different.format";
+    await writeJson(join(configDir, "github-mirror.json"), config);
+
+    const result = await loadDeploymentConfigs(configDir, { confirmPluginUse: approvePluginUse });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "POLICY_REFERENCE_MISMATCH" },
+    });
+  });
+
+  it("accepts an explicitly authored proposer-only default", async () => {
+    const { configDir } = await tempFixtureConfigDir();
+    const config = await readJson<Record<string, unknown>>(
+      join(fixturesDir, "configs", "policy-fixtures", "github-auto-approve.json"),
+    );
+    config.plugin = {
+      ...(config.plugin as Record<string, unknown>),
+      path: "../plugins/github-mirror-plugin.json",
+    };
+    await writeJson(join(configDir, "github-auto-approve.json"), config);
+
+    const result = await loadDeploymentConfigs(configDir, { confirmPluginUse: approvePluginUse });
+
+    expect(result.ok).toBe(true);
+  });
+
+  it("rejects a default maintainer threshold that no permitted proposer can satisfy", async () => {
+    const { configDir } = await tempFixtureConfigDir();
+    const config = await readJson<Record<string, unknown>>(
+      join(fixturesDir, "configs", "github-mirror-adapter-config.json"),
+    );
+    const policy = config.policy as { signerGroups: Record<string, unknown> };
+    // A non-empty group is still impossible when it contains only the caller:
+    // MPAS never counts a proposer as an approver of its own Action.
+    policy.signerGroups.maintainers = [
+      (policy.signerGroups.proposers as string[])[0],
+    ];
+    await writeJson(join(configDir, "github-mirror.json"), config);
+
+    const result = await loadDeploymentConfigs(configDir, { confirmPluginUse: approvePluginUse });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "DEFAULT_REQUIREMENT_UNSATISFIABLE" },
+    });
+  });
+
   it("rejects a reject policy entry that also contains requirements", async () => {
     const { configDir } = await tempFixtureConfigDir();
     const config = await readJson<Record<string, unknown>>(join(fixturesDir, "configs", "policy-fixtures", "github-auto-approve.json"));

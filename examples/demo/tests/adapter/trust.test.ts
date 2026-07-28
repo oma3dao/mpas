@@ -47,7 +47,7 @@ const fakeConfig: DeploymentConfig = {
   policy: {
     version: "1",
     type: "MpasApplicationPolicy",
-    policyProfileUrl: "https://oma3.org/specs/mpas/policy-json/v1",
+    policyProfileUrl: "https://github.com/oma3dao/mpas/blob/main/specs/mpas-profile-policy-json.md",
     applicationDid: "did:web:github-mirror.example",
     executionProfile: { id: "did:web:profiles.oma3.org:mcp", format: "mcp.toolsCall" },
     defaultRequirement: { type: "proposerOnly" },

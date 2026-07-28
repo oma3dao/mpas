@@ -301,6 +301,13 @@ For evaluation semantics and the derived `TrustContext` structure, see the
 
 **The governance boundary:** anything outside the governed set is routed as pass-through — after proposer gating and signature verification it executes with the adapter's credential on the proposer's signature alone, and `defaultRequirement` does not apply. This is the plugin-anchored trust model: the plugin publisher decides which operations need governance, and the operator accepts that boundary after reviewing available OMATrust attestation and target-linkage evidence. The demo exposes `create_issue_mirror` this way on purpose to demonstrate the boundary. If you care about an operation, put it in the plugin or give it a policy entry; power users can refuse ungoverned operations entirely with `passThrough: "deny"`.
 
+**Safe default-policy setup:** Use a positive threshold with a maintainer group
+for `policy.defaultRequirement`; this covers every plugin operation unless an
+operation-specific policy is different. The Adapter checks at startup that the
+requirement is satisfiable for every configured proposer after excluding
+self-approval. A deliberate single-party default is explicitly authored as
+`{ "type": "proposerOnly" }`.
+
 ### Bridge Config
 
 The bridge config lives on the agent side and tells the MCP Bridge how to connect to the adapter. The adapter never reads bridge configs.
