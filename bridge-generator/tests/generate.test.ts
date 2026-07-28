@@ -55,6 +55,7 @@ describe("runGenerate", () => {
     const bridgeSource = await readFile(join(appDir, "bridge", "src", "index.ts"), "utf8");
     const tools = await readJson<Array<Record<string, unknown>>>(join(appDir, "bridge", "src", "tools.json"));
     const bridgePackage = await readJson<{
+      license: string;
       scripts: { build: string };
       dependencies: Record<string, string>;
     }>(join(appDir, "bridge", "package.json"));
@@ -68,6 +69,7 @@ describe("runGenerate", () => {
       annotations: { destructiveHint: false },
       _meta: { "example.test/category": "issues" },
     });
+    expect(bridgePackage.license).toBe("Apache-2.0");
     expect(bridgePackage.scripts.build).toContain("copyFileSync('src/tools.json', 'dist/tools.json')");
     expect(bridgePackage.dependencies["@oma3/mpas"]).toBe("^0.1.0-alpha.2");
   });

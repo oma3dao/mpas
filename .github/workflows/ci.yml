@@ -1,0 +1,107 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    name: ci
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            sdk/protocol/package-lock.json
+            bridge-generator/package-lock.json
+            examples/demo/package-lock.json
+
+      - name: Install SDK
+        working-directory: sdk/protocol
+        run: npm ci
+
+      - name: Typecheck SDK
+        working-directory: sdk/protocol
+        run: npm run typecheck
+
+      - name: Build SDK
+        working-directory: sdk/protocol
+        run: npm run build
+
+      - name: Install bridge generator
+        working-directory: bridge-generator
+        run: npm ci
+
+      - name: Build bridge generator
+        working-directory: bridge-generator
+        run: npm run build
+
+      - name: Install demo
+        working-directory: examples/demo
+        run: npm ci
+
+      - name: Typecheck demo
+        working-directory: examples/demo
+        run: npm run typecheck
+
+      - name: Build demo
+        working-directory: examples/demo
+        run: npm run build
+
+  test:
+    name: test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            sdk/protocol/package-lock.json
+            bridge-generator/package-lock.json
+            examples/demo/package-lock.json
+
+      - name: Install SDK
+        working-directory: sdk/protocol
+        run: npm ci
+
+      - name: Test SDK
+        working-directory: sdk/protocol
+        run: npm test
+
+      - name: Build SDK for demo
+        working-directory: sdk/protocol
+        run: npm run build
+
+      - name: Install bridge generator
+        working-directory: bridge-generator
+        run: npm ci
+
+      - name: Test bridge generator
+        working-directory: bridge-generator
+        run: npm test
+
+      - name: Install demo
+        working-directory: examples/demo
+        run: npm ci
+
+      - name: Test demo
+        working-directory: examples/demo
+        run: npm test

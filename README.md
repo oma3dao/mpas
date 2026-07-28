@@ -1,15 +1,25 @@
 # mpas
 
+> [!WARNING]
+> **Experimental alpha.** MPAS is not production-ready or independently
+> audited. Breaking changes are expected. The current reference application is
+> GitHub; other integrations are planned.
+
 Canonical repository for the MPAS (Multi-Party Action Security) standard and reference implementation.
 
 MPAS is a protocol for multi-party approval of AI agent actions. Instead of giving agents direct access to privileged APIs, MPAS routes actions through a Credential Adapter that enforces policy-based approval workflows before execution. No single agent can both propose and approve the same action.
 
-## License and Participation
+## License and participation
 
-- Code is licensed under [MIT](./LICENSE)
-- Contributor terms are defined in [CONTRIBUTING.md](./CONTRIBUTING.md)
+Software and other contributions to this repository are licensed under the
+[Apache License 2.0](./LICENSE).
 
-This initial version is MIT-licensed to maximize transparency and adoption. OMA3 standards and schemas remain governed by [OMA3's IPR Policy](https://www.oma3.org/intellectual-property-rights-policy).
+By submitting material for inclusion in this repository, contributors agree
+that it may be distributed under the Apache License 2.0.
+
+Final OMA3 Specifications are separately governed by
+[OMA3's Intellectual Property Rights Policy](https://www.oma3.org/intellectual-property-rights-policy)
+and applicable OMA3 review and approval processes.
 
 ## What This Repository Contains
 
@@ -123,10 +133,3 @@ Each example in `examples/` is self-contained with its own build tooling. The de
 - Feature documentation: `docs/features/`
 - Demo setup guide: `examples/demo/guides/`
 - Application registry: `application-registry/`
-
-## License and Participation
-
-- Code is licensed under [MIT](./LICENSE)
-- Contributor terms are defined in [CONTRIBUTING.md](./CONTRIBUTING.md)
-
-This repository is MIT-licensed to maximize transparency and adoption. OMA3 standards and schemas remain governed by [OMA3's IPR Policy](https://www.oma3.org/intellectual-property-rights-policy).

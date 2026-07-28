@@ -4,7 +4,7 @@
   "description": "MPAS local services — Credential Adapter daemon and Coordination Service",
   "type": "module",
   "private": true,
-  "license": "MIT",
+  "license": "Apache-2.0",
   "bin": {
     "mpas": "./dist/cli/index.js",
     "mpas-demo": "./dist/index.js"

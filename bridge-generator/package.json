@@ -2,6 +2,7 @@
   "name": "bridge-generator",
   "version": "0.2.0",
   "description": "Development-time generator for static MPAS MCP bridge servers and application packaging",
+  "license": "Apache-2.0",
   "type": "module",
   "private": true,
   "bin": {
