@@ -190,7 +190,9 @@ describe("HTTP endpoint", () => {
   });
 
   it("resolves a dispatch timeout as indeterminate, not failed", async () => {
-    const app = await makeApp(await makeTargetConfigDir(slowFixtureServer, 50));
+    // timeoutMs must allow initialize on slow CI, but stay below the slow
+    // fixture's tools/call delay so the timeout happens after ledger write.
+    const app = await makeApp(await makeTargetConfigDir(slowFixtureServer, 1_000));
     const response = await submitFixture(app, "valid-no-approval-required.json");
 
     expect(response.statusCode).toBe(200);
