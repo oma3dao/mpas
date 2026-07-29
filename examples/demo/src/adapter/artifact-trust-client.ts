@@ -41,10 +41,11 @@ export interface ArtifactTrustResponse {
   };
 }
 
-// Production default. For local CA testing against staging, temporarily use:
+// Staging CA test against the testnet gateway or backend origin:
+// "https://test.api.omatrust.org/v1/artifact-trust"
 // "https://test.backend.omatrust.org/api/public/artifact-trust"
 export const DEFAULT_ARTIFACT_TRUST_API_URL =
-  "https://backend.omatrust.org/api/public/artifact-trust";
+  "https://api.omatrust.org/v1/artifact-trust";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
