@@ -126,7 +126,7 @@ interface TrustContext {
 ```
 
 The default is
-`https://backend.omatrust.org/api/public/artifact-trust`. The adapter adds only
+`https://api.omatrust.org/v1/artifact-trust`. The adapter adds only
 the encoded `artifactDid` query parameter, calls the URL once per plugin load,
 and shares that response across both MPAS checks.
 

@@ -11,7 +11,7 @@ vi.mock("../../src/adapter/trust-linkage.js", () => ({
 }));
 vi.mock("../../src/adapter/artifact-trust-client.js", () => ({
   DEFAULT_ARTIFACT_TRUST_API_URL:
-    "https://backend.omatrust.org/api/public/artifact-trust",
+    "https://api.omatrust.org/v1/artifact-trust",
   fetchArtifactTrust: vi.fn(),
 }));
 

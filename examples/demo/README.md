@@ -236,7 +236,7 @@ reviewed it.
 
 After the local integrity check, the adapter automatically calls the public
 Artifact Trust API at
-`https://backend.omatrust.org/api/public/artifact-trust`. That API returns only
+`https://api.omatrust.org/v1/artifact-trust`. That API returns only
 verified evidence, including:
 
 - verified responsibility claims identifying an accountable party;
