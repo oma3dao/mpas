@@ -31,7 +31,6 @@ interface ParsedOptions {
   adapterKeyPath?: string;
   journalPath?: string;
   tracePath?: string;
-  omaTrustConfigPath?: string;
   keyDir?: string;
   bridgeDir?: string;
   host?: string;
@@ -59,7 +58,6 @@ export async function runCli(args = process.argv.slice(2), io: CliIo = defaultIo
         adapterKeyPath: options.adapterKeyPath,
         journalPath: options.journalPath,
         tracePath: options.tracePath,
-        omaTrustConfigPath: options.omaTrustConfigPath,
         host: options.host,
         port: options.port,
       });
@@ -588,7 +586,6 @@ function parseArgs(args: string[]): { positionals: string[]; options: ParsedOpti
     adapterKeyPath: process.env.MPAS_ADAPTER_KEY,
     journalPath: process.env.MPAS_JOURNAL_PATH,
     tracePath: process.env.MPAS_TRACE_PATH,
-    omaTrustConfigPath: process.env.MPAS_OMATRUST_CONFIG,
   };
 
   for (let index = 0; index < args.length; index += 1) {
@@ -603,8 +600,6 @@ function parseArgs(args: string[]): { positionals: string[]; options: ParsedOpti
       options.journalPath = args[++index];
     } else if (arg === "--trace") {
       options.tracePath = args[++index];
-    } else if (arg === "--omatrust-config") {
-      options.omaTrustConfigPath = args[++index];
     } else if (arg === "--key-dir") {
       options.keyDir = args[++index];
     } else if (arg === "--bridge-dir") {
@@ -635,7 +630,7 @@ function parseArgs(args: string[]): { positionals: string[]; options: ParsedOpti
 function usage(): string {
   return [
     "Usage:",
-    "  mpas daemon start [--config-dir <dir>] [--credential-dir <dir>] [--adapter-key <file>] [--journal-path <file>] [--trace <file>] [--omatrust-config <file>] [--host <host>] [--port <port>] [--coordination-port <port>]",
+    "  mpas daemon start [--config-dir <dir>] [--credential-dir <dir>] [--adapter-key <file>] [--journal-path <file>] [--trace <file>] [--host <host>] [--port <port>] [--coordination-port <port>]",
     "  mpas daemon status [--config-dir <dir>] [--host <host>] [--port <port>]",
     "  mpas coordination start [--host <host>] [--port <port>] [--trace <file>]",
     "  mpas signer-server start --config <path>",

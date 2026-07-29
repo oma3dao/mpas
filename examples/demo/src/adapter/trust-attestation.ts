@@ -1,16 +1,9 @@
-/**
- * Check 1: Attestation from an approved issuer.
- *
- * Queries EAS for attestations on the artifact DID's address (computed via didToAddress).
- * At least one non-revoked, non-expired attestation from an approved issuer must exist.
- *
- * Uses the @oma3/omatrust SDK patterns:
- * - didToAddress() converts any DID to its EAS recipient address (keccak256 → low 160 bits)
- * - getAttestationsForDid() queries EAS contract events by recipient + schema UIDs
- * - Schema labels come from trust-anchors (chains[].schemas mapping)
- */
-
-import type { TrustContext, ApprovedIssuer } from "./trust.js";
+import {
+  fetchArtifactTrust,
+  type ArtifactTrustResponse,
+  type VerifiedArtifactTrustAttestation,
+} from "./artifact-trust-client.js";
+import type { TrustContext } from "./trust.js";
 
 export interface AttestationSummary {
   uid: string;
@@ -18,152 +11,124 @@ export interface AttestationSummary {
   attesterLabel?: string;
   isApprovedIssuer: boolean;
   schemaUid: string;
-  schemaLabel?: string;
-  time: bigint;
-  expirationTime: bigint;
-  revoked: boolean;
+  schemaLabel: string;
+  time: string;
+  expirationTime: string;
+  verificationBasis: string[];
+  data: Record<string, unknown>;
 }
 
 export interface AttestationCheckResult {
-  passed: boolean;
+  primaryEvidenceFound: boolean;
   message: string;
+  responsibilityClaim: boolean;
+  cybersecurityAssessment: boolean;
+  responsibilityClaims: AttestationSummary[];
   attestations: AttestationSummary[];
 }
 
+function otherDisplayableEvidence(
+  trust: ArtifactTrustResponse,
+): VerifiedArtifactTrustAttestation[] {
+  return [
+    ...trust.securityAssessments,
+    ...trust.certifications,
+    ...trust.otherAttestations.filter(
+      (item) =>
+        item.attestation.schemaName !== "linked-identifier" &&
+        item.attestation.schemaName !== "user-review",
+    ),
+  ];
+}
+
+function summarize(
+  item: VerifiedArtifactTrustAttestation,
+): AttestationSummary {
+  return {
+    uid: item.attestation.uid,
+    attester: item.attestation.attester,
+    ...(item.attestation.attesterLabel
+      ? { attesterLabel: item.attestation.attesterLabel }
+      : {}),
+    isApprovedIssuer: item.verification.basis.includes("approved-issuer"),
+    schemaUid: item.attestation.schema,
+    schemaLabel: item.attestation.schemaName,
+    time: item.attestation.time,
+    expirationTime: item.attestation.expirationTime,
+    verificationBasis: item.verification.basis,
+    data: item.attestation.data,
+  };
+}
+
 /**
- * Queries EAS for attestations on the artifact DID and determines whether
- * any valid attestation from an approved issuer exists.
- *
- * The artifact DID is converted to a DID address via didToAddress() (keccak256 hash,
- * low 160 bits). This address is used as the EAS recipient when querying on-chain events.
+ * Applies MPAS's primary responsibility-claim and cybersecurity-assessment
+ * policy to the backend's verified-only evidence. Responsibility claims are
+ * kept separate so the operator can readily see who accepts responsibility
+ * for the artifact. The adapter deliberately does not repeat proof,
+ * revocation, expiry, payload, issuer-registry, or controller verification.
  */
 export async function checkAttestation(
   artifactDid: string,
   context: TrustContext,
+  artifactTrust?: ArtifactTrustResponse,
 ): Promise<AttestationCheckResult> {
-  const relevantSchemas = [
-    context.schemas.securityAssessment,
-    context.schemas.certification,
-    context.schemas.userReview,
-  ];
+  const trust =
+    artifactTrust ??
+    await fetchArtifactTrust(artifactDid, context.artifactTrustApiUrl);
+  const responsibilityClaims = trust.responsibilityClaims.map(summarize);
+  const attestations = otherDisplayableEvidence(trust).map(summarize);
+  const cybersecurityAssessment = trust.securityAssessments
+    .map(summarize)
+    .find((item) => item.isApprovedIssuer);
 
-  // Query attestations via the SDK's getAttestationsForDid pattern.
-  // This uses didToAddress(subjectDid) internally to convert the DID to a recipient address,
-  // then queries the EAS contract for Attested events filtered by that recipient + schema UIDs.
-  const attestations = await queryAttestationsForDid(artifactDid, relevantSchemas, context);
+  if (responsibilityClaims.length > 0) {
+    const claim = responsibilityClaims[0];
+    const responsibleParty = typeof claim.data.responsibleParty === "string"
+      ? claim.data.responsibleParty
+      : claim.attesterLabel ?? claim.attester;
+    return {
+      primaryEvidenceFound: true,
+      message: `Responsibility claimed by: ${responsibleParty}`,
+      responsibilityClaim: true,
+      cybersecurityAssessment: Boolean(cybersecurityAssessment),
+      responsibilityClaims,
+      attestations,
+    };
+  }
+
+  if (cybersecurityAssessment) {
+    return {
+      primaryEvidenceFound: true,
+      message:
+        `Cybersecurity assessed by: ${
+          cybersecurityAssessment.attesterLabel ??
+          cybersecurityAssessment.attester
+        }`,
+      responsibilityClaim: false,
+      cybersecurityAssessment: true,
+      responsibilityClaims: [],
+      attestations,
+    };
+  }
 
   if (attestations.length === 0) {
     return {
-      passed: false,
-      message: "Zero attestations: No attestations found for this artifact on OMATrust.",
+      primaryEvidenceFound: false,
+      message: "Zero verified responsibility claims or cybersecurity assessments found for this artifact on OMATrust.",
+      responsibilityClaim: false,
+      cybersecurityAssessment: false,
+      responsibilityClaims: [],
       attestations: [],
     };
   }
 
-  const now = BigInt(Math.floor(Date.now() / 1000));
-  const approvedAddresses = new Set(
-    context.approvedIssuers.map((issuer) => issuer.address.toLowerCase()),
-  );
-  const labelByAddress = new Map(
-    context.approvedIssuers.map((issuer) => [issuer.address.toLowerCase(), issuer.label]),
-  );
-
-  const summaries: AttestationSummary[] = attestations.map((att) => ({
-    uid: att.uid,
-    attester: att.attester,
-    attesterLabel: labelByAddress.get(att.attester.toLowerCase()),
-    isApprovedIssuer: approvedAddresses.has(att.attester.toLowerCase()),
-    schemaUid: att.schema,
-    schemaLabel: context.schemaLabels?.get(att.schema),
-    time: att.time,
-    expirationTime: att.expirationTime,
-    revoked: att.revocationTime > 0n,
-  }));
-
-  // Find at least one valid attestation from an approved issuer
-  const validFromApproved = summaries.filter(
-    (att) =>
-      att.isApprovedIssuer &&
-      !att.revoked &&
-      (att.expirationTime === 0n || att.expirationTime > now),
-  );
-
-  if (validFromApproved.length > 0) {
-    const best = validFromApproved[0];
-    const label = best.schemaLabel ?? "attestation";
-    return {
-      passed: true,
-      message: `Attested by: ${best.attesterLabel ?? best.attester} (${label})`,
-      attestations: summaries,
-    };
-  }
-
-  // Attestations exist but none pass
-  const hasAnyApprovedIssuer = summaries.some((att) => att.isApprovedIssuer);
-  if (!hasAnyApprovedIssuer) {
-    return {
-      passed: false,
-      message: "Attestations exist but none are from an approved issuer.",
-      attestations: summaries,
-    };
-  }
-
   return {
-    passed: false,
-    message: "All attestations from approved issuers are revoked or expired.",
-    attestations: summaries,
+    primaryEvidenceFound: false,
+    message:
+      "Verified secondary or informational evidence exists, but there is no responsibility claim or cybersecurity assessment.",
+    responsibilityClaim: false,
+    cybersecurityAssessment: false,
+    responsibilityClaims: [],
+    attestations,
   };
-}
-
-// ---------------------------------------------------------------------------
-// SDK interaction layer
-// ---------------------------------------------------------------------------
-
-interface SdkAttestationResult {
-  uid: string;
-  schema: string;
-  attester: string;
-  recipient: string;
-  time: bigint;
-  expirationTime: bigint;
-  revocationTime: bigint;
-  refUID: string;
-  revocable: boolean;
-  data: Record<string, unknown>;
-  raw?: string;
-}
-
-/**
- * Queries attestations for a DID using the omatrust SDK pattern.
- *
- * The SDK's getAttestationsForDid() does:
- * 1. didToAddress(subjectDid) → derives a 20-byte address from keccak256(normalizeDid(did))
- * 2. Queries EAS contract's Attested events filtered by that recipient address
- * 3. For each matching event, fetches the full attestation via eas.getAttestation(uid)
- * 4. Returns typed results with decoded data
- *
- * We replicate this via an RPC provider connected to the EAS contract.
- */
-async function queryAttestationsForDid(
-  subjectDid: string,
-  schemaUids: string[],
-  context: TrustContext,
-): Promise<SdkAttestationResult[]> {
-  // Import the SDK functions at runtime. This avoids hard-coupling to the SDK at import time,
-  // allowing the trust module to gracefully degrade if the SDK isn't installed.
-  const { didToAddress } = await import("@oma3/omatrust/identity");
-  const { getAttestationsForDid } = await import("@oma3/omatrust/reputation");
-  const { JsonRpcProvider } = await import("ethers");
-
-  const provider = new JsonRpcProvider(context.rpcUrl);
-  const didAddress = didToAddress(subjectDid);
-
-  const results = await getAttestationsForDid({
-    subjectDid,
-    provider,
-    easContractAddress: context.easContractAddress as `0x${string}`,
-    schemas: schemaUids as `0x${string}`[],
-  });
-
-  return results as unknown as SdkAttestationResult[];
 }

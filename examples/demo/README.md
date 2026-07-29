@@ -234,54 +234,36 @@ It does not by itself prove that the publisher is legitimate, that the plugin
 is associated with its claimed target application, or that a trusted party has
 reviewed it.
 
-When an OMATrust configuration is provided, the adapter also queries for:
+After the local integrity check, the adapter automatically calls the public
+Artifact Trust API at
+`https://backend.omatrust.org/api/public/artifact-trust`. That API returns only
+verified evidence, including:
 
-- attestations from approved issuers, including their schema and current status;
-- linkage between the plugin artifact and its declared target application; and
-- controller evidence such as linked-identifier attestations, controller
-  witnesses, DNS TXT records, or a well-known DID document.
+- verified responsibility claims identifying an accountable party;
+- cybersecurity assessments from approved issuers;
+- other recognized informational artifact evidence; and
+- verified linked identifiers for operator review.
 
-The adapter displays all evidence it finds and asks the operator whether to use
-the plugin. It prompts even when trusted evidence is present. If no OMATrust
-configuration is provided—or OMATrust is unavailable—the adapter reports that
-the `did:artifact` integrity check succeeded, warns that legitimacy and
-provenance were not checked, and asks for confirmation. Non-interactive startup
-declines by default.
+A responsibility claim or cybersecurity assessment from an approved issuer
+is sufficient to suppress the warning; both are not required. A responsibility
+claim names the separate responsible-party DID; the artifact DID identifies
+the artifact and does not authorize the attester. A verified claim proves its
+authenticity, not that the responsible party is legitimate or trustworthy.
+The adapter always displays that DID and asks the operator to decide whether
+to trust it. Linked identifiers do not produce a pass/fail result: the adapter
+lists every verified link and leaves its relevance and trustworthiness to the
+operator. User reviews are excluded because their schema cannot prove a
+`did:artifact` binding. The prompt also points operators to
+https://app.omatrust.org/verify so they can re-check the same `did:artifact`
+independently. The prompt contains a warning only when neither primary
+signal exists or when OMATrust is unavailable.
+Non-interactive startup declines by default.
 
-Operators provide an `OmaTrustConfig` JSON file; they do not construct the
-internal `TrustContext` directly. The adapter builds `TrustContext` by loading
-the configured chain information and fetching current trust anchors.
+No OMATrust configuration is required. MPAS does not expose endpoint or API-key
+configuration in v1. Support for authenticated premium endpoints can be added
+later as a separate configuration contract.
 
-```json
-{
-  "rpcUrl": "https://YOUR_CHAIN_RPC_URL",
-  "easContractAddress": "0xYOUR_EAS_CONTRACT_ADDRESS",
-  "backendUrl": "https://YOUR_OMATRUST_BACKEND",
-  "schemas": {
-    "securityAssessment": "0xSECURITY_ASSESSMENT_SCHEMA_UID",
-    "certification": "0xCERTIFICATION_SCHEMA_UID",
-    "userReview": "0xUSER_REVIEW_SCHEMA_UID",
-    "linkedIdentifier": "0xLINKED_IDENTIFIER_SCHEMA_UID",
-    "controllerWitness": "0xCONTROLLER_WITNESS_SCHEMA_UID"
-  }
-}
-```
-
-The RPC endpoint, EAS contract, and schema UIDs must describe the same OMATrust
-chain deployment. Start the daemon with either:
-
-```sh
-mpas daemon start --omatrust-config /path/to/omatrust.json
-```
-
-or:
-
-```sh
-export MPAS_OMATRUST_CONFIG=/path/to/omatrust.json
-mpas daemon start
-```
-
-For evaluation semantics and the derived `TrustContext` structure, see the
+For evaluation semantics and the internal endpoint context, see the
 [OMATrust plugin verification feature specification](../../docs/features/omatrust/spec.md).
 
 ### Deployment Config
@@ -299,7 +281,7 @@ For evaluation semantics and the derived `TrustContext` structure, see the
 
 **Relationship between plugin and policy:** The plugin describes what operations exist and their payload schemas. The `policy` object (an embedded `MpasApplicationPolicy`) defines who can propose, who can approve, and what thresholds apply. An operation is governed if it's in the plugin's `operations` OR has an entry in `policy.policies`.
 
-**The governance boundary:** anything outside the governed set is routed as pass-through — after proposer gating and signature verification it executes with the adapter's credential on the proposer's signature alone, and `defaultRequirement` does not apply. This is the plugin-anchored trust model: the plugin publisher decides which operations need governance, and the operator accepts that boundary after reviewing available OMATrust attestation and target-linkage evidence. The demo exposes `create_issue_mirror` this way on purpose to demonstrate the boundary. If you care about an operation, put it in the plugin or give it a policy entry; power users can refuse ungoverned operations entirely with `passThrough: "deny"`.
+**The governance boundary:** anything outside the governed set is routed as pass-through — after proposer gating and signature verification it executes with the adapter's credential on the proposer's signature alone, and `defaultRequirement` does not apply. This is the plugin-anchored trust model: the plugin publisher decides which operations need governance, and the operator accepts that boundary after reviewing available OMATrust attestations and linked-identifier evidence. The demo exposes `create_issue_mirror` this way on purpose to demonstrate the boundary. If you care about an operation, put it in the plugin or give it a policy entry; power users can refuse ungoverned operations entirely with `passThrough: "deny"`.
 
 **Safe default-policy setup:** Use a positive threshold with a maintainer group
 for `policy.defaultRequirement`; this covers every plugin operation unless an

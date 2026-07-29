@@ -116,8 +116,10 @@ describe("prepareMcpStdio", () => {
   });
 
   it("returns DISPATCH_TIMEOUT when the stdio MCP server does not respond in time", async () => {
+    // timeoutMs covers both initialize and tools/call. Keep it high enough for
+    // spawn/handshake on slow CI runners, but below the slow fixture's tool delay.
     const prepared = await prepareMcpStdio(
-      { ...target, args: [slowFixtureServer], timeoutMs: 50 },
+      { ...target, args: [slowFixtureServer], timeoutMs: 1_000 },
       "ghp_test",
       pluginProtocolVersion,
     );

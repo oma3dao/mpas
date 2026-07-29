@@ -108,7 +108,6 @@ export type LoadDeploymentConfigsResult =
 
 export interface LoadDeploymentConfigsOptions {
   trustContext?: TrustContext | null;
-  trustContextError?: string;
   confirmPluginUse?: ConfirmPluginUse;
 }
 
@@ -402,8 +401,10 @@ async function loadDeploymentConfigFile(
     );
   }
 
-  // Report the available trust information and require an explicit operator
-  // decision after the did:artifact integrity check succeeds.
+  // Load trust information after the did:artifact integrity check succeeds.
+  // The prompt always shows the evidence for operator judgment, but it uses
+  // warning language only when neither primary signal exists or the lookup
+  // could not be completed.
   let assessment: PluginTrustAssessment;
   if (options.trustContext) {
     try {
@@ -419,12 +420,15 @@ async function loadDeploymentConfigFile(
       };
     }
   } else {
-    assessment = options.trustContextError
-      ? { status: "notChecked", reason: "unavailable", detail: options.trustContextError }
-      : { status: "notChecked", reason: "notConfigured" };
+    assessment = {
+      status: "notChecked",
+      reason: "unavailable",
+      detail: "Artifact trust lookup was not requested by this caller.",
+    };
   }
 
-  const confirmed = await (options.confirmPluginUse ?? promptPluginUse)(assessment, config);
+  const confirmed =
+    await (options.confirmPluginUse ?? promptPluginUse)(assessment, config);
   if (!confirmed) {
     return loadError(
       "PLUGIN_TRUST_REJECTED",

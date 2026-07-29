@@ -1,21 +1,28 @@
-import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import { canTrust, extractTargetUrl, type TrustContext } from "../../src/adapter/trust.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { buildTrustReport, canTrust, type TrustContext } from "../../src/adapter/trust.js";
 import type { MpasApplicationPlugin } from "../../src/core/plugin-loader.js";
 import type { DeploymentConfig } from "../../src/adapter/config-loader.js";
 
-// Mock the sub-modules so we can control check results without network calls.
 vi.mock("../../src/adapter/trust-attestation.js", () => ({
   checkAttestation: vi.fn(),
 }));
 vi.mock("../../src/adapter/trust-linkage.js", () => ({
-  checkLinkage: vi.fn(),
+  listLinkedIdentifiers: vi.fn(),
+}));
+vi.mock("../../src/adapter/artifact-trust-client.js", () => ({
+  DEFAULT_ARTIFACT_TRUST_API_URL:
+    "https://backend.omatrust.org/api/public/artifact-trust",
+  fetchArtifactTrust: vi.fn(),
 }));
 
 import { checkAttestation } from "../../src/adapter/trust-attestation.js";
-import { checkLinkage } from "../../src/adapter/trust-linkage.js";
+import { listLinkedIdentifiers } from "../../src/adapter/trust-linkage.js";
+import { fetchArtifactTrust } from "../../src/adapter/artifact-trust-client.js";
+import { makeArtifactTrustResponse } from "./artifact-trust-fixture.js";
 
 const mockCheckAttestation = vi.mocked(checkAttestation);
-const mockCheckLinkage = vi.mocked(checkLinkage);
+const mockListLinkedIdentifiers = vi.mocked(listLinkedIdentifiers);
+const mockFetchArtifactTrust = vi.mocked(fetchArtifactTrust);
 
 const fakePlugin: MpasApplicationPlugin = {
   version: "1",
@@ -57,156 +64,149 @@ const fakeConfig: DeploymentConfig = {
 } as unknown as DeploymentConfig;
 
 const fakeTrustContext: TrustContext = {
-  backendUrl: "https://backend.omatrust.example",
-  approvedIssuers: [{ address: "0xApproved1", label: "OMA3 Security Lab" }],
-  schemas: {
-    securityAssessment: "0xschema1",
-    certification: "0xschema2",
-    userReview: "0xschema3",
-    linkedIdentifier: "0xschema4",
-    controllerWitness: "0xschema5",
-  },
-  rpcUrl: "https://rpc.example",
-  easContractAddress: "0xEAS",
+  artifactTrustApiUrl: "https://backend.omatrust.example/artifact-trust",
 };
+
+function makeAttestationResult(
+  overrides: Partial<Awaited<ReturnType<typeof checkAttestation>>> = {},
+) {
+  return {
+    primaryEvidenceFound: false,
+    message: "No verified trust-bearing evidence.",
+    responsibilityClaim: false,
+    cybersecurityAssessment: false,
+    responsibilityClaims: [],
+    attestations: [],
+    ...overrides,
+  };
+}
 
 describe("canTrust", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockFetchArtifactTrust.mockResolvedValue(makeArtifactTrustResponse());
   });
 
-  it("returns trusted: true when attestation check passes (linkage fails)", async () => {
-    mockCheckAttestation.mockResolvedValue({
-      passed: true,
-      message: "Attested by: OMA3 Security Lab (security-assessment)",
-      attestations: [],
-    });
-    mockCheckLinkage.mockResolvedValue({
-      passed: false,
-      message: "No linkage found.",
-      linkedIdentifier: false,
-      controllerWitness: false,
-      dnsTxt: false,
-      wellKnownDid: false,
-    });
+  it("suppresses the warning when a verified responsibility claim exists", async () => {
+    mockCheckAttestation.mockResolvedValue(makeAttestationResult({
+      primaryEvidenceFound: true,
+      message: "Responsibility claimed by: did:web:publisher.example",
+      responsibilityClaim: true,
+    }));
 
     const verdict = await canTrust(fakePlugin, fakeConfig, fakeTrustContext);
 
-    expect(verdict.trusted).toBe(true);
-    expect(verdict.reasons).toHaveLength(2);
-    expect(verdict.reasons[0]).toMatchObject({ check: "attestation", passed: true });
-    expect(verdict.reasons[1]).toMatchObject({ check: "linkage", passed: false });
+    expect(verdict.primaryEvidenceFound).toBe(true);
+    expect(verdict.warningRequired).toBe(false);
+    expect(verdict.reasons).toEqual([
+      expect.objectContaining({ check: "responsibility-claim", passed: true }),
+      expect.objectContaining({ check: "cybersecurity-assessment", passed: false }),
+    ]);
   });
 
-  it("returns trusted: true when linkage check passes (attestation fails)", async () => {
-    mockCheckAttestation.mockResolvedValue({
-      passed: false,
-      message: "Zero attestations: No attestations found.",
-      attestations: [],
-    });
-    mockCheckLinkage.mockResolvedValue({
-      passed: true,
-      message: "Linked to: github.example (DNS TXT)",
-      linkedIdentifier: false,
-      controllerWitness: false,
-      dnsTxt: true,
-      wellKnownDid: false,
-    });
+  it("suppresses the warning when an approved-issuer cybersecurity assessment exists", async () => {
+    mockCheckAttestation.mockResolvedValue(makeAttestationResult({
+      primaryEvidenceFound: true,
+      message: "Cybersecurity assessed by: OMA3 Security Lab",
+      cybersecurityAssessment: true,
+      attestations: [{
+        uid: `0x${"1".repeat(64)}`,
+        attester: "0x3333333333333333333333333333333333333333",
+        attesterLabel: "OMA3 Security Lab",
+        isApprovedIssuer: true,
+        schemaUid: `0x${"2".repeat(64)}`,
+        schemaLabel: "security-assessment",
+        time: "1700000000",
+        expirationTime: "0",
+        verificationBasis: ["approved-issuer"],
+        data: { subject: fakeConfig.plugin.artifactDid },
+      }],
+    }));
 
     const verdict = await canTrust(fakePlugin, fakeConfig, fakeTrustContext);
 
-    expect(verdict.trusted).toBe(true);
-    expect(verdict.reasons[0]).toMatchObject({ check: "attestation", passed: false });
-    expect(verdict.reasons[1]).toMatchObject({ check: "linkage", passed: true });
+    expect(verdict.primaryEvidenceFound).toBe(true);
+    expect(verdict.warningRequired).toBe(false);
+    expect(verdict.reasons).toEqual([
+      expect.objectContaining({ check: "responsibility-claim", passed: false }),
+      expect.objectContaining({ check: "cybersecurity-assessment", passed: true }),
+    ]);
   });
 
-  it("returns trusted: true when both checks pass", async () => {
-    mockCheckAttestation.mockResolvedValue({
-      passed: true,
-      message: "Attested by: OMA3 Security Lab",
-      attestations: [],
-    });
-    mockCheckLinkage.mockResolvedValue({
-      passed: true,
-      message: "Linked to: github.example (controller-witness)",
-      linkedIdentifier: false,
-      controllerWitness: true,
-      dnsTxt: false,
-      wellKnownDid: false,
-    });
+  it("requires a warning when neither primary signal exists", async () => {
+    mockCheckAttestation.mockResolvedValue(makeAttestationResult());
 
     const verdict = await canTrust(fakePlugin, fakeConfig, fakeTrustContext);
 
-    expect(verdict.trusted).toBe(true);
+    expect(verdict.primaryEvidenceFound).toBe(false);
+    expect(verdict.warningRequired).toBe(true);
+    expect(verdict.reasons.every((reason) => !reason.passed)).toBe(true);
   });
 
-  it("returns trusted: false when both checks fail", async () => {
-    mockCheckAttestation.mockResolvedValue({
-      passed: false,
-      message: "Zero attestations: No attestations found for this artifact on OMATrust.",
-      attestations: [],
-    });
-    mockCheckLinkage.mockResolvedValue({
-      passed: false,
-      message: "No linkage: did:artifact is not linked to the URL this plugin targets (github.example).",
-      linkedIdentifier: false,
-      controllerWitness: false,
-      dnsTxt: false,
-      wellKnownDid: false,
-    });
+  it("does not use linked identifiers to determine the verdict", async () => {
+    mockCheckAttestation.mockResolvedValue(makeAttestationResult());
+    mockListLinkedIdentifiers.mockResolvedValue([{
+      uid: `0x${"1".repeat(64)}`,
+      linkedId: "did:web:github-mirror.example",
+      attester: "0x3333333333333333333333333333333333333333",
+      verificationBasis: ["proof"],
+    }]);
 
     const verdict = await canTrust(fakePlugin, fakeConfig, fakeTrustContext);
 
-    expect(verdict.trusted).toBe(false);
-    expect(verdict.reasons).toHaveLength(2);
-    expect(verdict.reasons[0]).toMatchObject({ check: "attestation", passed: false });
-    expect(verdict.reasons[1]).toMatchObject({ check: "linkage", passed: false });
+    expect(verdict.primaryEvidenceFound).toBe(false);
+    expect(verdict.warningRequired).toBe(true);
+    expect(mockListLinkedIdentifiers).not.toHaveBeenCalled();
   });
 
-  it("handles attestation check throwing (network error) gracefully", async () => {
-    mockCheckAttestation.mockRejectedValue(new Error("Network timeout"));
-    mockCheckLinkage.mockResolvedValue({
-      passed: true,
-      message: "Linked to: github.example (.well-known/did.json)",
-      linkedIdentifier: false,
-      controllerWitness: false,
-      dnsTxt: false,
-      wellKnownDid: true,
-    });
+  it("propagates backend failure so callers can report trust as unavailable", async () => {
+    mockFetchArtifactTrust.mockRejectedValue(new Error("Artifact trust API unavailable"));
 
-    const verdict = await canTrust(fakePlugin, fakeConfig, fakeTrustContext);
-
-    // Linkage passed, so overall trusted
-    expect(verdict.trusted).toBe(true);
-    expect(verdict.reasons[0]).toMatchObject({
-      check: "attestation",
-      passed: false,
-      message: "Attestation check failed: Network timeout",
-    });
-  });
-
-  it("handles both checks throwing as untrusted", async () => {
-    mockCheckAttestation.mockRejectedValue(new Error("RPC down"));
-    mockCheckLinkage.mockRejectedValue(new Error("DNS failed"));
-
-    const verdict = await canTrust(fakePlugin, fakeConfig, fakeTrustContext);
-
-    expect(verdict.trusted).toBe(false);
-    expect(verdict.reasons[0]).toMatchObject({ check: "attestation", passed: false });
-    expect(verdict.reasons[1]).toMatchObject({ check: "linkage", passed: false });
+    await expect(
+      canTrust(fakePlugin, fakeConfig, fakeTrustContext),
+    ).rejects.toThrow("Artifact trust API unavailable");
+    expect(mockCheckAttestation).not.toHaveBeenCalled();
   });
 });
 
-describe("extractTargetUrl", () => {
-  it("extracts domain from did:web:domain", () => {
-    expect(extractTargetUrl("did:web:github-mirror.example")).toBe("github-mirror.example");
+describe("buildTrustReport", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockFetchArtifactTrust.mockResolvedValue(makeArtifactTrustResponse());
+    mockCheckAttestation.mockResolvedValue(makeAttestationResult());
+    mockListLinkedIdentifiers.mockResolvedValue([]);
   });
 
-  it("extracts domain with path from did:web:domain:path:segments", () => {
-    expect(extractTargetUrl("did:web:api.example.com:v1:repos")).toBe("api.example.com/v1/repos");
-  });
+  it("fetches once, preserves the target Application DID, and lists linked identifiers", async () => {
+    const linkedIdentifiers = [{
+      uid: `0x${"1".repeat(64)}`,
+      linkedId: "did:web:some-associated-service.example",
+      attester: "0x3333333333333333333333333333333333333333",
+      verificationBasis: ["proof", "controller-authorization"],
+    }];
+    mockListLinkedIdentifiers.mockResolvedValue(linkedIdentifiers);
 
-  it("handles percent-encoded domains", () => {
-    expect(extractTargetUrl("did:web:example.com%3A8080")).toBe("example.com:8080");
+    const report = await buildTrustReport(
+      fakePlugin,
+      fakeConfig,
+      fakeTrustContext,
+    );
+
+    expect(mockFetchArtifactTrust).toHaveBeenCalledOnce();
+    const evidence = await mockFetchArtifactTrust.mock.results[0].value;
+    expect(mockCheckAttestation).toHaveBeenCalledWith(
+      fakeConfig.plugin.artifactDid,
+      fakeTrustContext,
+      evidence,
+    );
+    expect(mockListLinkedIdentifiers).toHaveBeenCalledWith(
+      fakeConfig.plugin.artifactDid,
+      fakeTrustContext,
+      evidence,
+    );
+    expect(report.targetApplicationDid).toBe(fakeConfig.target.applicationDid);
+    expect(report.linkedIdentifiers).toEqual(linkedIdentifiers);
+    expect(report.verdict.primaryEvidenceFound).toBe(false);
+    expect(report.verdict.warningRequired).toBe(true);
   });
 });

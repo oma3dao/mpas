@@ -7,17 +7,21 @@ import type { DeploymentConfig } from "./config-loader.js";
 
 export type PluginTrustAssessment =
   | { status: "checked"; report: PluginTrustReport }
-  | { status: "notChecked"; reason: "notConfigured" | "unavailable"; detail?: string };
+  | { status: "notChecked"; reason: "unavailable"; detail?: string };
 
 export type ConfirmPluginUse = (
   assessment: PluginTrustAssessment,
   config: DeploymentConfig,
 ) => Promise<boolean>;
 
-export const NO_TRUST_CONTEXT_WARNING =
-  "No OMATrust context was provided.";
 export const NO_TRUST_CHECKS_WARNING =
-  "No OMATrust attestations, approved-issuer checks, target linkage, or other legitimacy and provenance checks were performed.";
+  "No OMATrust responsibility claims, attestations, linked identifiers, or other legitimacy and provenance evidence was loaded.";
+export const NO_PRIMARY_TRUST_EVIDENCE_WARNING =
+  "No verified responsibility claim or cybersecurity assessment was found.";
+export const RESPONSIBILITY_CLAIM_TRUST_NOTICE =
+  "Technical verification confirms the claim, but does not establish that the responsible party is legitimate. Decide whether you trust that party.";
+export const INDEPENDENT_VERIFY_NOTICE =
+  "You can independently verify this artifact at https://app.omatrust.org/verify using the did:artifact shown above.";
 
 /**
  * Reports all available trust information and asks the operator to make the
@@ -29,44 +33,67 @@ export const promptPluginUse: ConfirmPluginUse = async (assessment, config) => {
   stdout.write("  Content integrity: verified (plugin content matches the configured did:artifact)\n");
 
   if (assessment.status === "notChecked") {
-    if (assessment.reason === "notConfigured") {
-      stdout.write(`\n  WARNING: ${NO_TRUST_CONTEXT_WARNING}\n`);
-    } else {
-      stdout.write("\n  WARNING: OMATrust context could not be loaded.\n");
-      if (assessment.detail) stdout.write(`  ${assessment.detail}\n`);
-    }
+    stdout.write("\n  WARNING: OMATrust information could not be loaded.\n");
+    if (assessment.detail) stdout.write(`  ${assessment.detail}\n`);
     stdout.write(`  ${NO_TRUST_CHECKS_WARNING}\n`);
   } else {
     const { report } = assessment;
     stdout.write("\n  OMATrust information:\n");
-    stdout.write(`  Overall evidence: ${report.verdict.trusted ? "trusted evidence found" : "no trusted evidence found"}\n`);
-    stdout.write(`  Attestation check: ${report.attestation.passed ? "PASS" : "NOT VERIFIED"} — ${report.attestation.message}\n`);
+    if (report.verdict.warningRequired) {
+      stdout.write(`  WARNING: ${NO_PRIMARY_TRUST_EVIDENCE_WARNING}\n`);
+    }
+    stdout.write(
+      `  Responsibility claim: ${report.attestation.responsibilityClaim ? "FOUND" : "NOT FOUND"}\n`,
+    );
+
+    for (const claim of report.attestation.responsibilityClaims) {
+      const responsibleParty = typeof claim.data.responsibleParty === "string"
+        ? claim.data.responsibleParty
+        : claim.attesterLabel ?? claim.attester;
+      const responsibilityTypes = Array.isArray(claim.data.responsibilityType)
+        ? claim.data.responsibilityType.filter(
+          (value): value is string => typeof value === "string",
+        )
+        : [];
+      const typeLabel = responsibilityTypes.length > 0
+        ? `; responsibility ${responsibilityTypes.join(", ")}`
+        : "";
+      stdout.write(
+        `    - ${responsibleParty}${typeLabel}; verified via ${claim.verificationBasis.join(", ")}\n`,
+      );
+      stdout.write(
+        `      ${RESPONSIBILITY_CLAIM_TRUST_NOTICE}\n`,
+      );
+    }
+
+    stdout.write(
+      `  Cybersecurity assessment: ${report.attestation.cybersecurityAssessment ? "FOUND" : "NOT FOUND"}\n`,
+    );
 
     for (const attestation of report.attestation.attestations) {
       const issuer = attestation.attesterLabel ?? attestation.attester;
       const schema = attestation.schemaLabel ?? attestation.schemaUid;
-      const status = attestation.revoked
-        ? "revoked"
-        : attestation.expirationTime > 0n && attestation.expirationTime <= BigInt(Math.floor(Date.now() / 1000))
-          ? "expired"
-          : "active";
+      const basis = attestation.verificationBasis.length > 0
+        ? attestation.verificationBasis.join(", ")
+        : "endpoint verification";
       stdout.write(
-        `    - ${schema}; issuer ${issuer}; ${attestation.isApprovedIssuer ? "approved issuer" : "unapproved issuer"}; ${status}\n`,
+        `    - ${schema}; issuer ${issuer}; verified via ${basis}\n`,
       );
     }
 
-    stdout.write(`  Target linkage: ${report.linkage.passed ? "PASS" : "NOT VERIFIED"} — ${report.linkage.message}\n`);
-    const linkageEvidence = [
-      report.linkage.linkedIdentifier && "linked identifier",
-      report.linkage.controllerWitness && "controller witness",
-      report.linkage.dnsTxt && "DNS TXT",
-      report.linkage.wellKnownDid && "well-known DID",
-    ].filter(Boolean);
-    if (linkageEvidence.length > 0) {
-      stdout.write(`    Evidence: ${linkageEvidence.join(", ")}\n`);
+    stdout.write(`  Linked identifiers (${report.linkedIdentifiers.length}):\n`);
+    if (report.linkedIdentifiers.length === 0) {
+      stdout.write("    - None found.\n");
+    }
+    for (const linked of report.linkedIdentifiers) {
+      const issuer = linked.attesterLabel ?? linked.attester;
+      stdout.write(
+        `    - ${linked.linkedId}; issuer ${issuer}; verified via ${linked.verificationBasis.join(", ")}\n`,
+      );
     }
   }
 
+  stdout.write(`  ${INDEPENDENT_VERIFY_NOTICE}\n`);
   stdout.write("\n");
 
   if (!stdin.isTTY) {

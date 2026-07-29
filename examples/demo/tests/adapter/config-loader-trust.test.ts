@@ -13,11 +13,12 @@ vi.mock("../../src/adapter/trust.js", async (importOriginal) => {
 });
 
 import { loadDeploymentConfigs } from "../../src/adapter/config-loader.js";
-import { loadOmaTrustConfig } from "../../src/adapter/daemon.js";
 import { buildTrustReport, type TrustContext } from "../../src/adapter/trust.js";
 import {
+  INDEPENDENT_VERIFY_NOTICE,
+  NO_PRIMARY_TRUST_EVIDENCE_WARNING,
   NO_TRUST_CHECKS_WARNING,
-  NO_TRUST_CONTEXT_WARNING,
+  RESPONSIBILITY_CLAIM_TRUST_NOTICE,
   type PluginTrustAssessment,
 } from "../../src/adapter/trust-prompt.js";
 
@@ -45,17 +46,7 @@ async function makeConfigDir() {
 }
 
 const trustContext: TrustContext = {
-  backendUrl: "https://api.omatrust.example",
-  approvedIssuers: [],
-  schemas: {
-    securityAssessment: "0xsecurity",
-    certification: "0xcertification",
-    userReview: "0xreview",
-    linkedIdentifier: "0xlinked",
-    controllerWitness: "0xcontroller",
-  },
-  rpcUrl: "https://rpc.example",
-  easContractAddress: "0xEAS",
+  artifactTrustApiUrl: "https://api.omatrust.example/artifact-trust",
 };
 
 describe("plugin trust confirmation during config loading", () => {
@@ -63,7 +54,7 @@ describe("plugin trust confirmation during config loading", () => {
     vi.clearAllMocks();
   });
 
-  it("reports missing trust context and rejects the plugin when confirmation is declined", async () => {
+  it("reports a deliberately skipped lookup as unavailable", async () => {
     const configDir = await makeConfigDir();
     let observed: PluginTrustAssessment | undefined;
 
@@ -74,61 +65,45 @@ describe("plugin trust confirmation during config loading", () => {
       },
     });
 
-    expect(observed).toEqual({ status: "notChecked", reason: "notConfigured" });
+    expect(observed).toEqual({
+      status: "notChecked",
+      reason: "unavailable",
+      detail: "Artifact trust lookup was not requested by this caller.",
+    });
     expect(result).toMatchObject({
       ok: false,
       error: { code: "PLUGIN_TRUST_REJECTED" },
     });
-    expect(NO_TRUST_CONTEXT_WARNING).toContain("No OMATrust context");
-    expect(NO_TRUST_CHECKS_WARNING).toContain("legitimacy and provenance checks were performed");
+    expect(NO_TRUST_CHECKS_WARNING).toContain(
+      "legitimacy and provenance evidence was loaded",
+    );
+    expect(INDEPENDENT_VERIFY_NOTICE).toContain("https://app.omatrust.org/verify");
   });
 
-  it("reports unavailable trust context separately from missing configuration", async () => {
-    const configDir = await makeConfigDir();
-    let observed: PluginTrustAssessment | undefined;
-
-    await loadDeploymentConfigs(configDir, {
-      trustContextError: "trust anchors endpoint unavailable",
-      confirmPluginUse: async (assessment) => {
-        observed = assessment;
-        return true;
-      },
-    });
-
-    expect(observed).toEqual({
-      status: "notChecked",
-      reason: "unavailable",
-      detail: "trust anchors endpoint unavailable",
-    });
-  });
-
-  it("provides the complete OMATrust report and asks even when trusted evidence exists", async () => {
+  it("asks without warning when a cybersecurity assessment exists without a responsibility claim", async () => {
     const configDir = await makeConfigDir();
     const report = {
       artifactDid: "did:artifact:bafktest",
       pluginDid: "did:web:plugins.oma3.example:github-mirror-plugin",
       pluginVersion: "0.1.0",
-      targetUrl: "github.example",
+      targetApplicationDid: "did:web:github-mirror.example",
       verdict: {
-        trusted: true,
+        primaryEvidenceFound: true,
+        warningRequired: false,
         reasons: [
-          { check: "attestation", passed: true, message: "Attested by an approved issuer." },
-          { check: "linkage", passed: false, message: "No target linkage found." },
+          { check: "responsibility-claim", passed: false, message: "No verified responsibility claim was found." },
+          { check: "cybersecurity-assessment", passed: true, message: "Cybersecurity assessed by an approved issuer." },
         ],
       },
       attestation: {
-        passed: true,
-        message: "Attested by an approved issuer.",
+        primaryEvidenceFound: true,
+        message: "Cybersecurity assessed by an approved issuer.",
+        responsibilityClaim: false,
+        cybersecurityAssessment: true,
+        responsibilityClaims: [],
         attestations: [],
       },
-      linkage: {
-        passed: false,
-        message: "No target linkage found.",
-        linkedIdentifier: false,
-        controllerWitness: false,
-        dnsTxt: false,
-        wellKnownDid: false,
-      },
+      linkedIdentifiers: [],
     };
     mockBuildTrustReport.mockResolvedValue(report);
     let observed: PluginTrustAssessment | undefined;
@@ -144,31 +119,116 @@ describe("plugin trust confirmation during config loading", () => {
     expect(result.ok).toBe(true);
     expect(mockBuildTrustReport).toHaveBeenCalledOnce();
     expect(observed).toEqual({ status: "checked", report });
+    expect(
+      observed?.status === "checked" &&
+      observed.report.verdict.warningRequired,
+    ).toBe(false);
   });
-});
 
-describe("OMATrust daemon configuration", () => {
-  it("loads a valid OMATrust configuration file", async () => {
-    const root = await mkdtemp(join(tmpdir(), "mpas-omatrust-config-"));
-    const path = join(root, "omatrust.json");
-    await writeFile(path, `${JSON.stringify({
-      rpcUrl: "https://rpc.example",
-      easContractAddress: "0xEAS",
-      backendUrl: "https://api.omatrust.example",
-      schemas: trustContext.schemas,
-    })}\n`);
+  it("warns and asks when only secondary or informational evidence exists", async () => {
+    const configDir = await makeConfigDir();
+    const report = {
+      artifactDid: "did:artifact:bafktest",
+      pluginDid: "did:web:plugins.oma3.example:github-mirror-plugin",
+      pluginVersion: "0.1.0",
+      targetApplicationDid: "did:web:github-mirror.example",
+      verdict: {
+        primaryEvidenceFound: false,
+        warningRequired: true,
+        reasons: [
+          { check: "responsibility-claim", passed: false, message: "No verified responsibility claim was found." },
+          { check: "cybersecurity-assessment", passed: false, message: "No verified cybersecurity assessment was found." },
+        ],
+      },
+      attestation: {
+        primaryEvidenceFound: false,
+        message: "Only secondary or informational evidence exists.",
+        responsibilityClaim: false,
+        cybersecurityAssessment: false,
+        responsibilityClaims: [],
+        attestations: [{
+          uid: `0x${"1".repeat(64)}`,
+          attester: "0x3333333333333333333333333333333333333333",
+          isApprovedIssuer: true,
+          schemaUid: `0x${"2".repeat(64)}`,
+          schemaLabel: "certification",
+          time: "1700000000",
+          expirationTime: "0",
+          verificationBasis: ["approved-issuer"],
+          data: { subject: "did:artifact:bafktest" },
+        }],
+      },
+      linkedIdentifiers: [{
+        uid: `0x${"3".repeat(64)}`,
+        linkedId: "did:web:publisher.example",
+        attester: "0x3333333333333333333333333333333333333333",
+        verificationBasis: ["proof"],
+      }],
+    };
+    mockBuildTrustReport.mockResolvedValue(report);
+    let observed: PluginTrustAssessment | undefined;
 
-    await expect(loadOmaTrustConfig(path)).resolves.toMatchObject({
-      backendUrl: "https://api.omatrust.example",
-      schemas: { linkedIdentifier: "0xlinked" },
+    const result = await loadDeploymentConfigs(configDir, {
+      trustContext,
+      confirmPluginUse: async (assessment) => {
+        observed = assessment;
+        return false;
+      },
+    });
+
+    expect(observed).toEqual({ status: "checked", report });
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "PLUGIN_TRUST_REJECTED" },
+    });
+    expect(NO_PRIMARY_TRUST_EVIDENCE_WARNING).toContain(
+      "responsibility claim or cybersecurity assessment",
+    );
+    expect(RESPONSIBILITY_CLAIM_TRUST_NOTICE).toContain(
+      "does not establish that the responsible party is legitimate",
+    );
+  });
+
+  it("reports an artifact trust API failure as unavailable, not as empty evidence", async () => {
+    const configDir = await makeConfigDir();
+    mockBuildTrustReport.mockRejectedValue(
+      new Error("Artifact trust API returned 502"),
+    );
+    let observed: PluginTrustAssessment | undefined;
+
+    const result = await loadDeploymentConfigs(configDir, {
+      trustContext,
+      confirmPluginUse: async (assessment) => {
+        observed = assessment;
+        return true;
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(observed).toEqual({
+      status: "notChecked",
+      reason: "unavailable",
+      detail: "Artifact trust API returned 502",
     });
   });
 
-  it("rejects an incomplete OMATrust configuration file", async () => {
-    const root = await mkdtemp(join(tmpdir(), "mpas-omatrust-config-"));
-    const path = join(root, "omatrust.json");
-    await writeFile(path, '{"backendUrl":"https://api.omatrust.example"}\n');
+  it("rejects an artifact hash mismatch before starting a trust lookup", async () => {
+    const configDir = await makeConfigDir();
+    const path = join(configDir, "github.json");
+    const config = JSON.parse(await readFile(path, "utf8")) as Record<string, unknown>;
+    (config.plugin as Record<string, unknown>).artifactDid =
+      "did:artifact:bafkreiaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    await writeFile(path, `${JSON.stringify(config, null, 2)}\n`);
 
-    await expect(loadOmaTrustConfig(path)).rejects.toThrow("OMATrust configuration is invalid");
+    const result = await loadDeploymentConfigs(configDir, {
+      trustContext,
+      confirmPluginUse: async () => true,
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "PLUGIN_HASH_MISMATCH" },
+    });
+    expect(mockBuildTrustReport).not.toHaveBeenCalled();
   });
 });
