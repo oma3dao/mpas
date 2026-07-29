@@ -1,20 +1,30 @@
 /**
  * OMATrust Plugin Trust Verification
  *
- * The `canTrust` function evaluates whether a plugin should be trusted based on two checks:
- *   1. Attestation from an approved issuer (on-chain via EAS)
- *   2. Linked identifier proving the artifact DID is associated with the target URL
+ * The `canTrust` function evaluates the backend's verified artifact evidence
+ * using two MPAS policy checks:
+ *   1. A verified responsibility claim
+ *   2. A cybersecurity assessment from an approved issuer
  *
- * Either check passing is sufficient for `trusted: true`.
+ * Linked identifiers are displayed for operator judgment and do not
+ * independently determine the verdict.
  */
 
 import type { MpasApplicationPlugin } from "../core/plugin-loader.js";
 import type { DeploymentConfig } from "./config-loader.js";
+import {
+  DEFAULT_ARTIFACT_TRUST_API_URL,
+  fetchArtifactTrust,
+} from "./artifact-trust-client.js";
 import { checkAttestation, type AttestationCheckResult } from "./trust-attestation.js";
-import { checkLinkage, type LinkageCheckResult } from "./trust-linkage.js";
+import {
+  listLinkedIdentifiers,
+  type LinkedIdentifierSummary,
+} from "./trust-linkage.js";
 
 export interface TrustVerdict {
-  trusted: boolean;
+  primaryEvidenceFound: boolean;
+  warningRequired: boolean;
   reasons: TrustReason[];
 }
 
@@ -24,66 +34,64 @@ export interface TrustReason {
   message: string;
 }
 
-export interface ApprovedIssuer {
-  address: string;
-  label: string;
-}
-
 export interface TrustContext {
-  /** OMATrust backend URL for fetching trust anchors */
-  backendUrl: string;
-  /** Approved issuers fetched from the trust-policy API */
-  approvedIssuers: ApprovedIssuer[];
-  /** Schema UIDs to query */
-  schemas: {
-    securityAssessment: string;
-    certification: string;
-    userReview: string;
-    linkedIdentifier: string;
-    controllerWitness: string;
-  };
-  /** Schema UID → human label mapping (from trust-anchors chains[].schemas) */
-  schemaLabels?: Map<string, string>;
-  /** RPC endpoint for querying EAS on-chain */
-  rpcUrl: string;
-  /** EAS contract address */
-  easContractAddress: string;
+  /** Full Artifact Trust API URL. Internal injection point for tests/embedding. */
+  artifactTrustApiUrl: string;
 }
 
-export interface OmaTrustConfig {
-  /** RPC endpoint for the chain where attestations live */
-  rpcUrl: string;
-  /** EAS contract address on that chain */
-  easContractAddress: string;
-  /** OMATrust backend URL (trust-policy API provides approved issuers) */
-  backendUrl: string;
-  /** Schema UIDs to query */
-  schemas: {
-    securityAssessment: string;
-    certification: string;
-    userReview: string;
-    linkedIdentifier: string;
-    controllerWitness: string;
-  };
-  /** Skip OMATrust check entirely (e.g., offline/CI environments) */
-  disabled?: boolean;
-}
+export const DEFAULT_TRUST_CONTEXT: TrustContext = {
+  artifactTrustApiUrl: DEFAULT_ARTIFACT_TRUST_API_URL,
+};
 
 export interface PluginTrustReport {
   artifactDid: string;
   pluginDid: string;
   pluginVersion: string;
-  targetUrl: string;
+  targetApplicationDid: string;
   verdict: TrustVerdict;
   attestation: AttestationCheckResult;
-  linkage: LinkageCheckResult;
+  linkedIdentifiers: LinkedIdentifierSummary[];
+}
+
+function buildReasons(
+  attestationResult: AttestationCheckResult,
+): TrustReason[] {
+  const responsibilityClaim = attestationResult.responsibilityClaims[0];
+  const cybersecurityAssessment = attestationResult.attestations.find(
+    (item) =>
+      item.schemaLabel === "security-assessment" &&
+      item.isApprovedIssuer,
+  );
+  return [
+    {
+      check: "responsibility-claim",
+      passed: attestationResult.responsibilityClaim,
+      message: responsibilityClaim
+        ? attestationResult.message
+        : "No verified responsibility claim was found.",
+    },
+    {
+      check: "cybersecurity-assessment",
+      passed: attestationResult.cybersecurityAssessment,
+      message: cybersecurityAssessment
+        ? `Cybersecurity assessed by: ${
+          cybersecurityAssessment.attesterLabel ??
+          cybersecurityAssessment.attester
+        }`
+        : "No verified cybersecurity assessment from an approved issuer was found.",
+    },
+  ];
 }
 
 /**
  * Evaluates whether a plugin can be trusted.
  *
- * Either check passing is sufficient for trusted: true.
- * If canTrust throws (network failure, SDK error), callers should treat the plugin as untrusted.
+ * A responsibility claim or approved-issuer cybersecurity assessment is
+ * sufficient to avoid the no-primary-evidence warning. This does not decide
+ * that the responsible party is legitimate or trusted by the operator.
+ * Backend or contract failures are allowed to throw so callers can distinguish
+ * unavailable trust information from a complete response containing no
+ * verified evidence.
  */
 export async function canTrust(
   plugin: MpasApplicationPlugin,
@@ -91,53 +99,17 @@ export async function canTrust(
   trustContext: TrustContext,
 ): Promise<TrustVerdict> {
   const artifactDid = config.plugin.artifactDid;
-  const targetUrl = extractTargetUrl(config.target.applicationDid);
-
-  const [attestationResult, linkageResult] = await Promise.allSettled([
-    checkAttestation(artifactDid, trustContext),
-    checkLinkage(artifactDid, targetUrl, trustContext),
-  ]);
-
-  const attestationPassed =
-    attestationResult.status === "fulfilled" && attestationResult.value.passed;
-  const linkagePassed =
-    linkageResult.status === "fulfilled" && linkageResult.value.passed;
-
-  const reasons: TrustReason[] = [];
-
-  // Check 1: Attestation
-  if (attestationResult.status === "fulfilled") {
-    reasons.push({
-      check: "attestation",
-      passed: attestationResult.value.passed,
-      message: attestationResult.value.message,
-    });
-  } else {
-    reasons.push({
-      check: "attestation",
-      passed: false,
-      message: `Attestation check failed: ${attestationResult.reason instanceof Error ? attestationResult.reason.message : "unknown error"}`,
-    });
-  }
-
-  // Check 2: Linkage
-  if (linkageResult.status === "fulfilled") {
-    reasons.push({
-      check: "linkage",
-      passed: linkageResult.value.passed,
-      message: linkageResult.value.message,
-    });
-  } else {
-    reasons.push({
-      check: "linkage",
-      passed: false,
-      message: `Linkage check failed: ${linkageResult.reason instanceof Error ? linkageResult.reason.message : "unknown error"}`,
-    });
-  }
+  const artifactTrust = await fetchArtifactTrust(
+    artifactDid,
+    trustContext.artifactTrustApiUrl,
+  );
+  const attestationResult =
+    await checkAttestation(artifactDid, trustContext, artifactTrust);
 
   return {
-    trusted: attestationPassed || linkagePassed,
-    reasons,
+    primaryEvidenceFound: attestationResult.primaryEvidenceFound,
+    warningRequired: !attestationResult.primaryEvidenceFound,
+    reasons: buildReasons(attestationResult),
   };
 }
 
@@ -150,50 +122,30 @@ export async function buildTrustReport(
   trustContext: TrustContext,
 ): Promise<PluginTrustReport> {
   const artifactDid = config.plugin.artifactDid;
-  const targetUrl = extractTargetUrl(config.target.applicationDid);
-
-  const [attestationResult, linkageResult] = await Promise.all([
-    checkAttestation(artifactDid, trustContext).catch((err) => ({
-      passed: false,
-      message: `Check failed: ${err instanceof Error ? err.message : "unknown"}`,
-      attestations: [],
-    })),
-    checkLinkage(artifactDid, targetUrl, trustContext).catch((err) => ({
-      passed: false,
-      message: `Check failed: ${err instanceof Error ? err.message : "unknown"}`,
-      linkedIdentifier: false,
-      controllerWitness: false,
-      dnsTxt: false,
-      wellKnownDid: false,
-    })),
+  const artifactTrust = await fetchArtifactTrust(
+    artifactDid,
+    trustContext.artifactTrustApiUrl,
+  );
+  const [attestationResult, linkedIdentifiers] = await Promise.all([
+    checkAttestation(artifactDid, trustContext, artifactTrust),
+    listLinkedIdentifiers(
+      artifactDid,
+      trustContext,
+      artifactTrust,
+    ),
   ]);
-
-  const reasons: TrustReason[] = [
-    { check: "attestation", passed: attestationResult.passed, message: attestationResult.message },
-    { check: "linkage", passed: linkageResult.passed, message: linkageResult.message },
-  ];
 
   return {
     artifactDid,
     pluginDid: config.plugin.pluginDid,
     pluginVersion: config.plugin.pluginVersion,
-    targetUrl,
+    targetApplicationDid: config.target.applicationDid,
     verdict: {
-      trusted: attestationResult.passed || linkageResult.passed,
-      reasons,
+      primaryEvidenceFound: attestationResult.primaryEvidenceFound,
+      warningRequired: !attestationResult.primaryEvidenceFound,
+      reasons: buildReasons(attestationResult),
     },
     attestation: attestationResult,
-    linkage: linkageResult,
+    linkedIdentifiers,
   };
-}
-
-/**
- * Extracts a URL/domain from an applicationDid.
- * e.g., "did:web:github-mirror.example" → "github.example"
- */
-export function extractTargetUrl(applicationDid: string): string {
-  // did:web:domain.example → domain.example
-  // did:web:domain.example:path:segments → domain.example/path/segments
-  const parts = applicationDid.replace(/^did:web:/, "");
-  return decodeURIComponent(parts.replaceAll(":", "/"));
 }

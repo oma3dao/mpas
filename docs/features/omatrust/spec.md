@@ -1,9 +1,9 @@
 # OMATrust Plugin Attestation Verification
 
-**Status:** Draft  
+**Status:** Implemented
 **Created:** 2026-07-01
 **Scope:** Credential Adapter evaluates plugin trustworthiness via `canTrust` before loading  
-**Goal:** Give operators a clear trust/no-trust signal for each plugin at startup, prompting for confirmation when trust cannot be established
+**Goal:** Give operators verified trust evidence for each plugin at startup, clearly distinguish technical verification from responsible-party legitimacy, and require an informed confirmation
 
 ---
 
@@ -11,17 +11,25 @@
 
 The credential adapter currently verifies a plugin's integrity (artifact DID hash match) but has no mechanism to assess its trustworthiness. A plugin that has never been reviewed, or one that has a known security issue attested on-chain, is loaded the same way as a plugin with multiple positive attestations.
 
-Additionally, there's no verification that the plugin is legitimately associated with the service it claims to proxy. A malicious plugin could claim to target `github.com` without any proof of association.
-
-Operators need a trust gate — similar to SSH unknown-host-key prompts — that evaluates trust and requires explicit confirmation before loading untrusted plugins.
+Operators need an evidence gate that presents what OMATrust can verify, explains
+what that evidence does not prove, and requires explicit confirmation before
+loading a plugin.
 
 ---
 
 ## 2. Solution Overview
 
-After the adapter verifies a plugin's artifact hash, it calls `canTrust()` to evaluate the plugin's trust posture. If the plugin is not trusted, the operator is prompted with specific reasons and must explicitly confirm before the plugin is loaded.
+After the adapter verifies a plugin's artifact hash, it calls `canTrust()` to
+evaluate the plugin's trust evidence. It always displays the result and asks
+the operator whether to continue. A responsibility claim or cybersecurity
+assessment is sufficient to suppress the warning; both are not required. If
+neither primary signal is present—or the check is unavailable—the prompt also
+contains a warning.
 
-The `canTrust` function is a single evaluation boundary. Its internal checks will evolve over time (and may eventually become policy-driven), but its contract with the rest of the system is stable: it takes a plugin and returns a verdict with reasons.
+The `canTrust` function is a single evidence-evaluation boundary. Its internal
+checks will evolve over time (and may eventually become policy-driven), but it
+does not decide whether a responsible party is legitimate or trusted by the
+operator.
 
 ---
 
@@ -29,7 +37,8 @@ The `canTrust` function is a single evaluation boundary. Its internal checks wil
 
 ```typescript
 interface TrustVerdict {
-  trusted: boolean;
+  primaryEvidenceFound: boolean;
+  warningRequired: boolean;
   reasons: TrustReason[];
 }
 
@@ -48,65 +57,78 @@ async function canTrust(
 
 ### v1 Checks
 
-The function evaluates two checks. **Either check passing is sufficient for `trusted: true`.**
+The function evaluates two primary-evidence checks. **Either check passing is
+sufficient for `warningRequired: false`.** This is not a legitimacy verdict.
+Verified linked identifiers are displayed as context, but they are not
+interpreted as a third primary check.
 
-#### Check 1: Attestation from approved issuer
+#### Check 1: Responsibility claim
 
-Query OMATrust for attestations on the plugin's `did:artifact`. At least one non-revoked, non-expired attestation from an approved issuer must exist (any schema: security-assessment, certification, or user-review).
-
-**Fails when:**
-- Zero attestations exist for the artifact DID
-- Attestations exist but none are from an approved issuer
-- All attestations from approved issuers are revoked or expired
-
-#### Check 2: Linked identifier (artifact → target URL)
-
-Verify that the `did:artifact` is linked to the plugin's declared target URL (the downstream service it proxies). This is analogous to code signing — it proves the entity controlling the artifact also controls (or is vouched for by) the target service.
-
-Linkage is established by any of:
-- **Linked-identifier attestation** on-chain tying the `did:artifact` to the target domain (must include a valid proof)
-- **Controller-witness attestation** showing common control between the artifact DID and the target URL's DID
-- **DNS TXT record** at the target domain containing the `did:artifact` value
-- **`/.well-known/did.json`** at the target domain listing the `did:artifact` in its DID document
+Query the OMATrust backend for a verified `responsibility-claim` on the
+plugin's `did:artifact`. In the claim, `subject` is the artifact DID and
+`responsibleParty` is the separate entity DID accepting responsibility for
+that artifact. The artifact DID does not authorize the attester. A returned
+claim has already passed its proof and the SDK check that the attesting
+controller is authorized for the `responsibleParty` identity at issuance time.
+This is a primary v1 signal because it identifies an accountable entity.
+Verification proves that the claim is authentic under its schema; it does not
+prove that `responsibleParty` is legitimate or worthy of trust. MPAS must show
+that DID to the operator, who decides whether to trust it.
 
 **Fails when:**
-- No linkage exists between the artifact DID and the plugin's declared target URL via any of the above methods
-- A linked-identifier attestation exists but its proof is invalid or missing
-- The plugin claims to proxy `github.com` but there's no proof the artifact is associated with GitHub
+- No verified responsibility claim exists for the artifact DID
+
+#### Check 2: Cybersecurity assessment
+
+At least one verified `security-assessment` whose verification basis includes
+`approved-issuer` must exist. Issuer approval is the schema-specific trust
+mechanism for a cybersecurity assessment.
+
+**Fails when:**
+- No cybersecurity assessment exists for the artifact DID
+- A cybersecurity assessment exists but its issuer is not approved
+- Other verified evidence exists without a qualifying cybersecurity assessment
+
+Revoked, expired, malformed, and otherwise invalid records are removed by the
+backend and never reach this policy check.
+
+#### Displayed evidence: Linked identifiers
+
+The adapter lists every verified `linked-identifier` returned in
+`otherAttestations`, including the linked identifier, attester, and
+verification basis. It does not compare the value with the configured
+Application DID, call it a pass or failure, or infer that the artifact controls
+an MCP transport endpoint. The operator decides whether a linked identifier is
+relevant and trustworthy in the plugin's deployment context.
+
+Proof and controller-authorization checks are performed by the backend.
+Controller witnesses may support that verification but are not returned as
+artifact evidence.
+
+User reviews are not returned by this artifact endpoint in v1. Their schema
+does not provide a verifiable binding to a `did:artifact`, so presenting them
+as artifact trust evidence would overstate what they prove. Certifications may
+be displayed as informational evidence but do not satisfy either primary v1
+check.
 
 ### TrustContext
 
-`TrustContext` is a derived runtime object. Operators provide `OmaTrustConfig`;
-the adapter fetches current trust anchors and constructs this object. It is not
-an operator-authored file format.
+`TrustContext` is an internal injection point, not operator configuration.
+Normal daemon startup uses the complete production Artifact Trust API URL.
+Chain, RPC, EAS, schema, issuer, and verification policy remain backend
+concerns.
 
 ```typescript
 interface TrustContext {
-  /** OMATrust backend URL used for trust anchors and controller checks */
-  backendUrl: string;
-  /** Approved issuers derived from current trust anchors */
-  approvedIssuers: Array<{
-    address: string;
-    label: string;
-  }>;
-  /** Schema UIDs to query */
-  schemas: {
-    securityAssessment: string;
-    certification: string;
-    userReview: string;
-    linkedIdentifier: string;
-    controllerWitness: string;
-  };
-  /** Optional schema UID to human-readable label mapping */
-  schemaLabels?: Map<string, string>;
-  /** RPC endpoint for querying EAS attestations */
-  rpcUrl: string;
-  /** EAS contract on the configured chain */
-  easContractAddress: string;
+  /** Full Artifact Trust API URL */
+  artifactTrustApiUrl: string;
 }
 ```
 
-Approved issuers are fetched from the OMATrust-backend trust-policy API at startup (not hardcoded in config). This keeps the issuer list centrally managed and up-to-date without requiring operators to maintain it locally.
+The default is
+`https://backend.omatrust.org/api/public/artifact-trust`. The adapter adds only
+the encoded `artifactDid` query parameter, calls the URL once per plugin load,
+and shares that response across both MPAS checks.
 
 ---
 
@@ -114,12 +136,12 @@ Approved issuers are fetched from the OMATrust-backend trust-policy API at start
 
 ```
 ┌──────────────────┐     ┌─────────────────┐     ┌──────────────┐
-│  Config Loader   │────▶│   canTrust()    │────▶│  EAS (chain) │
+│  Config Loader   │────▶│   canTrust()    │────▶│ OMATrust API │
 │                  │     │                 │     │              │
 │ 1. Load plugin   │     │ Check 1:        │     │              │
 │ 2. Verify hash   │     │  attestations   │     │              │
 │ 3. canTrust()    │◀────│ Check 2:        │◀────│              │
-│ 4. Prompt if no  │     │  linkage        │     │              │
+│ 4. Show + prompt │     │  approved issuer│     │              │
 │ 5. Load or abort │     └─────────────────┘     └──────────────┘
 └──────────────────┘
 ```
@@ -128,24 +150,34 @@ Approved issuers are fetched from the OMATrust-backend trust-policy API at start
 
 1. Adapter loads plugin and verifies `artifactDid` hash (existing behavior)
 2. Adapter calls `canTrust(plugin, config, trustContext)`
-3. `canTrust` queries OMATrust for attestations and linkage proofs
+3. `canTrust` requests the backend's complete, verified artifact evidence once
 4. Returns a trust report with pass/fail per check and human-readable reasons
-5. Adapter displays all available attestation and linkage information
-6. Adapter asks the operator whether to use the plugin regardless of the aggregate verdict
+5. Adapter displays responsibility, cybersecurity, informational, and
+   linked-identifier evidence
+6. The prompt includes a warning only when neither primary signal exists or
+   the lookup is unavailable
 7. If the operator confirms → load plugin; if operator rejects → skip plugin
 
 ---
 
 ## 5. Operator Experience
 
-### Plugin with trusted evidence
+### Plugin with primary evidence (no warning)
 
 ```
 Plugin: github-repo (did:artifact:bafk...)
   Content integrity: verified (plugin content matches the configured did:artifact)
   OMATrust information:
-    Attestation check: PASS — Attested by: OMA3 Security Lab (security-assessment)
-    Target linkage: PASS — Linked to: github.com (controller-witness)
+    Responsibility claim: FOUND
+      - did:web:publisher.example; responsibility publisher, maintainer;
+        verified via proof, controller-authorization, authorization-window
+        Technical verification confirms the claim, but does not establish that
+        the responsible party is legitimate. Decide whether you trust that party.
+    Cybersecurity assessment: FOUND
+      - security-assessment; issuer OMA3 Security Lab; verified via approved-issuer
+    Linked identifiers (1):
+      - did:web:publisher.example; issuer did:web:publisher.example;
+        verified via proof, controller-authorization, authorization-window
 
   [y/N] Would you like to use this plugin given the information shown?
 ```
@@ -156,10 +188,12 @@ Plugin: github-repo (did:artifact:bafk...)
 Plugin: sketchy-tool (did:artifact:bafk...)
   Content integrity: verified (plugin content matches the configured did:artifact)
   OMATrust information:
-  Attestation check: NOT VERIFIED — Zero attestations: No attestations found for this artifact on OMATrust.
-  Target linkage: NOT VERIFIED — No linkage: did:artifact is not linked to the URL this plugin targets (api.example.com).
-    Without linkage, there is no trusted issuer that vouches for this plugin's
-    association with its declared target.
+    WARNING: No verified responsibility claim or cybersecurity assessment was found.
+    Responsibility claim: NOT FOUND
+    Cybersecurity assessment: NOT FOUND
+    Linked identifiers (1):
+      - did:web:unrecognized-publisher.example; issuer 0x1234...;
+        verified via proof, controller-authorization, authorization-window
 
   [y/N] Would you like to use this plugin given the information shown?
 ```
@@ -169,16 +203,12 @@ Plugin: sketchy-tool (did:artifact:bafk...)
 ```
 Plugin: github-repo (did:artifact:bafk...)
   Content integrity: verified (plugin content matches the configured did:artifact)
-  WARNING: OMATrust context could not be loaded.
-  No OMATrust attestations, approved-issuer checks, target linkage, or other
-  legitimacy and provenance checks were performed.
+  WARNING: OMATrust information could not be loaded.
+  No OMATrust responsibility claims, attestations, linked identifiers, or
+  other legitimacy and provenance evidence was loaded.
 
   [y/N] Would you like to use this plugin given the information shown?
 ```
-
-If no OMATrust context is configured, the adapter displays the same warning with
-`No OMATrust context was provided`. Content integrity verification still occurs;
-the warning concerns legitimacy, provenance, attestations, and target linkage.
 
 ---
 
@@ -188,9 +218,23 @@ The check hooks into `config-loader.ts` → `loadDeploymentConfigFile()`, after 
 
 ```typescript
 // After hash verification passes:
-const assessment = trustContext
-  ? { status: "checked", report: await buildTrustReport(pluginResult.plugin, config, trustContext) }
-  : { status: "notChecked", reason: "notConfigured" };
+let assessment;
+try {
+  assessment = {
+    status: "checked",
+    report: await buildTrustReport(
+      pluginResult.plugin,
+      config,
+      DEFAULT_TRUST_CONTEXT,
+    ),
+  };
+} catch (error) {
+  assessment = {
+    status: "notChecked",
+    reason: "unavailable",
+    detail: error instanceof Error ? error.message : String(error),
+  };
+}
 
 const confirmed = await promptPluginUse(assessment, config);
 if (!confirmed) {
@@ -198,44 +242,45 @@ if (!confirmed) {
 }
 ```
 
-If the trust context cannot be loaded or a check is unavailable, the adapter reports the failure and prompts the operator with the degraded-mode message.
+If the API check is unavailable, the adapter reports the failure and prompts
+the operator with the degraded-mode message.
+The prompt is always shown so the operator can evaluate the responsible-party
+DID and other evidence; only the warning is conditional.
 
 ---
 
 ## 7. Relevant Schemas
 
-| Schema | Role in `canTrust` |
-|--------|-------------------|
-| `security-assessment` | Check 1: counts as attestation from approved issuer |
-| `certification` | Check 1: counts as attestation from approved issuer |
-| `user-review` | Check 1: counts as attestation from approved issuer |
-| `linked-identifier` | Check 2: proves artifact ↔ URL linkage |
-| `controller-witness` | Check 2: proves common control (artifact DID ↔ target URL DID) |
+| Schema                 | Role in `canTrust`                                                                                         |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `responsibility-claim` | Primary: identifies a verified responsible party and independently satisfies v1 policy                     |
+| `security-assessment`  | Primary: satisfies v1 policy when verified with `approved-issuer` basis                                    |
+| `linked-identifier`    | Secondary: listed for operator judgment; its authorization proof does not independently change the verdict |
+| `certification`        | Informational: displayed when returned but does not satisfy either primary check                           |
+| `user-review`          | Excluded: its schema cannot establish a provable `did:artifact` binding                                    |
+| `controller-witness`   | Backend-only supporting evidence used to verify controller relationships; never displayed                  |
 
 ---
 
 ## 8. Trust Report
 
-Even when trusted, the adapter produces a `PluginTrustReport` for logging/audit:
+The adapter produces a `PluginTrustReport` for display and logging/audit:
 
 ```typescript
 interface PluginTrustReport {
   artifactDid: string;
   pluginDid: string;
   pluginVersion: string;
-  targetUrl: string;
+  targetApplicationDid: string;
   verdict: TrustVerdict;
-  attestations: {
-    securityAssessments: AttestationSummary[];
-    certifications: AttestationSummary[];
-    userReviews: UserReviewSummary;
+  attestation: {
+    primaryEvidenceFound: boolean;
+    responsibilityClaim: boolean;
+    cybersecurityAssessment: boolean;
+    responsibilityClaims: AttestationSummary[];
+    attestations: AttestationSummary[];
   };
-  linkage: {
-    linkedIdentifier: boolean;  // must have valid proof
-    controllerWitness: boolean;
-    dnsTxt: boolean;
-    wellKnownDid: boolean;
-  };
+  linkedIdentifiers: LinkedIdentifierSummary[];
 }
 
 interface AttestationSummary {
@@ -243,73 +288,54 @@ interface AttestationSummary {
   attester: string;
   attesterLabel?: string;
   isApprovedIssuer: boolean;
-  time: bigint;
-  expirationTime: bigint;
-  revoked: boolean;
+  schemaUid: string;
+  schemaLabel: string;
+  time: string;
+  expirationTime: string;
+  verificationBasis: string[];
+  data: Record<string, unknown>;
 }
 
-interface UserReviewSummary {
-  count: number;
-  averageRating: number;
+interface LinkedIdentifierSummary {
+  uid: string;
+  linkedId: string;
+  attester: string;
+  attesterLabel?: string;
+  verificationBasis: string[];
 }
 ```
 
 ---
 
-## 9. Configuration
+## 9. Endpoint Selection
 
-```typescript
-interface OmaTrustConfig {
-  /** RPC endpoint for the chain where attestations live */
-  rpcUrl: string;
-  /** EAS contract address on that chain */
-  easContractAddress: string;
-  /** OMATrust backend URL (trust-policy API provides approved issuers) */
-  backendUrl: string;
-  /** Schema UIDs to query */
-  schemas: {
-    securityAssessment: string;
-    certification: string;
-    userReview: string;
-    linkedIdentifier: string;
-    controllerWitness: string;
-  };
-  /** Skip OMATrust check entirely (e.g., offline/CI environments) */
-  disabled?: boolean;
-}
-```
-
-Pass the configuration programmatically as `DaemonOptions.omaTrust`, or provide a
-JSON file through `mpas daemon start --omatrust-config <file>` or the
-`MPAS_OMATRUST_CONFIG` environment variable.
-
-The canonical operator-facing format, complete JSON example, and startup
-instructions are documented in the demo
-[OMATrust Plugin Verification README section](../../../examples/demo/README.md#omatrust-plugin-verification).
-
-If `disabled: true` or no configuration is provided, the adapter still verifies
-the plugin's `did:artifact`, warns that no OMATrust legitimacy or provenance
-checks were performed, and requires operator confirmation.
+No OMATrust configuration is required in v1. MPAS uses the complete public
+Artifact Trust API URL by default and does not expose a backend base URL, RPC
+URL, or API-key setting. A future premium endpoint may introduce an explicit
+configuration contract containing the endpoint and authentication material;
+that contract is outside this feature.
 
 ---
 
 ## 10. Dependencies
 
-| Dependency | Purpose |
-|---|---|
-| `@oma3/omatrust` | `getAttestationsForDid`, DID conversion, and linkage queries |
-| `omatrust-backend` | Trust-policy API (provides the approved issuers list) |
-| `ethers` | JSON-RPC provider for on-chain queries |
-| EAS on OMAchain | Source of attestation and linkage data |
-| DNS resolver | For DNS TXT record linkage verification |
+| Dependency              | Purpose                                       |
+| ----------------------- | --------------------------------------------- |
+| `omatrust-backend`      | Public verified artifact-trust API            |
+| `fetch` / `AbortSignal` | Bounded HTTP lookup with a ten-second timeout |
 
 ---
 
 ## 11. Scope Boundaries
 
 **In scope (v1):**
-- `canTrust()` function with two built-in checks (attestation + linkage)
-- Interactive operator prompt after every plugin trust report
+- `canTrust()` function with two built-in checks (responsibility claim +
+  approved-issuer cybersecurity assessment)
+- Display of all verified linked identifiers without a target-match verdict
+- Display and confirmation for every report so the operator can judge the
+  responsible party
+- Warning only when both primary signals are absent or the lookup is
+  unavailable; interactive confirmation for every plugin
 - Graceful degradation when network is unavailable
 - Explicit warning and confirmation when no trust context is configured
 - Trust report for logging/audit

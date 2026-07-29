@@ -9,8 +9,10 @@ import { createAdapterApiServer } from "./adapter-api-server.js";
 import { DispatchLedger, FileDispatchJournal } from "./dispatch-ledger.js";
 import { TraceLogger, TraceWriter } from "../core/trace.js";
 import type { Did } from "../core/types.js";
-import type { OmaTrustConfig } from "./trust.js";
-import { buildTrustContext } from "./trust-backend.js";
+import {
+  DEFAULT_TRUST_CONTEXT,
+  type TrustContext,
+} from "./trust.js";
 import type { ConfirmPluginUse } from "./trust-prompt.js";
 
 export interface AdapterKeyFile {
@@ -28,8 +30,8 @@ export interface DaemonOptions {
   maxEnvelopeValidityMs?: number;
   journalPath?: string;
   tracePath?: string;
-  omaTrust?: OmaTrustConfig;
-  omaTrustConfigPath?: string;
+  /** Internal injection point for tests and embedded deployments. */
+  trustContext?: TrustContext | null;
   confirmPluginUse?: ConfirmPluginUse;
 }
 
@@ -57,23 +59,13 @@ export function defaultJournalPath(): string {
 
 export async function startDaemon(options: DaemonOptions = {}): Promise<StartedDaemon> {
   const configDir = options.configDir ?? defaultConfigDir();
-  const omaTrustConfigPath = options.omaTrustConfigPath ?? process.env.MPAS_OMATRUST_CONFIG;
-  const omaTrust = options.omaTrust ?? (omaTrustConfigPath ? await loadOmaTrustConfig(omaTrustConfigPath) : undefined);
-
-  // Build OMATrust context if configured (fetches approved issuers from backend).
-  let trustContext = null;
-  let trustContextError: string | undefined;
-  if (omaTrust && !omaTrust.disabled) {
-    try {
-      trustContext = await buildTrustContext(omaTrust);
-    } catch (error) {
-      trustContextError = error instanceof Error ? error.message : String(error);
-    }
-  }
+  const trustContext =
+    options.trustContext === undefined
+      ? DEFAULT_TRUST_CONTEXT
+      : options.trustContext;
 
   const loaded = await loadDeploymentConfigs(configDir, {
     trustContext,
-    trustContextError,
     confirmPluginUse: options.confirmPluginUse,
   });
   if (!loaded.ok) {
@@ -141,23 +133,4 @@ export async function loadAdapterKey(path: string): Promise<AdapterKeyFile> {
     privateJwk: parsed.privateJwk,
     publicJwk: parsed.publicJwk,
   };
-}
-
-export async function loadOmaTrustConfig(path: string): Promise<OmaTrustConfig> {
-  const parsed = JSON.parse(await readFile(path, "utf8")) as Partial<OmaTrustConfig>;
-  const schemas = parsed.schemas;
-  if (
-    typeof parsed.rpcUrl !== "string" ||
-    typeof parsed.easContractAddress !== "string" ||
-    typeof parsed.backendUrl !== "string" ||
-    !schemas ||
-    typeof schemas.securityAssessment !== "string" ||
-    typeof schemas.certification !== "string" ||
-    typeof schemas.userReview !== "string" ||
-    typeof schemas.linkedIdentifier !== "string" ||
-    typeof schemas.controllerWitness !== "string"
-  ) {
-    throw new Error(`OMATrust configuration is invalid: ${path}`);
-  }
-  return parsed as OmaTrustConfig;
 }

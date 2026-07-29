@@ -295,6 +295,7 @@ async function startStack() {
     adapterKeyPath: join(fixturesDir, "test-keys", "adapter.json"),
     port: 0,
     journalPath: join(await mkdtemp(join(tmpdir(), "mpas-e2e-journal-")), "dispatch-ledger.jsonl"),
+    trustContext: null,
     confirmPluginUse: async () => true,
   });
   const coordination = await startCoordinationDaemon({ port: 0 });
