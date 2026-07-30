@@ -45,6 +45,30 @@ The example credential adapter uses a JSON policy format as a pragmatic choice f
 
 Production implementations are maintained independently — reference implementations live in `oma3/mpas-applications`, and third-party or vendor implementations live in their publishers' repositories. The application registry in this repo is the index that points to all of them. This split is deliberate: this repository is the normative home (specifications, SDK, conformance, registry, teaching examples); implementations people deploy in production live elsewhere.
 
+## Build and Verify
+
+MPAS requires Node.js 22 or later. From the repository root, install the locked
+dependencies, build each package, and run the test suites in dependency order:
+
+```sh
+npm ci --prefix sdk/protocol
+npm run build --prefix sdk/protocol
+npm test --prefix sdk/protocol
+
+npm ci --prefix bridge-generator
+npm run build --prefix bridge-generator
+npm test --prefix bridge-generator
+
+npm ci --prefix examples/demo
+npm run build --prefix examples/demo
+npm test --prefix examples/demo
+npm run test:e2e:mcp-bridge --prefix examples/demo
+```
+
+For the complete local governed-action walkthrough, including proposer,
+maintainer, Credential Adapter, policy, and agent-harness configuration, follow
+the [macOS demo setup guide](examples/demo/guides/setup-macos.md).
+
 ## Architecture
 
 ```
