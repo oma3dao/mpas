@@ -3,7 +3,7 @@
 **Target demo machine:** Intel or Apple Silicon Mac running macOS 11 Big Sur or newer  
 **Tested target:** MacBook Pro 15-inch 2017, Intel Core i7, 16 GB RAM, macOS Ventura 13.7.x  
 **Purpose:** Run the local MPAS demo stack with autonomous agents  
-**Last updated:** 2026-06-14  
+**Last updated:** 2026-07-29
 **Specifications:** ../../specs/ (local)
 
 | Document                             | Description                                                      |
@@ -160,25 +160,25 @@ The only path to write operations should be through the MPAS bridge → Credenti
 
 ### Step 7: Build MPAS
 
-Install dependencies and build the demo package and MCP bridge:
-
-```sh
-cd ~/Projects/mpas/mpas/examples/demo
-npm install
-npm run build
-npm test
-```
-
-Then the protocol SDK:
+Build and test the protocol SDK first. The demo consumes this local package:
 
 ```sh
 cd ~/Projects/mpas/mpas/sdk/protocol
-npm install
+npm ci
 npm run build
 npm test
 ```
 
-Expected: `examples/demo` passes 213+ tests; `sdk/protocol` passes 42 tests.
+Then install, build, and test the demo:
+
+```sh
+cd ~/Projects/mpas/mpas/examples/demo
+npm ci
+npm run build
+npm test
+```
+
+Expected: both test suites pass with no failures.
 
 ### Step 8: Run the E2E Test
 
