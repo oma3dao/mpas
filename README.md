@@ -7,75 +7,29 @@
 
 Canonical repository for the MPAS (Multi-Party Action Security) standard and reference implementation.
 
-MPAS is a protocol for multi-party approval of AI agent actions. Instead of giving agents direct access to privileged APIs, MPAS routes actions through a Credential Adapter that enforces policy-based approval workflows before execution. No single agent can both propose and approve the same action.
+MPAS is a protocol for multi-party approval of high-impact digital actions.
+In this document, **Agent** means any entity that can hold a private key and
+participate as a Proposer or Signer — a human, AI agent, device, service, or
+organization — not only an LLM-driven process.
 
-## License and participation
+Instead of giving agents direct access to privileged APIs, MPAS routes actions
+through a Credential Adapter that enforces policy-based approval workflows
+before execution. No single agent can both propose and approve the same action.
 
-Software and other contributions to this repository are licensed under the
-[Apache License 2.0](./LICENSE).
+MCP is one execution profile and the path used by the bridge generator and
+demo in this repository. The protocol itself is not limited to MCP; other
+execution profiles can carry MPAS Action Packages for non-MCP environments.
 
-By submitting material for inclusion in this repository, contributors agree
-that it may be distributed under the Apache License 2.0.
-
-Final OMA3 Specifications are separately governed by
-[OMA3's Intellectual Property Rights Policy](https://www.oma3.org/intellectual-property-rights-policy)
-and applicable OMA3 review and approval processes.
-
-## What This Repository Contains
-
-This repository is the OMA3-owned home of the MPAS standard:
-
-- **Specifications** — the MPAS protocol documents (core, profiles, schemas)
-- **Bridge generator** — development-time tool that generates a static MCP bridge (and plugin scaffold) from a running MCP server
-- **SDK** — `@oma3/mpas` protocol library (types, verification, policy engine, receipts, proposer primitives, protocol clients)
-- **Example implementation** — a working implementation demonstrating the full MPAS flow (propose → approve → dispatch)
-- **Application registry** — per-application descriptors referencing known implementations
-- **Conformance model** — the conformance roles and test model (official test tools planned; see `conformance/`)
-- **Documentation** — developer guides, architecture docs, and website content
-
-## What This Repository Does Not Contain
-
-- Production implementations (these belong to implementation providers)
-- Production bridges or plugins
-- Enterprise features
-- Runtime/autonomous bridge or plugin generation (the `bridge-generator/` tool is development-time only: it emits static, reviewable code that is checked in before use)
-- Anything beyond the example path demonstrating the full MPAS protocol flow
-
-The example credential adapter uses a JSON policy format as a pragmatic choice for demonstration. Production implementations may use OPA, Cedar, or any other policy engine that satisfies the MPAS specification requirements.
-
-Production implementations are maintained independently — reference implementations live in `oma3/mpas-applications`, and third-party or vendor implementations live in their publishers' repositories. The application registry in this repo is the index that points to all of them. This split is deliberate: this repository is the normative home (specifications, SDK, conformance, registry, teaching examples); implementations people deploy in production live elsewhere.
-
-## Build and Verify
-
-MPAS requires Node.js 22 or later. From the repository root, install the locked
-dependencies, build each package, and run the test suites in dependency order:
-
-```sh
-npm ci --prefix sdk/protocol
-npm run build --prefix sdk/protocol
-npm test --prefix sdk/protocol
-
-npm ci --prefix bridge-generator
-npm run build --prefix bridge-generator
-npm test --prefix bridge-generator
-
-npm ci --prefix examples/demo
-npm run build --prefix examples/demo
-npm test --prefix examples/demo
-npm run test:e2e:mcp-bridge --prefix examples/demo
-```
-
-For the complete local governed-action walkthrough, including proposer,
-maintainer, Credential Adapter, policy, and agent-harness configuration, follow
-the [macOS demo setup guide](examples/demo/guides/setup-macos.md).
+For a higher-level overview of the problem space and approach, see
+[MPAS in oma3-projects](https://github.com/oma3dao/oma3-projects/blob/main/mpas.md).
 
 ## Architecture
 
 ```
 ┌──────────────────┐       ┌──────────────────┐       ┌──────────────────────┐       ┌─────────────────┐
-│  Proposer Agent  │       │  MCP Bridge      │       │  Credential Adapter  │       │  Target         │
-│                  │──MCP─▶│  (proposer mode) │─HTTP─▶│  (port 7544)         │──API─▶│  (GitHub, etc.) │
-│  Sees normal MCP │       │  Signs envelopes │       │  Verifies signatures │       │                 │
+│  Proposer Agent  │       │  MCP Bridge      │       │  Credential Adapter  │       │  MCP/API        │
+│                  │──MCP─▶│  (proposer mode) │─HTTP─▶│  (port 7544)         │──MCP─▶│  (GitHub, etc.) │
+│  Sees normal MCP │       │  Signs envelopes │       │  Verifies signatures │ /API  │                 │
 │  tools           │       │  Waits for       │       │  Evaluates policy    │       │                 │
 │                  │       │  approval        │       │  Dispatches action   │       │                 │
 └──────────────────┘       └────────┬─────────┘       └──────────────────────┘       └─────────────────┘
@@ -120,7 +74,53 @@ the [macOS demo setup guide](examples/demo/guides/setup-macos.md).
 
 ### The Governance Boundary
 
-The Application Plugin plus the deployment policy define the **governed set** of operations. An operation in that set gets schema validation and policy evaluation (thresholds, signer groups, `defaultRequirement`). An operation outside that set is routed as **pass-through**: after proposer gating and signature verification it executes with the adapter's credential on the proposer's signature alone — `defaultRequirement` does not apply to it. This reflects the plugin-anchored trust model: the plugin publisher — typically the party that knows the target API best, attested via OMATrust — decides which operations need governance, and operators ratify that decision by trusting the publisher. If you care about an operation, put it in the plugin or give it a policy entry; power users who want unlisted operations refused entirely can set `passThrough: "deny"` in the deployment config.
+The Application Plugin plus the deployment policy define the **governed set** of operations. An operation in that set gets schema validation and policy evaluation (thresholds, signer groups, `defaultRequirement`). An operation outside that set is routed as **pass-through**: after proposer gating and signature verification it executes with the adapter's credential on the proposer's signature alone — `defaultRequirement` does not apply to it. This reflects the plugin-anchored trust model: the plugin publisher — typically the party that knows the target API best, attested via OMATrust, decides which operations need governance. Operators ratify that decision by trusting the publisher. If you care about an operation, put it in the policy entry; power users who want unlisted operations refused entirely can set `passThrough: "deny"` in the deployment config.
+
+## What This Repository Contains
+
+This repository is the OMA3-owned home of the MPAS standard:
+
+- **Specifications** — the MPAS protocol documents (core, profiles, schemas)
+- **SDK** — `@oma3/mpas` protocol library (types, verification, policy engine, receipts, proposer primitives, protocol clients)
+- **Bridge generator** — development-time tool that generates a static MCP bridge (and plugin scaffold) from a running MCP server
+- **Example implementation** — a working implementation demonstrating the full MPAS flow (propose → approve → dispatch)
+- **Application registry** — per-application descriptors referencing known implementations
+- **Conformance model** — the conformance roles and test model (official test tools planned; see `conformance/`)
+- **Documentation** — developer guides, architecture docs, and website content
+
+## What This Repository Does Not Contain
+
+- Production implementations (these belong to implementation providers)
+- Production bridges or plugins
+- Anything beyond the example path demonstrating the full MPAS protocol flow
+
+The example credential adapter uses a JSON policy format as a pragmatic choice for demonstration. Production implementations may use OPA, Cedar, or any other policy engine that satisfies the MPAS specification requirements.
+
+Production implementations are maintained independently — reference implementations live in `oma3/mpas-applications`, and third-party or vendor implementations live in their publishers' repositories. The application registry in this repo is the index that points to all of them. This split is deliberate: this repository is the normative home (specifications, SDK, conformance, registry, teaching examples); implementations people deploy in production live elsewhere.
+
+## Build and Verify
+
+MPAS requires Node.js 22 or later. From the repository root, install the locked
+dependencies, build each package, and run the test suites in dependency order:
+
+```sh
+npm ci --prefix sdk/protocol
+npm run build --prefix sdk/protocol
+npm test --prefix sdk/protocol
+
+npm ci --prefix bridge-generator
+npm run build --prefix bridge-generator
+npm test --prefix bridge-generator
+
+npm ci --prefix examples/demo
+npm run build --prefix examples/demo
+npm test --prefix examples/demo
+npm run test:e2e:mcp-bridge --prefix examples/demo
+```
+
+For the complete local governed-action walkthrough, including proposer,
+maintainer, Credential Adapter, policy, and agent-harness configuration, follow
+the [macOS demo setup guide](examples/demo/guides/setup-macos.md).
 
 ## Repository Layout
 
@@ -153,7 +153,21 @@ Each example in `examples/` is self-contained with its own build tooling. The de
 
 ## Documentation
 
+- Higher-level overview: [oma3-projects/mpas.md](https://github.com/oma3dao/oma3-projects/blob/main/mpas.md)
 - Specifications: `specs/`
 - Feature documentation: `docs/features/`
 - Demo setup guide: `examples/demo/guides/`
 - Application registry: `application-registry/`
+- Application plugins and bridges: [oma3dao/mpas-applications](https://github.com/oma3dao/mpas-applications)
+
+## License and participation
+
+Software and other contributions to this repository are licensed under the
+[Apache License 2.0](./LICENSE).
+
+By submitting material for inclusion in this repository, contributors agree
+that it may be distributed under the Apache License 2.0.
+
+Final OMA3 Specifications are separately governed by
+[OMA3's Intellectual Property Rights Policy](https://www.oma3.org/intellectual-property-rights-policy)
+and applicable OMA3 review and approval processes.
