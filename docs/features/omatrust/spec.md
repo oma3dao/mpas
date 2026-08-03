@@ -67,16 +67,52 @@ interpreted as a third primary check.
 Query the OMATrust backend for a verified `responsibility-claim` on the
 plugin's `did:artifact`. In the claim, `subject` is the artifact DID and
 `responsibleParty` is the separate entity DID accepting responsibility for
-that artifact. The artifact DID does not authorize the attester. A returned
-claim has already passed its proof and the SDK check that the attesting
-controller is authorized for the `responsibleParty` identity at issuance time.
+that artifact. A returned claim has already passed its proof and the SDK check
+that the attesting controller is authorized for the `responsibleParty`
+identity at issuance time.
+
+**The artifact DID does not authorize the attester**, so a verified claim only
+establishes that *somebody* controls the identity they named — not that this
+artifact's publisher endorsed them. Anyone may therefore attest a claim against
+any artifact DID. The check counts a claim only when `responsibleParty` equals
+the `publisherDid` the plugin itself declares, compared under the SDK's
+`normalizeDid` from `@oma3/omatrust/identity`. That is the same normalization
+`computeDidHash` applies before hashing, so the adapter uses the notion of
+identity the attestations are indexed under, rather than a raw string compare
+that would disagree with the backend over `www.` prefixes, DID URL fragments,
+whitespace, and per-method casing. Comparison is whole-DID: no domain is
+extracted, because `did:web` is DNS-bound and accepting any subdomain of the
+publisher's registrable domain would let a dangling subdomain qualify. A
+`responsibleParty` that cannot be normalized fails to match rather than
+aborting the load.
+Without that binding, an unrelated party's claim would satisfy the primary
+check and suppress the operator warning on an artifact nobody legitimate had
+claimed.
+
+`publisherDid` is read from the plugin, which the loader has already
+hash-verified against the configured `artifactDid`. It therefore cannot be
+substituted independently of the content being vouched for, and needs no
+separate trusted source. The publisher chooses that value, so it is the
+publisher's responsibility to declare the identity that will claim the
+artifact.
+
 This is a primary v1 signal because it identifies an accountable entity.
 Verification proves that the claim is authentic under its schema; it does not
 prove that `responsibleParty` is legitimate or worthy of trust. MPAS must show
-that DID to the operator, who decides whether to trust it.
+that DID to the operator, who decides whether to trust it. No attestation type
+in v1 speaks to publisher legitimacy — the operator's judgement is the only
+control for it.
+
+Claims naming any other party are collected as
+`unqualifiedResponsibilityClaims`. They are **not** listed at the prompt: an
+operator cannot adjudicate unfamiliar DIDs on a startup screen, and printing
+them competes with the claim that does count. The prompt reports their count
+and writes the detail to a file. Failure to write that file never blocks
+startup.
 
 **Fails when:**
 - No verified responsibility claim exists for the artifact DID
+- Claims exist, but none names the plugin's declared `publisherDid`
 
 #### Check 2: Cybersecurity assessment
 
@@ -168,7 +204,8 @@ and shares that response across both MPAS checks.
 Plugin: github-repo (did:artifact:bafk...)
   Content integrity: verified (plugin content matches the configured did:artifact)
   OMATrust information:
-    Responsibility claim: FOUND
+    Declared publisher: did:web:publisher.example
+    Responsibility claim from that publisher: FOUND
       - did:web:publisher.example; responsibility publisher, maintainer;
         verified via proof, controller-authorization, authorization-window
         Technical verification confirms the claim, but does not establish that
@@ -189,7 +226,8 @@ Plugin: sketchy-tool (did:artifact:bafk...)
   Content integrity: verified (plugin content matches the configured did:artifact)
   OMATrust information:
     WARNING: No verified responsibility claim or cybersecurity assessment was found.
-    Responsibility claim: NOT FOUND
+    Declared publisher: did:web:publisher.example
+    Responsibility claim from that publisher: NOT FOUND
     Cybersecurity assessment: NOT FOUND
     Linked identifiers (1):
       - did:web:unrecognized-publisher.example; issuer 0x1234...;
@@ -197,6 +235,27 @@ Plugin: sketchy-tool (did:artifact:bafk...)
 
   [y/N] Would you like to use this plugin given the information shown?
 ```
+
+### Artifact claimed by someone other than the declared publisher
+
+```
+Plugin: sketchy-tool (did:artifact:bafk...)
+  Content integrity: verified (plugin content matches the configured did:artifact)
+  OMATrust information:
+    WARNING: No verified responsibility claim or cybersecurity assessment was found.
+    Declared publisher: did:web:publisher.example
+    Responsibility claim from that publisher: NOT FOUND
+    Claims naming a different responsible party: 2 (not counted as evidence)
+      Details written to /var/folders/../mpas-trust-a1b2c3/unqualified-responsibility-claims.json
+    Cybersecurity assessment: NOT FOUND
+    Linked identifiers (0):
+      - None found.
+
+  [y/N] Would you like to use this plugin given the information shown?
+```
+
+Before this binding existed, those two claims would have set
+`primaryEvidenceFound: true` and removed the warning entirely.
 
 ### Network unreachable (graceful degradation)
 

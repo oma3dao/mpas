@@ -3,7 +3,7 @@
  *
  * The `canTrust` function evaluates the backend's verified artifact evidence
  * using two MPAS policy checks:
- *   1. A verified responsibility claim
+ *   1. A verified responsibility claim from the plugin's declared publisher
  *   2. A cybersecurity assessment from an approved issuer
  *
  * Linked identifiers are displayed for operator judgment and do not
@@ -45,6 +45,8 @@ export const DEFAULT_TRUST_CONTEXT: TrustContext = {
 
 export interface PluginTrustReport {
   artifactDid: string;
+  /** The publisher the plugin declares; the party a claim must name to count. */
+  publisherDid: string;
   pluginDid: string;
   pluginVersion: string;
   targetApplicationDid: string;
@@ -86,8 +88,9 @@ function buildReasons(
 /**
  * Evaluates whether a plugin can be trusted.
  *
- * A responsibility claim or approved-issuer cybersecurity assessment is
- * sufficient to avoid the no-primary-evidence warning. This does not decide
+ * A responsibility claim naming the plugin's declared publisher, or an
+ * approved-issuer cybersecurity assessment, is sufficient to avoid the
+ * no-primary-evidence warning. A claim from any other party never is. This does not decide
  * that the responsible party is legitimate or trusted by the operator.
  * Backend or contract failures are allowed to throw so callers can distinguish
  * unavailable trust information from a complete response containing no
@@ -103,8 +106,12 @@ export async function canTrust(
     artifactDid,
     trustContext.artifactTrustApiUrl,
   );
-  const attestationResult =
-    await checkAttestation(artifactDid, trustContext, artifactTrust);
+  const attestationResult = await checkAttestation(
+    artifactDid,
+    plugin.publisherDid,
+    trustContext,
+    artifactTrust,
+  );
 
   return {
     primaryEvidenceFound: attestationResult.primaryEvidenceFound,
@@ -127,7 +134,12 @@ export async function buildTrustReport(
     trustContext.artifactTrustApiUrl,
   );
   const [attestationResult, linkedIdentifiers] = await Promise.all([
-    checkAttestation(artifactDid, trustContext, artifactTrust),
+    checkAttestation(
+      artifactDid,
+      plugin.publisherDid,
+      trustContext,
+      artifactTrust,
+    ),
     listLinkedIdentifiers(
       artifactDid,
       trustContext,
@@ -137,6 +149,7 @@ export async function buildTrustReport(
 
   return {
     artifactDid,
+    publisherDid: plugin.publisherDid,
     pluginDid: config.plugin.pluginDid,
     pluginVersion: config.plugin.pluginVersion,
     targetApplicationDid: config.target.applicationDid,

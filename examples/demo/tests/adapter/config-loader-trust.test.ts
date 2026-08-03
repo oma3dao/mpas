@@ -84,6 +84,7 @@ describe("plugin trust confirmation during config loading", () => {
     const configDir = await makeConfigDir();
     const report = {
       artifactDid: "did:artifact:bafktest",
+      publisherDid: "did:web:publisher.example",
       pluginDid: "did:web:plugins.oma3.example:github-mirror-plugin",
       pluginVersion: "0.1.0",
       targetApplicationDid: "did:web:github-mirror.example",
@@ -101,6 +102,7 @@ describe("plugin trust confirmation during config loading", () => {
         responsibilityClaim: false,
         cybersecurityAssessment: true,
         responsibilityClaims: [],
+        unqualifiedResponsibilityClaims: [],
         attestations: [],
       },
       linkedIdentifiers: [],
@@ -129,6 +131,7 @@ describe("plugin trust confirmation during config loading", () => {
     const configDir = await makeConfigDir();
     const report = {
       artifactDid: "did:artifact:bafktest",
+      publisherDid: "did:web:publisher.example",
       pluginDid: "did:web:plugins.oma3.example:github-mirror-plugin",
       pluginVersion: "0.1.0",
       targetApplicationDid: "did:web:github-mirror.example",
@@ -146,6 +149,7 @@ describe("plugin trust confirmation during config loading", () => {
         responsibilityClaim: false,
         cybersecurityAssessment: false,
         responsibilityClaims: [],
+        unqualifiedResponsibilityClaims: [],
         attestations: [{
           uid: `0x${"1".repeat(64)}`,
           attester: "0x3333333333333333333333333333333333333333",

@@ -2,6 +2,9 @@
 
 import { createInterface } from "node:readline/promises";
 import { stdin, stdout } from "node:process";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { PluginTrustReport } from "./trust.js";
 import type { DeploymentConfig } from "./config-loader.js";
 
@@ -20,6 +23,43 @@ export const NO_PRIMARY_TRUST_EVIDENCE_WARNING =
   "No verified responsibility claim or cybersecurity assessment was found.";
 export const RESPONSIBILITY_CLAIM_TRUST_NOTICE =
   "Technical verification confirms the claim, but does not establish that the responsible party is legitimate. Decide whether you trust that party.";
+export const UNQUALIFIED_CLAIMS_NOTICE =
+  "Anyone can attest a responsibility claim against any artifact, so claims from other parties are not counted as evidence.";
+
+/**
+ * Writes the non-qualifying claims out rather than listing them at the prompt.
+ * An operator cannot adjudicate a list of unfamiliar DIDs on a startup screen,
+ * and printing them competes with the one claim that does count. Returns the
+ * path, or undefined if it could not be written — a diagnostics file must
+ * never block startup.
+ */
+export function writeUnqualifiedClaims(
+  report: PluginTrustReport,
+): string | undefined {
+  const claims = report.attestation.unqualifiedResponsibilityClaims;
+  if (claims.length === 0) return undefined;
+  try {
+    const dir = mkdtempSync(join(tmpdir(), "mpas-trust-"));
+    const path = join(dir, "unqualified-responsibility-claims.json");
+    writeFileSync(
+      path,
+      JSON.stringify(
+        {
+          artifactDid: report.artifactDid,
+          declaredPublisherDid: report.publisherDid,
+          note: UNQUALIFIED_CLAIMS_NOTICE,
+          claims,
+        },
+        null,
+        2,
+      ) + "\n",
+      "utf-8",
+    );
+    return path;
+  } catch {
+    return undefined;
+  }
+}
 export const INDEPENDENT_VERIFY_NOTICE =
   "You can independently verify this artifact at https://app.omatrust.org/verify using the did:artifact shown above.";
 
@@ -42,8 +82,9 @@ export const promptPluginUse: ConfirmPluginUse = async (assessment, config) => {
     if (report.verdict.warningRequired) {
       stdout.write(`  WARNING: ${NO_PRIMARY_TRUST_EVIDENCE_WARNING}\n`);
     }
+    stdout.write(`  Declared publisher: ${report.publisherDid}\n`);
     stdout.write(
-      `  Responsibility claim: ${report.attestation.responsibilityClaim ? "FOUND" : "NOT FOUND"}\n`,
+      `  Responsibility claim from that publisher: ${report.attestation.responsibilityClaim ? "FOUND" : "NOT FOUND"}\n`,
     );
 
     for (const claim of report.attestation.responsibilityClaims) {
@@ -63,6 +104,20 @@ export const promptPluginUse: ConfirmPluginUse = async (assessment, config) => {
       );
       stdout.write(
         `      ${RESPONSIBILITY_CLAIM_TRUST_NOTICE}\n`,
+      );
+    }
+
+    const unqualifiedCount =
+      report.attestation.unqualifiedResponsibilityClaims.length;
+    if (unqualifiedCount > 0) {
+      const path = writeUnqualifiedClaims(report);
+      stdout.write(
+        `  Claims naming a different responsible party: ${unqualifiedCount} (not counted as evidence)\n`,
+      );
+      stdout.write(
+        path
+          ? `    Details written to ${path}\n`
+          : "    Details could not be written to disk.\n",
       );
     }
 
