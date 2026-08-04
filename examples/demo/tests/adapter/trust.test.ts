@@ -76,6 +76,7 @@ function makeAttestationResult(
     responsibilityClaim: false,
     cybersecurityAssessment: false,
     responsibilityClaims: [],
+    unqualifiedResponsibilityClaims: [],
     attestations: [],
     ...overrides,
   };
@@ -196,9 +197,11 @@ describe("buildTrustReport", () => {
     const evidence = await mockFetchArtifactTrust.mock.results[0].value;
     expect(mockCheckAttestation).toHaveBeenCalledWith(
       fakeConfig.plugin.artifactDid,
+      fakePlugin.publisherDid,
       fakeTrustContext,
       evidence,
     );
+    expect(report.publisherDid).toBe(fakePlugin.publisherDid);
     expect(mockListLinkedIdentifiers).toHaveBeenCalledWith(
       fakeConfig.plugin.artifactDid,
       fakeTrustContext,
