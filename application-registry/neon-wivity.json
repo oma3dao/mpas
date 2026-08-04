@@ -1,0 +1,31 @@
+{
+  "version": "1",
+  "application": {
+    "name": "Neon MCP MPAS Bridge Server",
+    "description": "MPAS-protected bridge for the official Neon MCP Server.",
+    "applicationDid": "did:web:wivity.com:applications:neon-mcp-server"
+  },
+  "native": false,
+  "protocol": "mcp",
+  "upstream": {
+    "name": "mcp-server-neon",
+    "repository": "https://github.com/neondatabase/mcp-server-neon",
+    "distributionUrl": "https://www.npmjs.com/package/@neondatabase/mcp-server-neon/v/0.6.5",
+    "protocolVersion": "2024-11-05",
+    "toolSurface": {
+      "alg": "sha-256",
+      "value": "AM3Qjl_LHcE9WzM4lYFIrWNWgeE-MlUHJIjMtVOq5Pg"
+    }
+  },
+  "plugin": {
+    "repository": "https://github.com/oma3dao/mpas-applications/blob/main/applications/neon/plugin.json",
+    "pluginDid": "did:web:wivity.com:plugins:neon-mcp-server",
+    "artifactDid": "did:artifact:bafkreidepdgwlcps6kl2c5335sntstxdciisfnv3z6mfr3y7rn2i4k4wji"
+  },
+  "publisher": {
+    "name": "Wivity",
+    "githubOrg": "wivity",
+    "publisherDid": "did:web:wivity.com"
+  },
+  "status": "beta"
+}

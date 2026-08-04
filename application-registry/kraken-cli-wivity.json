@@ -1,0 +1,31 @@
+{
+  "version": "1",
+  "application": {
+    "name": "Kraken CLI MCP MPAS Bridge Server",
+    "description": "MPAS-protected bridge for the official Kraken CLI MCP server.",
+    "applicationDid": "did:web:wivity.com:applications:kraken-cli-mcp-server"
+  },
+  "native": false,
+  "protocol": "mcp",
+  "upstream": {
+    "name": "kraken-cli",
+    "repository": "https://github.com/krakenfx/kraken-cli",
+    "distributionUrl": "https://github.com/krakenfx/kraken-cli/releases/tag/v0.3.2",
+    "protocolVersion": "2024-11-05",
+    "toolSurface": {
+      "alg": "sha-256",
+      "value": "_DObjeYHZPyhxtVf_co4c4lvi-gqplNfDbwPt6qMtyw"
+    }
+  },
+  "plugin": {
+    "repository": "https://github.com/oma3dao/mpas-applications/blob/main/applications/kraken-cli/plugin.json",
+    "pluginDid": "did:web:wivity.com:plugins:kraken-cli-mcp-server",
+    "artifactDid": "did:artifact:bafkreifo4q6wiy6ylweualihbzgxgpp4cxlwknwkz64kh2sqd4pqowihje"
+  },
+  "publisher": {
+    "name": "Wivity",
+    "githubOrg": "wivity",
+    "publisherDid": "did:web:wivity.com"
+  },
+  "status": "beta"
+}

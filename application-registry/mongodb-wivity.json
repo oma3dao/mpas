@@ -1,0 +1,31 @@
+{
+  "version": "1",
+  "application": {
+    "name": "MongoDB MCP MPAS Bridge Server",
+    "description": "MPAS-protected bridge for the official MongoDB MCP Server.",
+    "applicationDid": "did:web:wivity.com:applications:mongodb-mcp-server"
+  },
+  "native": false,
+  "protocol": "mcp",
+  "upstream": {
+    "name": "MongoDB MCP Server",
+    "repository": "https://github.com/mongodb-js/mongodb-mcp-server",
+    "distributionUrl": "https://www.npmjs.com/package/mongodb-mcp-server/v/1.14.0",
+    "protocolVersion": "2024-11-05",
+    "toolSurface": {
+      "alg": "sha-256",
+      "value": "3vXoVcHoHzWbmUMDhbSxw3okPNk-4NSoqZQaxkk4zfo"
+    }
+  },
+  "plugin": {
+    "repository": "https://github.com/oma3dao/mpas-applications/blob/main/applications/mongodb/plugin.json",
+    "pluginDid": "did:web:wivity.com:plugins:mongodb-mcp-server",
+    "artifactDid": "did:artifact:bafkreihgjtngefdonfx4uggowkkcxmsf42b6mef7oefbcmriagpv3rchhe"
+  },
+  "publisher": {
+    "name": "Wivity",
+    "githubOrg": "wivity",
+    "publisherDid": "did:web:wivity.com"
+  },
+  "status": "beta"
+}

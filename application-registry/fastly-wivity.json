@@ -1,0 +1,31 @@
+{
+  "version": "1",
+  "application": {
+    "name": "Fastly MCP MPAS Bridge Server",
+    "description": "MPAS-protected bridge for Fastly's official MCP server.",
+    "applicationDid": "did:web:wivity.com:applications:fastly-mcp-server"
+  },
+  "native": false,
+  "protocol": "mcp",
+  "upstream": {
+    "name": "@fastly/mcp",
+    "repository": "https://github.com/fastly/mcp",
+    "distributionUrl": "https://www.npmjs.com/package/@fastly/mcp/v/2.1.4",
+    "protocolVersion": "2024-11-05",
+    "toolSurface": {
+      "alg": "sha-256",
+      "value": "zYxTv7RNtFvLuitdWoI5-hK5HxBKAPW33eypXRPxOgc"
+    }
+  },
+  "plugin": {
+    "repository": "https://github.com/oma3dao/mpas-applications/blob/main/applications/fastly/plugin.json",
+    "artifactDid": "did:artifact:bafkreieeu3774ntzutvyqn5sdujr6aai5sp4fnw2fqiju7ukhzfotmp2me",
+    "pluginDid": "did:web:wivity.com:plugins:fastly-mcp-server"
+  },
+  "publisher": {
+    "name": "Wivity",
+    "githubOrg": "wivity",
+    "publisherDid": "did:web:wivity.com"
+  },
+  "status": "beta"
+}

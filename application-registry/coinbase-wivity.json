@@ -1,0 +1,31 @@
+{
+  "version": "1",
+  "application": {
+    "name": "Coinbase Payments MCP MPAS Bridge Server",
+    "description": "MPAS-protected bridge for Coinbase Payments MCP.",
+    "applicationDid": "did:web:wivity.com:applications:coinbase-mcp-server"
+  },
+  "native": false,
+  "protocol": "mcp",
+  "upstream": {
+    "name": "payments-mcp",
+    "repository": "https://github.com/coinbase/payments-mcp",
+    "distributionUrl": "https://www.npmjs.com/package/@coinbase/payments-mcp/v/1.0.5",
+    "protocolVersion": "2024-11-05",
+    "toolSurface": {
+      "alg": "sha-256",
+      "value": "kyqEzyMm8y3WcEYf2ZOyc1IUAunsnPM0ERmIDiF4F-8"
+    }
+  },
+  "plugin": {
+    "repository": "https://github.com/oma3dao/mpas-applications/blob/main/applications/coinbase/plugin.json",
+    "pluginDid": "did:web:wivity.com:plugins:coinbase-mcp-server",
+    "artifactDid": "did:artifact:bafkreighxigmfpzf6s6pbl7oqip4lpzwajvqr2hlgykvum3y4h67yh2s3y"
+  },
+  "publisher": {
+    "name": "Wivity",
+    "githubOrg": "wivity",
+    "publisherDid": "did:web:wivity.com"
+  },
+  "status": "beta"
+}

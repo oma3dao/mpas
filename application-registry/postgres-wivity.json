@@ -1,0 +1,31 @@
+{
+  "version": "1",
+  "application": {
+    "name": "PostgreSQL MCP MPAS Bridge Server",
+    "description": "MPAS-protected bridge for the reference PostgreSQL MCP Server.",
+    "applicationDid": "did:web:wivity.com:applications:postgres-mcp-server"
+  },
+  "native": false,
+  "protocol": "mcp",
+  "upstream": {
+    "name": "example-servers/postgres",
+    "repository": "https://github.com/modelcontextprotocol/servers",
+    "distributionUrl": "https://www.npmjs.com/package/@modelcontextprotocol/server-postgres/v/0.6.2",
+    "protocolVersion": "2024-11-05",
+    "toolSurface": {
+      "alg": "sha-256",
+      "value": "_zfKzzpCg2fQPCguGRVA7Uhhs80ONHJX_UkA7gpNEV4"
+    }
+  },
+  "plugin": {
+    "repository": "https://github.com/oma3dao/mpas-applications/blob/main/applications/postgres/plugin.json",
+    "pluginDid": "did:web:wivity.com:plugins:postgres-mcp-server",
+    "artifactDid": "did:artifact:bafkreiewfmymyp33lxjyvhlmaga4mupvz2boog5xa7iaw46wjgb2itvjoq"
+  },
+  "publisher": {
+    "name": "Wivity",
+    "githubOrg": "wivity",
+    "publisherDid": "did:web:wivity.com"
+  },
+  "status": "beta"
+}

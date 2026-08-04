@@ -1,0 +1,31 @@
+{
+  "version": "1",
+  "application": {
+    "name": "n8n Instance MCP MPAS Bridge Server",
+    "description": "MPAS-protected bridge for the official n8n instance MCP server.",
+    "applicationDid": "did:web:wivity.com:applications:n8n-mcp-server"
+  },
+  "native": false,
+  "protocol": "mcp",
+  "upstream": {
+    "name": "n8n-instance-mcp",
+    "repository": "https://github.com/n8n-io/n8n",
+    "distributionUrl": "https://wivity.app.n8n.cloud/mcp-server/http",
+    "protocolVersion": "2025-03-26",
+    "toolSurface": {
+      "alg": "sha-256",
+      "value": "aFws1EtOwk3wIfFsuABrkVktOgx5vaiJu-hYnf3dj84"
+    }
+  },
+  "plugin": {
+    "repository": "https://github.com/oma3dao/mpas-applications/blob/main/applications/n8n/plugin.json",
+    "pluginDid": "did:web:wivity.com:plugins:n8n-mcp-server",
+    "artifactDid": "did:artifact:bafkreighx3tjjgndffvkndu5dv6mjesx2azgbenwuam2gdh2iqameua3r4"
+  },
+  "publisher": {
+    "name": "Wivity",
+    "githubOrg": "wivity",
+    "publisherDid": "did:web:wivity.com"
+  },
+  "status": "beta"
+}

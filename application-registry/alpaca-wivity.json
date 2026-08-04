@@ -1,0 +1,31 @@
+{
+  "version": "1",
+  "application": {
+    "name": "Alpaca MCP MPAS Bridge Server",
+    "description": "MPAS-protected bridge for the official Alpaca MCP Server.",
+    "applicationDid": "did:web:wivity.com:applications:alpaca-mcp-server"
+  },
+  "native": false,
+  "protocol": "mcp",
+  "upstream": {
+    "name": "Alpaca MCP Server",
+    "repository": "https://github.com/alpacahq/alpaca-mcp-server",
+    "distributionUrl": "https://pypi.org/project/alpaca-mcp-server/2.1.1/",
+    "protocolVersion": "2024-11-05",
+    "toolSurface": {
+      "alg": "sha-256",
+      "value": "539D3s7u8i1S_GuowI99EstxnRsZUB8lh-32zVHzjSA"
+    }
+  },
+  "plugin": {
+    "repository": "https://github.com/oma3dao/mpas-applications/blob/main/applications/alpaca/plugin.json",
+    "pluginDid": "did:web:wivity.com:plugins:alpaca-mcp-server",
+    "artifactDid": "did:artifact:bafkreib7bxsgj2gmvlvzi477lhgzgzv477zxs3xyi4ovypt653sxlxtk6y"
+  },
+  "publisher": {
+    "name": "Wivity",
+    "githubOrg": "wivity",
+    "publisherDid": "did:web:wivity.com"
+  },
+  "status": "beta"
+}

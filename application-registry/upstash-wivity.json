@@ -1,0 +1,31 @@
+{
+  "version": "1",
+  "application": {
+    "name": "Upstash MCP MPAS Bridge Server",
+    "description": "MPAS-protected bridge for the official Upstash MCP Server.",
+    "applicationDid": "did:web:wivity.com:applications:upstash-mcp-server"
+  },
+  "native": false,
+  "protocol": "mcp",
+  "upstream": {
+    "name": "upstash",
+    "repository": "https://github.com/upstash/mcp-server",
+    "distributionUrl": "https://www.npmjs.com/package/@upstash/mcp-server/v/0.2.4",
+    "protocolVersion": "2024-11-05",
+    "toolSurface": {
+      "alg": "sha-256",
+      "value": "Bi2lizjCJsAWeA1VvGwe58w7J9nrbi7SPiLUxs6-inE"
+    }
+  },
+  "plugin": {
+    "repository": "https://github.com/oma3dao/mpas-applications/blob/main/applications/upstash/plugin.json",
+    "pluginDid": "did:web:wivity.com:plugins:upstash-mcp-server",
+    "artifactDid": "did:artifact:bafkreidstznmolvneqrgwcrpoi45ixoglclqyf7qiudgaqeysq6rvy6xe4"
+  },
+  "publisher": {
+    "name": "Wivity",
+    "githubOrg": "wivity",
+    "publisherDid": "did:web:wivity.com"
+  },
+  "status": "beta"
+}
