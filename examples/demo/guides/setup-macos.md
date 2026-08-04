@@ -18,7 +18,12 @@
 
 ## Document Structure
 
-**This guide assumes ~/Projects is the folder you use for Git repositories.  You can substitute with your own path if that is not the case.**
+**Repository path:** The recommended location is `~/Projects/mpas`, with
+`mpas` itself as the repository root. The shell commands below use
+`$HOME/Projects/mpas`. You may choose another location, but then replace that
+path consistently. Configuration files require the corresponding absolute
+path, such as `/Users/YOU/Projects/mpas`; MCP servers are launched without a
+shell and do not expand `~` or `$HOME`.
 
 **All commands assume you are on the `main` branch of `mpas`.** If you've checked out a feature branch for development, switch back to `main` before following this guide — the fixtures, configs, and CLI all need to be consistent with what `main` produces.
 
@@ -41,7 +46,7 @@ If you already have MPAS built and tests passing, skip to Part 2 (single-user) o
 > **Roles — "proposer" and "maintainer":**  
 > Throughout this guide we use **proposer** (submits governed actions) and **maintainer** (approves/rejects). Those are MPAS roles, not necessarily the string your harness uses as an agent id. How each harness names agents, display labels, and personas is covered in that harness’s Part 3 section. Role **instructions** (what each role must do) live in **§3.1**.
 >
-> **Terminology note:** The MPAS protocol uses "signer" as a generic term for any participant that signs something (both proposers and maintainers are signers). In this guide, we use "maintainer" for the specific role that reviews and approves/rejects actions. In config files, `signerKeys` is the key registry (DID + publicJwk for verification) and `policy.signerGroups` defines authorization (who can propose, who can approve).
+> **Terminology note:** The MPAS protocol uses "signer" as a generic term for any participant that signs something (both proposers and maintainers are signers). In this guide, we use "maintainer" for the specific role that reviews and approves/rejects actions. In config files, `signerKeys` registers Signer DIDs and `policy.signerGroups` defines authorization (who can propose and who can approve).
 
 ---
 
@@ -136,15 +141,15 @@ Expected: `Hi <username>! You've successfully authenticated...`
 **Clone via SSH (recommended):**
 
 ```sh
-mkdir -p ~/Projects/mpas
-cd ~/Projects/mpas
-git clone git@github.com:oma3dao/mpas.git mpas
+mkdir -p "$HOME/Projects"
+git clone git@github.com:oma3dao/mpas.git "$HOME/Projects/mpas"
 ```
 
 Ensure you're on `main`:
 
 ```sh
-cd ~/Projects/mpas/mpas && git checkout main
+cd "$HOME/Projects/mpas"
+git checkout main
 ```
 
 If you prefer HTTPS (e.g., behind a corporate firewall that blocks SSH), use `https://github.com/oma3dao/mpas.git` instead. You'll need a PAT or credential helper configured.
@@ -163,7 +168,7 @@ The only path to write operations should be through the MPAS bridge → Credenti
 Build and test the protocol SDK first. The demo consumes this local package:
 
 ```sh
-cd ~/Projects/mpas/mpas/sdk/protocol
+cd "$HOME/Projects/mpas/sdk/protocol"
 npm ci
 npm run build
 npm test
@@ -172,7 +177,7 @@ npm test
 Then install, build, and test the demo:
 
 ```sh
-cd ~/Projects/mpas/mpas/examples/demo
+cd "$HOME/Projects/mpas/examples/demo"
 npm ci
 npm run build
 npm test
@@ -185,7 +190,7 @@ Expected: both test suites pass with no failures.
 This verifies the full stack end-to-end (proposer → coordination → maintainer → adapter → dispatch):
 
 ```sh
-cd ~/Projects/mpas/mpas/examples/demo
+cd "$HOME/Projects/mpas/examples/demo"
 npm run test:e2e:mcp-bridge
 ```
 
@@ -271,7 +276,7 @@ mkdir -p "$MPAS_HOME/config" "$MPAS_HOME/plugins" "$MPAS_HOME/credentials" "$MPA
 The plugin and config give you a template you can customize for your MPAS implementation.
 
 ```sh
-cd ~/Projects/mpas/mpas/examples/demo
+cd "$HOME/Projects/mpas/examples/demo"
 cp plugins/github-mirror-plugin.json "$MPAS_HOME/plugins/github-mirror-plugin.json"
 cp configs/github-mirror-adapter-config.json "$MPAS_HOME/config/github-mirror-adapter-config.json"
 ```
@@ -291,14 +296,16 @@ You need three keys:
 Generate them directly into `$MPAS_HOME/keys`:
 
 ```sh
-cd ~/Projects/mpas/mpas/examples/demo
+cd "$HOME/Projects/mpas/examples/demo"
 node dist/cli/index.js key generate adapter-key --key-dir "$MPAS_HOME/keys"
 node dist/cli/index.js key generate proposer-key --key-dir "$MPAS_HOME/keys"
 node dist/cli/index.js key generate maintainer-key --key-dir "$MPAS_HOME/keys"
 chmod 600 "$MPAS_HOME"/keys/*.json
 ```
 
-Each command prints the `did` and `publicJwk` needed for the next step (registering them in the deployment config).
+Each command prints a `did` and `publicJwk`. The generated identities use
+`did:jwk`, so the DID itself contains the public verification key. You only
+need the proposer and maintainer DIDs for the next step.
 
 > **Expected output format:** Each `key generate` command prints something like:
 > ```
@@ -307,11 +314,17 @@ Each command prints the `did` and `publicJwk` needed for the next step (register
 >   publicJwk: {"kty":"OKP","crv":"Ed25519","x":"abc123..."}
 >   Saved to: /Users/you/.mpas/keys/adapter-key.json
 > ```
-> The `did` is the full `did:jwk:...` string. The `publicJwk` is the JSON object on that line (including the braces). You can also extract both values from the saved key file itself if you missed the terminal output.
+> The `did` is the full `did:jwk:...` string. You can extract it from the saved
+> key file if you missed the terminal output. The printed `publicJwk` is useful
+> for inspection, but it does not need to be copied into the deployment config
+> for a `did:jwk` Signer.
 
-### Register keys in the deployment config and bridge configs
+### Register DIDs in the deployment config and bridge configs
 
-You now need to paste the `did` and `publicJwk` values from the `key generate` output into three files. The deployment config needs them in `signerKeys` (key registry) and `policy.signerGroups` (authorization groups), and each bridge config needs the corresponding `did` in `agent.did`.
+You now need to paste the DIDs from the `key generate` output into three files.
+The deployment config needs them in `signerKeys` (Signer registry) and
+`policy.signerGroups` (authorization groups), and each bridge config needs the
+corresponding DID in `agent.did`.
 
 First, create the bridge config files with placeholders:
 
@@ -320,7 +333,7 @@ cat > $MPAS_HOME/mcp-server-configs/github-mirror-mcp-bridge-config.json <<EOF
 {
   "mode": "proposer",
   "plugin": "$MPAS_HOME/plugins/github-mirror-plugin.json",
-  "tools": "<absolute-path-to>/mpas/examples/demo/bridge-tools/github-mirror-tools.json",
+  "tools": "$HOME/Projects/mpas/examples/demo/bridge-tools/github-mirror-tools.json",
   "adapter": {
     "url": "http://127.0.0.1:7544"
   },
@@ -355,7 +368,7 @@ cat > $MPAS_HOME/mcp-server-configs/maintainer-signer-config.json <<EOF
 EOF
 ```
 
-Now edit these three files using the `did` and `publicJwk` values from `key generate`:
+Now edit these three files using the DIDs from `key generate`:
 
 1. **`$MPAS_HOME/config/github-mirror-adapter-config.json`** — replace the `signerKeys` array and update `policy.signerGroups`:
 
@@ -363,13 +376,11 @@ Now edit these three files using the `did` and `publicJwk` values from `key gene
 "signerKeys": [
   {
     "did": "<did from proposer key generate output>",
-    "label": "Proposer Agent",
-    "publicJwk": { <publicJwk from proposer key generate output> }
+    "label": "Proposer Agent"
   },
   {
     "did": "<did from maintainer key generate output>",
-    "label": "Maintainer A",
-    "publicJwk": { <publicJwk from maintainer key generate output> }
+    "label": "Maintainer A"
   }
 ]
 ```
@@ -415,13 +426,16 @@ To create fine-grained PATs, see: https://docs.github.com/en/authentication/keep
 After editing the configs and storing the credential, run validate to check for paste errors:
 
 ```sh
-cd ~/Projects/mpas/mpas/examples/demo
+cd "$HOME/Projects/mpas/examples/demo"
 node dist/cli/index.js config validate github-mirror-adapter-config \
   --config-dir "$MPAS_HOME/config" --credential-dir "$MPAS_HOME/credentials" \
   --bridge-dir "$MPAS_HOME/mcp-server-configs"
 ```
 
-This checks that each `signerKeys` entry has a DID that matches its `publicJwk`, that credentials exist, and that each bridge config's `agent.did` is listed in `signerKeys`. Fix any errors before proceeding.
+This checks that each `signerKeys` entry has a valid DID, that any separately
+configured public JWK agrees with that DID, that credentials exist, and that
+each bridge config's `agent.did` is listed in `signerKeys`. Fix any errors
+before proceeding.
 
 > **Expected warnings (safe to ignore in single-user mode):** You will see warnings that `github-mirror-mcp-bridge-config.json` and `maintainer-signer-config.json` use different DIDs. This is correct — they are two separate agents with distinct identities. The warning exists for the dual-role case where one agent runs both bridges with a shared DID (so self-approval prevention applies between them). In the single-user demo, you have two independent agents, so different DIDs are intentional.
 
@@ -460,7 +474,7 @@ In a dedicated terminal:
 
 ```sh
 export MPAS_HOME="$HOME/.mpas"
-cd ~/Projects/mpas/mpas/examples/demo
+cd "$HOME/Projects/mpas/examples/demo"
 node dist/cli/index.js daemon start \
   --config-dir "$MPAS_HOME/config" \
   --credential-dir "$MPAS_HOME/credentials" \
@@ -824,7 +838,7 @@ Create `~/.codex-proposer/config.toml`:
 [mcp_servers.github-mpas]
 command = "node"
 args = [
-  "/Users/YOU/Projects/mpas/mpas/examples/demo/dist/bridge/github-bridge.js",
+  "/Users/YOU/Projects/mpas/examples/demo/dist/bridge/github-bridge.js",
   "--config",
   "/Users/YOU/.mpas/mcp-server-configs/github-mirror-mcp-bridge-config.json"
 ]
@@ -841,7 +855,7 @@ Create `~/.codex-maintainer/config.toml`:
 [mcp_servers.mpas-coordination]
 command = "node"
 args = [
-  "/Users/YOU/Projects/mpas/mpas/examples/demo/dist/signer-server/index.js",
+  "/Users/YOU/Projects/mpas/examples/demo/dist/signer-server/index.js",
   "--config",
   "/Users/YOU/.mpas/mcp-server-configs/maintainer-signer-config.json"
 ]
@@ -971,7 +985,7 @@ openclaw config set mcp.servers "$(cat <<'JSON'
   "github-mpas-mirror": {
     "command": "/ABSOLUTE/PATH/TO/node",
     "args": [
-      "/Users/YOU/Projects/mpas/mpas/examples/demo/dist/bridge/github-bridge.js",
+      "/Users/YOU/Projects/mpas/examples/demo/dist/bridge/github-bridge.js",
       "--config",
       "/Users/YOU/.mpas/mcp-server-configs/github-mirror-mcp-bridge-config.json"
     ],
@@ -980,7 +994,7 @@ openclaw config set mcp.servers "$(cat <<'JSON'
   "mpas-coordination": {
     "command": "/ABSOLUTE/PATH/TO/node",
     "args": [
-      "/Users/YOU/Projects/mpas/mpas/examples/demo/dist/signer-server/index.js",
+      "/Users/YOU/Projects/mpas/examples/demo/dist/signer-server/index.js",
       "--config",
       "/Users/YOU/.mpas/mcp-server-configs/maintainer-signer-config.json"
     ]
@@ -1101,7 +1115,7 @@ Edit `~/Library/Application Support/Claude/claude_desktop_config.json`:
     "github-mpas-mirror": {
       "command": "node",
       "args": [
-        "/Users/YOU/Projects/mpas/mpas/examples/demo/dist/bridge/github-bridge.js",
+        "/Users/YOU/Projects/mpas/examples/demo/dist/bridge/github-bridge.js",
         "--config",
         "/Users/YOU/.mpas/mcp-server-configs/github-mirror-mcp-bridge-config.json"
       ]
@@ -1109,7 +1123,7 @@ Edit `~/Library/Application Support/Claude/claude_desktop_config.json`:
     "mpas-coordination": {
       "command": "node",
       "args": [
-        "/Users/YOU/Projects/mpas/mpas/examples/demo/dist/signer-server/index.js",
+        "/Users/YOU/Projects/mpas/examples/demo/dist/signer-server/index.js",
         "--config",
         "/Users/YOU/.mpas/mcp-server-configs/maintainer-signer-config.json"
       ]
@@ -1252,14 +1266,16 @@ Copy the `signerKeys` array and `policy.signerGroups` from your mirror config in
 "executionTarget": {
   "type": "mcp.stdio",
   "command": "<absolute-path-to-node>",
-  "args": ["<absolute-path-to>/mpas/examples/demo/tests/fixtures/adapter/github-mcp-server.mjs"],
+  "args": ["/Users/YOU/Projects/mpas/examples/demo/tests/fixtures/adapter/github-mcp-server.mjs"],
   "env": {
     "GITHUB_PERSONAL_ACCESS_TOKEN": "{{credential:github-live-demo-token}}"
   }
 }
 ```
 
-Replace `<absolute-path-to-node>` with the output of `which node`, and `<absolute-path-to>` with the full path to your `mpas` clone.
+Replace `<absolute-path-to-node>` with the output of `which node`, and replace
+`YOU` if your macOS account has a different short username. If you chose a
+different repository location, replace the entire MPAS path.
 
 ```sh
 node dist/cli/index.js config validate github-live-demo \
@@ -1279,7 +1295,7 @@ cat > $MPAS_HOME/mcp-server-configs/github-live-demo-mcp-bridge-config.json <<EO
 {
   "mode": "proposer",
   "plugin": "$MPAS_HOME/plugins/github-live-demo-plugin.json",
-  "tools": "<absolute-path-to>/mpas/examples/demo/bridge-tools/github-live-demo-tools.json",
+  "tools": "$HOME/Projects/mpas/examples/demo/bridge-tools/github-live-demo-tools.json",
   "adapter": { "url": "http://127.0.0.1:7544" },
   "agent": {
     "did": "REPLACE_ME_WITH_PROPOSER_DID",
@@ -1301,7 +1317,7 @@ openclaw config set mcp.servers.github-mpas-live-demo "$(cat <<'JSON'
 {
   "command": "/ABSOLUTE/PATH/TO/node",
   "args": [
-    "/Users/YOU/Projects/mpas/mpas/examples/demo/dist/bridge/github-bridge.js",
+    "/Users/YOU/Projects/mpas/examples/demo/dist/bridge/github-bridge.js",
     "--config",
     "/Users/YOU/.mpas/mcp-server-configs/github-live-demo-mcp-bridge-config.json"
   ],
@@ -1379,7 +1395,7 @@ Before creating accounts, understand what each role needs on disk:
 | Adapter key (`adapter-key.json`)                         | Yes      | —              | —                |
 | Deployment config (`github-mirror-adapter-config.json`). | Yes      | —              | —                |
 | Application credential (PAT)                             | Yes      | —              | —                |
-| Plugin (`github-demo-plugin.json`)                       | Yes      | Yes (copy)     | —                |
+| Plugin (`github-mirror-plugin.json`)                     | Yes      | Yes (copy)     | —                |
 | Bridge config (`github-mirror-mcp-bridge-config.json`)   | —        | Yes            | —                |
 | Bridge config (`maintainer-signer-config.json`)          | —        | —              | Yes              |
 | Proposer signing key                                     | —        | Yes            | —                |
@@ -1451,7 +1467,27 @@ brew --version
 5. **SSH key** (§1.1 Step 6) — each macOS user has its own `~/.ssh`. Generate a key and add it to GitHub for this account.
 6. **Clone repo** (§1.1 Step 6):
 
+```sh
+mkdir -p "$HOME/Projects"
+git clone git@github.com:oma3dao/mpas.git "$HOME/Projects/mpas"
+cd "$HOME/Projects/mpas"
+git checkout main
+```
+
 7. **Build and test** (§1.1 Step 7 and 8):
+
+```sh
+cd "$HOME/Projects/mpas/sdk/protocol"
+npm ci
+npm run build
+npm test
+
+cd "$HOME/Projects/mpas/examples/demo"
+npm ci
+npm run build
+npm test
+npm run test:e2e:mcp-bridge
+```
 
 8. **Install agent harness** (§1.2) — install OpenClaw, Codex CLI, or your preferred harness. Do NOT configure MPAS bridges yet — that happens in §5.5.
 
@@ -1467,11 +1503,10 @@ Assign a unique port per account:
 | Agent A (proposer)   | 18790                                 |
 | Agent B (maintainer) | 18791                                 |
 
-Set the port and reinstall the LaunchAgent so the service file picks it up:
+Set the port before installing or starting the OpenClaw gateway:
 
 ```sh
 openclaw config set gateway.port <PORT>
-launchctl bootout gui/$UID ~/Library/LaunchAgents/ai.openclaw.gateway.plist 2>/dev/null || true
 openclaw gateway install
 openclaw gateway start
 ```
@@ -1484,7 +1519,8 @@ openclaw gateway status
 
 Confirm it shows the correct port and "Connectivity probe: ok".
 
-> **Note:** `openclaw gateway restart` will fail if it tries to stop a gateway on the old port that belongs to another user. Use the `bootout` + `install` + `start` sequence above instead.
+The OpenClaw installer manages its own macOS background service; no MPAS
+service-manager configuration is required.
 
 ### Create the MPAS directory structure
 
@@ -1493,7 +1529,7 @@ Each agent gets only what it needs (see §5.1 table).
 **On `agent-a` (proposer):**
 
 ```sh
-mkdir -p ~/.mpas/{keys,mcp-server-configs,plugins}
+mkdir -p ~/.mpas/{keys,mcp-server-configs,plugins,workflows}
 ```
 
 **On `agent-b` (maintainer):**
@@ -1509,7 +1545,7 @@ Do NOT copy keys from the operator. Each account generates its own key so only t
 **On `agent-a`:**
 
 ```sh
-cd ~/Projects/mpas/mpas/examples/demo
+cd "$HOME/Projects/mpas/examples/demo"
 node dist/cli/index.js key generate proposer-key --key-dir ~/.mpas/keys
 chmod 600 ~/.mpas/keys/*.json
 ```
@@ -1517,12 +1553,13 @@ chmod 600 ~/.mpas/keys/*.json
 **On `agent-b`:**
 
 ```sh
-cd ~/Projects/mpas/mpas/examples/demo
+cd "$HOME/Projects/mpas/examples/demo"
 node dist/cli/index.js key generate maintainer-key --key-dir ~/.mpas/keys
 chmod 600 ~/.mpas/keys/*.json
 ```
 
-Each command prints the `did` and `publicJwk`. Save these — you'll need them in §5.4.
+Each command prints a DID and public JWK. Save the DID — because these are
+`did:jwk` identities, it contains the public verification key needed in §5.4.
 
 ### Create bridge configs
 
@@ -1531,7 +1568,7 @@ Each command prints the `did` and `publicJwk`. Save these — you'll need them i
 Copy the application plugin (the proposer bridge uses it for application identity and execution profile):
 
 ```sh
-cp ~/Projects/mpas/mpas/examples/demo/plugins/github-demo-plugin.json ~/.mpas/plugins/github-demo-plugin.json
+cp "$HOME/Projects/mpas/examples/demo/plugins/github-mirror-plugin.json" ~/.mpas/plugins/github-mirror-plugin.json
 ```
 
 Create the bridge config:
@@ -1540,7 +1577,8 @@ Create the bridge config:
 cat > ~/.mpas/mcp-server-configs/github-mirror-mcp-bridge-config.json <<EOF
 {
   "mode": "proposer",
-  "plugin": "$HOME/.mpas/plugins/github-demo-plugin.json",
+  "plugin": "$HOME/.mpas/plugins/github-mirror-plugin.json",
+  "tools": "$HOME/Projects/mpas/examples/demo/bridge-tools/github-mirror-tools.json",
   "adapter": {
     "url": "http://127.0.0.1:7544"
   },
@@ -1555,7 +1593,7 @@ cat > ~/.mpas/mcp-server-configs/github-mirror-mcp-bridge-config.json <<EOF
     "url": "http://127.0.0.1:7545"
   },
   "workflow": {
-    "dbPath": "$MPAS_HOME/workflows/mirror.db"
+    "dbPath": "$HOME/.mpas/workflows/mirror.db"
   }
 }
 EOF
@@ -1585,26 +1623,24 @@ Replace `REPLACE_WITH_YOUR_DID_FROM_KEY_GENERATE` with the `did` value from `key
 
 Back in the **operator** account, edit `$MPAS_HOME/config/github-mirror-adapter-config.json` and update the `signerKeys` array and `policy.signerGroups` with the new agent DIDs:
 
-> **Transferring DIDs between accounts:** macOS clipboard (copy/paste) does not work across user sessions. To get the `did` and `publicJwk` values from each agent account to the operator, use one of:
+> **Transferring DIDs between accounts:** macOS clipboard (copy/paste) does not work across user sessions. To get each DID from the agent account to the operator, use one of:
 > - **Shared temp file:** write the key generate output to `/tmp/agent-a-did.txt` (world-readable), then read it from the operator session. Delete after.
 > - **Shared note:** paste into Apple Notes, a Google Doc, or any app synced across accounts.
 > - **AirDrop to yourself:** screenshot or text file, if both sessions are active simultaneously.
 >
-> The DID and publicJwk are public values — there's no security concern sharing them.
+> The DID is public — there's no security concern sharing it.
 
-Update `signerKeys` (the key registry for signature verification):
+Update `signerKeys` (the Signer registry used for signature verification):
 
 ```json
 "signerKeys": [
   {
     "did": "<did from agent-a key generate>",
-    "label": "Agent A (Proposer)",
-    "publicJwk": { <publicJwk from agent-a key generate> }
+    "label": "Agent A (Proposer)"
   },
   {
     "did": "<did from agent-b key generate>",
-    "label": "Agent B (Maintainer)",
-    "publicJwk": { <publicJwk from agent-b key generate> }
+    "label": "Agent B (Maintainer)"
   }
 ]
 ```
@@ -1704,7 +1740,8 @@ node dist/cli/index.js key generate agent-1-key --key-dir ~/.mpas/keys
 cat > ~/.mpas/mcp-server-configs/github-mirror-mcp-bridge-config.json <<EOF
 {
   "mode": "proposer",
-  "plugin": "$HOME/.mpas/plugins/github-demo-plugin.json",
+  "plugin": "$HOME/.mpas/plugins/github-mirror-plugin.json",
+  "tools": "$HOME/Projects/mpas/examples/demo/bridge-tools/github-mirror-tools.json",
   "adapter": { "url": "http://127.0.0.1:7544" },
   "agent": {
     "did": "<did from key generate>",
@@ -1743,7 +1780,7 @@ openclaw config set mcp.servers "$(cat <<'JSON'
   "github-mpas-mirror": {
     "command": "/ABSOLUTE/PATH/TO/node",
     "args": [
-      "/Users/YOU/Projects/mpas/mpas/examples/demo/dist/bridge/github-bridge.js",
+      "/Users/YOU/Projects/mpas/examples/demo/dist/bridge/github-bridge.js",
       "--config",
       "/Users/YOU/.mpas/mcp-server-configs/github-mirror-mcp-bridge-config.json"
     ],
@@ -1752,7 +1789,7 @@ openclaw config set mcp.servers "$(cat <<'JSON'
   "mpas-coordination": {
     "command": "/ABSOLUTE/PATH/TO/node",
     "args": [
-      "/Users/YOU/Projects/mpas/mpas/examples/demo/dist/signer-server/index.js",
+      "/Users/YOU/Projects/mpas/examples/demo/dist/signer-server/index.js",
       "--config",
       "/Users/YOU/.mpas/mcp-server-configs/maintainer-signer-config.json"
     ]
@@ -1768,7 +1805,7 @@ JSON
 [mcp_servers.github-mpas]
 command = "node"
 args = [
-  "/Users/YOU/Projects/mpas/mpas/examples/demo/dist/bridge/github-bridge.js",
+  "/Users/YOU/Projects/mpas/examples/demo/dist/bridge/github-bridge.js",
   "--config",
   "/Users/YOU/.mpas/mcp-server-configs/github-mirror-mcp-bridge-config.json"
 ]
@@ -1777,7 +1814,7 @@ enabled = true
 [mcp_servers.mpas-coordination]
 command = "node"
 args = [
-  "/Users/YOU/Projects/mpas/mpas/examples/demo/dist/signer-server/index.js",
+  "/Users/YOU/Projects/mpas/examples/demo/dist/signer-server/index.js",
   "--config",
   "/Users/YOU/.mpas/mcp-server-configs/maintainer-signer-config.json"
 ]
@@ -1791,8 +1828,7 @@ In `signerKeys`:
 ```json
 {
   "did": "<agent-1 did>",
-  "label": "Agent 1 (symmetric)",
-  "publicJwk": { <publicJwk from key generate> }
+  "label": "Agent 1 (symmetric)"
 }
 ```
 
@@ -1846,7 +1882,7 @@ This means symmetric signers require at least two agents to function. A single s
 | Agent deletes branch without maintainer approval      | Agent has SSH key or PAT with write access           | Ensure the agent has no write credential for the repo (see §4.4). Check for loaded SSH keys, env vars, or git credential helpers. |
 | `Resource not accessible by personal access token`    | PAT missing required permission                      | Ensure Contents (R/W) and Issues (R/W) are enabled in the fine-grained token settings. |
 | `Not Found` on branch deletion                        | PAT not scoped to the correct repository             | Verify "Only select repositories" includes your demo repo in the token settings. |
-| `gateway port 18789 is still busy`                    | Another macOS user's OpenClaw gateway owns that port | Set a unique port per account: `openclaw config set gateway.port 18790`, then `launchctl bootout gui/$UID ~/Library/LaunchAgents/ai.openclaw.gateway.plist && openclaw gateway install && openclaw gateway start` |
+| `gateway port 18789 is still busy`                    | Another macOS user's OpenClaw gateway owns that port | Set a unique port before installing the gateway: `openclaw config set gateway.port 18790`, then run `openclaw gateway install` and `openclaw gateway start`. |
 | nvm install fails with `bash_completion` errors       | Homebrew added a bash-specific line to `.zprofile`   | `cp ~/.zprofile ~/.zprofile.bak && grep -v 'bash_completion' ~/.zprofile > ~/.zprofile.new && mv ~/.zprofile.new ~/.zprofile`, then retry nvm install |
 
 ---
