@@ -1,0 +1,31 @@
+{
+  "version": "1",
+  "application": {
+    "name": "Firebase MCP MPAS Bridge Server",
+    "description": "MPAS-protected bridge for the official Firebase CLI MCP Server.",
+    "applicationDid": "did:web:wivity.com:applications:firebase-mcp-server"
+  },
+  "native": false,
+  "protocol": "mcp",
+  "upstream": {
+    "name": "firebase",
+    "repository": "https://github.com/firebase/firebase-tools",
+    "distributionUrl": "https://www.npmjs.com/package/firebase-tools/v/15.24.0",
+    "protocolVersion": "2024-11-05",
+    "toolSurface": {
+      "alg": "sha-256",
+      "value": "B2QQ7WzuiegdD_GMqh7AhaNnEhNn_57at5X5j5Pdjg0"
+    }
+  },
+  "plugin": {
+    "repository": "https://github.com/oma3dao/mpas-applications/blob/main/applications/firebase/plugin.json",
+    "pluginDid": "did:web:wivity.com:plugins:firebase-mcp-server",
+    "artifactDid": "did:artifact:bafkreibzzazzuaggcwicgx6y6yhww3adou3ksfhntvgn2jxe2nzahh44r4"
+  },
+  "publisher": {
+    "name": "Wivity",
+    "githubOrg": "wivity",
+    "publisherDid": "did:web:wivity.com"
+  },
+  "status": "beta"
+}

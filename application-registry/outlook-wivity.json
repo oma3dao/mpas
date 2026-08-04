@@ -1,0 +1,30 @@
+{
+  "version": "1",
+  "application": {
+    "name": "Outlook MCP MPAS Bridge Server",
+    "description": "MPAS-protected bridge for personal Outlook accounts via Microsoft Graph.",
+    "applicationDid": "did:web:wivity.com:applications:outlook-mcp-server"
+  },
+  "native": false,
+  "protocol": "mcp",
+  "upstream": {
+    "name": "outlook-mcp",
+    "repository": "https://github.com/mpalermiti/outlook-mcp",
+    "protocolVersion": "2024-11-05",
+    "toolSurface": {
+      "alg": "sha-256",
+      "value": "kmF1On1ZWpQM4xKulKsBPbKFi-xwksHmc-ISx9BI4l4"
+    }
+  },
+  "plugin": {
+    "repository": "https://github.com/oma3dao/mpas-applications/blob/main/applications/outlook/plugin.json",
+    "artifactDid": "did:artifact:bafkreiaiadx3jildyql3gnnhxfd4kq5mcdotxav2amyq5g6etysbqosub4",
+    "pluginDid": "did:web:wivity.com:plugins:outlook-mcp-server"
+  },
+  "publisher": {
+    "name": "Wivity",
+    "githubOrg": "wivity",
+    "publisherDid": "did:web:wivity.com"
+  },
+  "status": "beta"
+}

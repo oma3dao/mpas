@@ -1,0 +1,30 @@
+{
+  "version": "1",
+  "application": {
+    "name": "BigQuery MCP MPAS Bridge Server",
+    "description": "MPAS-protected bridge for Google BigQuery via Google's MCP Toolbox for Databases.",
+    "applicationDid": "did:web:wivity.com:applications:bigquery-mcp-server"
+  },
+  "native": false,
+  "protocol": "mcp",
+  "upstream": {
+    "name": "Toolbox",
+    "repository": "https://github.com/googleapis/mcp-toolbox",
+    "protocolVersion": "2024-11-05",
+    "toolSurface": {
+      "alg": "sha-256",
+      "value": "X8tlSzRy_CJTuM4PB67_Zf7kC2gcjcad6lv82sDdTnc"
+    }
+  },
+  "plugin": {
+    "repository": "https://github.com/oma3dao/mpas-applications/blob/main/applications/bigquery/plugin.json",
+    "artifactDid": "did:artifact:bafkreigdgutnoyrk5bydr7d65xyf52fulra37tb7y2g47bisnmqahvydcm",
+    "pluginDid": "did:web:wivity.com:plugins:bigquery-mcp-server"
+  },
+  "publisher": {
+    "name": "Wivity",
+    "githubOrg": "wivity",
+    "publisherDid": "did:web:wivity.com"
+  },
+  "status": "beta"
+}

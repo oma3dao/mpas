@@ -1,0 +1,31 @@
+{
+  "version": "1",
+  "application": {
+    "name": "Stripe MCP MPAS Bridge Server",
+    "description": "MPAS-protected bridge for the official Stripe MCP Server.",
+    "applicationDid": "did:web:wivity.com:applications:stripe-mcp-server"
+  },
+  "native": false,
+  "protocol": "mcp",
+  "upstream": {
+    "name": "stripe-mcp",
+    "repository": "https://github.com/stripe/ai/tree/main/tools/modelcontextprotocol",
+    "distributionUrl": "https://www.npmjs.com/package/@stripe/mcp/v/0.3.3",
+    "protocolVersion": "2025-03-26",
+    "toolSurface": {
+      "alg": "sha-256",
+      "value": "gEniIYw5zZWVTq_OuuKbJI0HEDxy-n21D2t_4_JSsjk"
+    }
+  },
+  "plugin": {
+    "repository": "https://github.com/oma3dao/mpas-applications/blob/main/applications/stripe/plugin.json",
+    "pluginDid": "did:web:wivity.com:plugins:stripe-mcp-server",
+    "artifactDid": "did:artifact:bafkreia2mi66k66qyq3d65dsd3xmkwasndh7xlxu5x7b6ty2vxswc72r7i"
+  },
+  "publisher": {
+    "name": "Wivity",
+    "githubOrg": "wivity",
+    "publisherDid": "did:web:wivity.com"
+  },
+  "status": "beta"
+}

@@ -6,7 +6,7 @@ This folder contains one JSON file per MPAS implementation for a given applicati
 
 Registry entries describe MPAS-compatible implementations — bridges, native MCP servers, or native applications — that users can install to get MPAS protection for a particular application.
 
-Each entry points to the source code and plugin needed to use MPAS with that application. The registry is a discovery and identity document; runtime configuration belongs in the implementation's own repository.
+Each entry points to the plugin for that implementation. The registry is a discovery and identity document; launch and runtime configuration belong in the implementation's own repository.
 
 ## File Naming Convention
 
@@ -28,7 +28,7 @@ Each JSON file has the following structure:
 | Field            | Required | Description                                                                 |
 | :--------------- | :------: | :-------------------------------------------------------------------------- |
 | `version`        | Yes      | Registry entry schema version. Currently `"1"`.                             |
-| `application`    | Yes      | Identity and description of the target application.                         |
+| `application`    | Yes      | Identity and description of this MPAS integration.                          |
 | `native`         | Yes      | `true` if the application natively verifies MPAS. `false` if it requires a bridge. |
 | `protocol`       | Yes      | The protocol/API format: `"mcp"`, `"openapi"`, `"a2a"`, `"evm"`, etc.      |
 | `upstream`       | No       | The upstream server being wrapped. Present only when `native` is `false`.   |
@@ -43,7 +43,6 @@ Each JSON file has the following structure:
 | `name`           | Yes      | Human-readable application name.                       |
 | `description`    | Yes      | Brief description of what this MPAS integration does.  |
 | `applicationDid` | Yes      | DID of the target application (matches the plugin's `applicationDid`). |
-| `website`        | No       | Application website URL.                               |
 
 ### `upstream` Object (bridges only)
 
@@ -54,18 +53,22 @@ Present when `native` is `false`. The object format depends on the `protocol` fi
 | Field             | Required | Description                                         |
 | :---------------- | :------: | :-------------------------------------------------- |
 | `name`            | Yes      | Human-readable name of the upstream MCP server.     |
-| `protocolVersion` | Yes      | MCP protocol revision observed for this integration. This is a discovery hint; the installed plugin is authoritative at runtime. |
-| `repository`      | No       | Source repository URL.                              |
-| `package`         | No       | Package identifier (npm, pip, etc.).                |
+| `protocolVersion` | Yes      | MCP protocol revision observed for this integration. Discovery hint only; the installed plugin is authoritative at runtime. |
+| `repository`      | No       | Upstream source repository URL. Omit when private or unknown. |
+| `distributionUrl` | No       | Page where a human can obtain the pinned upstream artifact (versioned npm/PyPI/release/commit URL, or hosted endpoint). Launch pins live in the implementation repo. |
+| `toolSurface`     | No       | Digest of the discovered upstream tool surface (`{ "alg": "sha-256", "value": "<base64url>" }`). Advisory drift signal, not a runtime control. |
 
 Future protocols (OpenAPI, EVM, A2A) will define their own upstream object formats.
 
 ### `plugin` Object
 
-| Field        | Required | Description                                                    |
-| :----------- | :------: | :------------------------------------------------------------- |
-| `repository` | Yes      | URL to the plugin file or its containing directory (full path included in the URL). |
-| `pluginDid`  | No       | Stable DID of the plugin line (if assigned).                   |
+| Field         | Required | Description                                                    |
+| :------------ | :------: | :------------------------------------------------------------- |
+| `repository`  | Yes      | URL locating the plugin file (or its directory).               |
+| `pluginDid`   | No       | Stable DID of the plugin line across versions.                 |
+| `artifactDid` | No       | Content-addressed identity of these plugin bytes (`did:artifact:<cidv1>`). |
+
+`pluginDid` is the stable line identity (follow for updates). `artifactDid` is the hash of one exact `plugin.json` (verify on install). Recompute `artifactDid` in the same change that edits the plugin — a stale value fails verification. Derived by RFC 8785 (JCS) canonicalization, SHA-256, CIDv1 (raw codec), base32lower.
 
 ### `publisher` Object
 
@@ -80,21 +83,31 @@ Future protocols (OpenAPI, EVM, A2A) will define their own upstream object forma
 
 ### Bridge (`native: false`)
 
-A bridge wraps an existing non-MPAS application and adds MPAS approval enforcement. The bridge is a drop-in replacement that the user runs instead of (or in front of) the upstream server. Bridges require a credential adapter at runtime, but the choice of credential adapter is independent of the application and is not specified in the registry entry.
+A bridge wraps an existing non-MPAS application and adds MPAS approval enforcement. The user runs it instead of (or in front of) the upstream server. Bridges need a credential adapter at runtime; which adapter is out of scope for the registry entry.
 
 ### Native (`native: true`)
 
-A native application has MPAS verification built in. No bridge or credential adapter is needed. The application directly verifies Action Packages before executing operations. Native applications still need a plugin to describe their operation surface.
+MPAS verification is built in — no bridge or credential adapter. The application still needs a plugin describing its operation surface.
 
 ## Adding an Entry
 
 1. Create a JSON file named `{application}-{your-github-org}.json`
 2. Follow the schema above
 3. Ensure your plugin exists at the referenced location
-4. Submit a pull request
+4. If you set `plugin.artifactDid`, confirm it matches the plugin as published
+5. Submit a pull request
+
+## Keeping an Entry Current
+
+Treat the registry entry as part of the implementation change, not follow-up:
+
+- `plugin.artifactDid` — recompute when `plugin.json` changes
+- `upstream.toolSurface` — recapture when the upstream tool surface changes
+
+Both are optional. Omit either if you will not keep it current — a stale value looks verified but is wrong. Consumers can compute the artifact DID from the plugin themselves.
 
 ## Notes
 
-- The plugin is the authoritative source for the application's operation surface. The registry entry does not duplicate action lists.
-- Runtime configuration (how to start the server, environment variables, etc.) belongs in the implementation's repository, not in the registry.
-- Credential adapters are infrastructure and are not specified per-application.
+- The plugin is authoritative for the operation surface; the registry does not duplicate action lists.
+- Runtime configuration (launch command, env, pins) belongs in the implementation repository.
+- Credential adapters are infrastructure and are not specified per application.

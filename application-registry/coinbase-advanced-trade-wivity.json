@@ -1,0 +1,30 @@
+{
+  "version": "1",
+  "application": {
+    "name": "Coinbase Advanced Trade MCP Bridge Server",
+    "description": "MPAS-protected bridge for the local Coinbase CLI Advanced Trade MCP server.",
+    "applicationDid": "did:web:wivity.com:applications:coinbase-advanced-trade-mcp-server"
+  },
+  "native": false,
+  "protocol": "mcp",
+  "upstream": {
+    "name": "Coinbase CLI MCP Server",
+    "distributionUrl": "https://www.npmjs.com/package/@coinbase/coinbase-cli/v/0.0.4",
+    "protocolVersion": "2024-11-05",
+    "toolSurface": {
+      "alg": "sha-256",
+      "value": "3M7WDikD1sIGuhH9Ig67aYdmMXyZ_d4U0NmlD7BoqXg"
+    }
+  },
+  "plugin": {
+    "repository": "https://github.com/oma3dao/mpas-applications/blob/main/applications/coinbase-advanced-trade/plugin.json",
+    "pluginDid": "did:web:wivity.com:plugins:coinbase-advanced-trade-mcp-server",
+    "artifactDid": "did:artifact:bafkreib5rqaubelokooz35lwkamlcwdyvlf3rjjfees54mlomm7zifs63i"
+  },
+  "publisher": {
+    "name": "Wivity",
+    "githubOrg": "wivity",
+    "publisherDid": "did:web:wivity.com"
+  },
+  "status": "beta"
+}

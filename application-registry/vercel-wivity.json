@@ -1,0 +1,30 @@
+{
+  "version": "1",
+  "application": {
+    "name": "Vercel MCP MPAS Bridge Server",
+    "description": "MPAS-protected bridge for the official hosted Vercel MCP server.",
+    "applicationDid": "did:web:wivity.com:applications:vercel-mcp-server"
+  },
+  "native": false,
+  "protocol": "mcp",
+  "upstream": {
+    "name": "Vercel MCP Server",
+    "distributionUrl": "https://mcp.vercel.com",
+    "protocolVersion": "2024-11-05",
+    "toolSurface": {
+      "alg": "sha-256",
+      "value": "QZ71n5kfNiOJQ9P0kXatLc5obApdbyxhig667pj2r6M"
+    }
+  },
+  "plugin": {
+    "repository": "https://github.com/oma3dao/mpas-applications/blob/main/applications/vercel/plugin.json",
+    "pluginDid": "did:web:wivity.com:plugins:vercel-mcp-server",
+    "artifactDid": "did:artifact:bafkreih2ao24rzvmzp7ofke2irihfc6hmvesuv5vfhb7wlpb6oqvuidzmi"
+  },
+  "publisher": {
+    "name": "Wivity",
+    "githubOrg": "wivity",
+    "publisherDid": "did:web:wivity.com"
+  },
+  "status": "beta"
+}

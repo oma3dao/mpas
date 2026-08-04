@@ -1,0 +1,31 @@
+{
+  "version": "1",
+  "application": {
+    "name": "Kubernetes MCP MPAS Bridge Server",
+    "description": "MPAS-protected bridge for Kubernetes cluster administration via containers/kubernetes-mcp-server.",
+    "applicationDid": "did:web:wivity.com:applications:kubernetes-mcp-server"
+  },
+  "native": false,
+  "protocol": "mcp",
+  "upstream": {
+    "name": "kubernetes-mcp-server",
+    "repository": "https://github.com/containers/kubernetes-mcp-server",
+    "distributionUrl": "https://www.npmjs.com/package/kubernetes-mcp-server/v/0.0.65",
+    "protocolVersion": "2024-11-05",
+    "toolSurface": {
+      "alg": "sha-256",
+      "value": "rCcMGghxqjqFIS5vNju8hsKBsGKTE6LB_UEQhuHRfXw"
+    }
+  },
+  "plugin": {
+    "repository": "https://github.com/oma3dao/mpas-applications/blob/main/applications/kubernetes/plugin.json",
+    "artifactDid": "did:artifact:bafkreihnfwerguh6rx7nfodvywdbrjx24dlkt734orovx6stbkyi6zic5y",
+    "pluginDid": "did:web:wivity.com:plugins:kubernetes-mcp-server"
+  },
+  "publisher": {
+    "name": "Wivity",
+    "githubOrg": "wivity",
+    "publisherDid": "did:web:wivity.com"
+  },
+  "status": "beta"
+}

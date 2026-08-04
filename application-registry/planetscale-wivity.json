@@ -1,0 +1,31 @@
+{
+  "version": "1",
+  "application": {
+    "name": "PlanetScale MCP MPAS Bridge Server",
+    "description": "MPAS-protected bridge for the official PlanetScale MCP Server.",
+    "applicationDid": "did:web:wivity.com:applications:planetscale-mcp-server"
+  },
+  "native": false,
+  "protocol": "mcp",
+  "upstream": {
+    "name": "mcp-server",
+    "repository": "https://github.com/planetscale/mcp-server",
+    "distributionUrl": "https://github.com/planetscale/mcp-server/tree/56a05b658de1d2035510708f3a51ec224048f4ee",
+    "protocolVersion": "2024-11-05",
+    "toolSurface": {
+      "alg": "sha-256",
+      "value": "hGMX_QXI2YtbaY2Njn9VHlLbSlKqnrBXhf_KIdKFaK8"
+    }
+  },
+  "plugin": {
+    "repository": "https://github.com/oma3dao/mpas-applications/blob/main/applications/planetscale/plugin.json",
+    "pluginDid": "did:web:wivity.com:plugins:planetscale-mcp-server",
+    "artifactDid": "did:artifact:bafkreicml77hf6glb3wkbd4kw6qadzqwynspov6h33puedquwpzv3r37ia"
+  },
+  "publisher": {
+    "name": "Wivity",
+    "githubOrg": "wivity",
+    "publisherDid": "did:web:wivity.com"
+  },
+  "status": "beta"
+}
