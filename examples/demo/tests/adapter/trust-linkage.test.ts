@@ -9,6 +9,10 @@ import {
 
 const context: TrustContext = {
   artifactTrustApiUrl: "https://backend.omatrust.example/artifact-trust",
+  expectedChain: {
+    chainId: 6623,
+    easContract: "0x00Bd6f0Ee99bD76273B57e6dDEc5B00850c6b76C",
+  },
 };
 describe("listLinkedIdentifiers", () => {
   it("returns an empty list when no verified linked identifier exists", async () => {

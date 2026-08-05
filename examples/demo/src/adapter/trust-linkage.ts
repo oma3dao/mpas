@@ -25,7 +25,11 @@ export async function listLinkedIdentifiers(
 ): Promise<LinkedIdentifierSummary[]> {
   const trust =
     artifactTrust ??
-    await fetchArtifactTrust(artifactDid, context.artifactTrustApiUrl);
+    await fetchArtifactTrust(
+      artifactDid,
+      context.artifactTrustApiUrl,
+      context.expectedChain,
+    );
   return trust.otherAttestations.flatMap((item) => {
     const linkedId = item.attestation.data.linkedId;
     if (

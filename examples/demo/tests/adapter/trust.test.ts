@@ -10,6 +10,10 @@ vi.mock("../../src/adapter/trust-linkage.js", () => ({
   listLinkedIdentifiers: vi.fn(),
 }));
 vi.mock("../../src/adapter/artifact-trust-client.js", () => ({
+  DEFAULT_ARTIFACT_TRUST_CHAIN: {
+    chainId: 6623,
+    easContract: "0x00Bd6f0Ee99bD76273B57e6dDEc5B00850c6b76C",
+  },
   DEFAULT_ARTIFACT_TRUST_API_URL:
     "https://api.omatrust.org/v1/artifact-trust",
   fetchArtifactTrust: vi.fn(),
@@ -65,6 +69,10 @@ const fakeConfig: DeploymentConfig = {
 
 const fakeTrustContext: TrustContext = {
   artifactTrustApiUrl: "https://backend.omatrust.example/artifact-trust",
+  expectedChain: {
+    chainId: 6623,
+    easContract: "0x00Bd6f0Ee99bD76273B57e6dDEc5B00850c6b76C",
+  },
 };
 
 function makeAttestationResult(

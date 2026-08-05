@@ -236,7 +236,9 @@ reviewed it.
 
 After the local integrity check, the adapter automatically calls the public
 Artifact Trust API at
-`https://api.omatrust.org/v1/artifact-trust`. That API returns only
+`https://api.omatrust.org/v1/artifact-trust`. MPAS binds this production URL to
+OMAChain mainnet (chain ID 6623) and its deployed EAS contract, rejecting
+evidence returned for another network. That API returns only
 verified evidence, including:
 
 - verified responsibility claims identifying an accountable party;
