@@ -25,7 +25,7 @@ export function generatePlugin(tools: McpToolDefinition[], protocolVersion: stri
             required: ["name", "arguments"],
             properties: {
               name: { const: tool.name },
-              arguments: tool.inputSchema,
+              arguments: rebaseLocalJsonReferences(tool.inputSchema, "#/properties/arguments"),
             },
             additionalProperties: false,
           },
@@ -35,6 +35,34 @@ export function generatePlugin(tools: McpToolDefinition[], protocolVersion: stri
   };
 
   return `${JSON.stringify(plugin, null, 2)}\n`;
+}
+
+/**
+ * An MCP tool's inputSchema is a schema document of its own. The Application
+ * Plugin wraps that document under executionPayloadSchema.properties.arguments,
+ * so JSON Pointer references rooted at the original document must move with it.
+ */
+export function rebaseLocalJsonReferences(value: unknown, basePointer: string): unknown {
+  if (Array.isArray(value)) {
+    return value.map((entry) => rebaseLocalJsonReferences(entry, basePointer));
+  }
+  if (!isRecord(value)) {
+    return value;
+  }
+
+  return Object.fromEntries(
+    Object.entries(value).map(([key, entry]) => {
+      if (key === "$ref" && typeof entry === "string") {
+        if (entry === "#") return [key, basePointer];
+        if (entry.startsWith("#/")) return [key, `${basePointer}${entry.slice(1)}`];
+      }
+      return [key, rebaseLocalJsonReferences(entry, basePointer)];
+    }),
+  );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 export function inferImpact(name: string): "medium" | "high" | "critical" {

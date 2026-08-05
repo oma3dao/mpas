@@ -227,7 +227,14 @@ describe("reserved wait tool (profile §6)", () => {
           type: "CoordinationPollResponse",
           approvalRequests: [],
           actionUpdates: ready
-            ? [{ version: "1", type: "CoordinationActionUpdate", actionRef: capturedRef, state: "readyForResubmission", actionPackage: completedPackage }]
+            ? [{
+                version: "1",
+                type: "CoordinationActionUpdate",
+                actionRef: capturedRef,
+                state: "readyForResubmission",
+                expiresAt: "2030-01-01T00:00:00.000Z",
+                actionPackage: completedPackage,
+              }]
             : [],
         } as Awaited<ReturnType<WorkflowCoordination["poll"]>>;
       },

@@ -126,7 +126,12 @@ export function strictJsonParse(text: string): unknown {
         throw error('Expected ":"');
       }
       index += 1;
-      result[key] = parseValue(`${path}.${key}`);
+      Object.defineProperty(result, key, {
+        value: parseValue(`${path}.${key}`),
+        enumerable: true,
+        configurable: true,
+        writable: true,
+      });
       skipWhitespace();
       if (text[index] === ",") {
         index += 1;

@@ -1028,6 +1028,7 @@ Response:
         }
       },
       "state": "readyForResubmission",
+      "expiresAt": "2026-05-31T19:00:00.000Z",
       "progress": {
         "required": 2,
         "collected": 2,
@@ -1046,9 +1047,12 @@ Rules:
 
 - `approvalRequests` contains pending Approval Requests for actions where the DID is listed in `eligibleSigners` and the action is in `awaitingApprovals` state. Cancelled actions are not included.
 - `actionUpdates` contains state and progress for actions where the DID is the proposer.
+- Every action update includes `expiresAt`, copied unchanged from `ActionEnvelope.expiresAt`. This is the Action's authoritative deadline, not the time at which the Coordination Service noticed or recorded expiration.
 - Each action update includes a `progress` object with `required` (threshold count), `collected` (approvals collected so far), and `pending` (eligible DIDs that haven't responded). Not present for cancelled actions.
 - When state is `readyForResubmission`, the action update includes the completed `actionPackage`. The Proposer can take this Action Package and submit it directly to the Verifier without further assembly.
 - When state is `cancelled`, the action update includes `cancelledAt` and no `progress` or `actionPackage`.
+- When state is `rejected`, the action update includes `rejectedAt`. This records when the Coordination Service's non-authoritative workflow view became rejected.
+- An action update MUST NOT contain an `expiredAt` field. When and how an implementation marks a workflow expired is internal bookkeeping and is not part of the wire protocol.
 - Both arrays may be empty.
 - **Pagination (optional).** A Coordination Service that paginates MAY return a partial result together with a `nextCursor` token; the client re-polls with that token in `cursor` to retrieve the next page. Absence of `nextCursor` means the result is complete. A server that does not paginate omits `nextCursor` and ignores any supplied `cursor`. Pagination is defined now because a future signer-history query makes responses unbounded, and retrofitting it later would silently break pre-cursor clients.
 

@@ -165,6 +165,7 @@ describe("pollOnce (bridge track advancement)", () => {
         type: "CoordinationActionUpdate",
         actionRef: actionRef(),
         state: "readyForResubmission",
+        expiresAt: EXPIRES_AT,
         actionPackage: completedPackage as CoordinationActionUpdate["actionPackage"],
       },
     ]);
@@ -184,7 +185,7 @@ describe("pollOnce (bridge track advancement)", () => {
   it("marks a coordination-expired workflow unresolvable, never a fabricated outcome", async () => {
     const adapter = fakeAdapter(response("additionalApprovalsRequired"));
     const coordination = fakeCoordination(() => [
-      { version: "1", type: "CoordinationActionUpdate", actionRef: actionRef(), state: "expired" },
+      { version: "1", type: "CoordinationActionUpdate", actionRef: actionRef(), state: "expired", expiresAt: EXPIRES_AT },
     ]);
     const { engine, store } = makeEngine({ adapter, coordination });
 
@@ -194,6 +195,38 @@ describe("pollOnce (bridge track advancement)", () => {
     const record = store.getWorkflow(ACTION_ID);
     expect(record?.state).toBe("unresolvable");
     expect(record?.resolution).toMatchObject({ kind: "unresolvable", errorCode: "ACTION_EXPIRED_BEFORE_RESOLUTION" });
+  });
+
+  it("marks a coordination-rejected workflow unresolvable, not authoritatively rejected", async () => {
+    const adapter = fakeAdapter(response("additionalApprovalsRequired"));
+    const coordination = fakeCoordination(() => [
+      { version: "1", type: "CoordinationActionUpdate", actionRef: actionRef(), state: "rejected", expiresAt: EXPIRES_AT },
+    ]);
+    const { engine, store } = makeEngine({ adapter, coordination });
+
+    await engine.propose(proposalInput());
+    await engine.pollOnce();
+
+    expect(store.getWorkflow(ACTION_ID)?.resolution).toMatchObject({
+      kind: "unresolvable",
+      errorCode: "COORDINATION_REJECTED",
+    });
+  });
+
+  it("does not fabricate a result when coordination reports executed", async () => {
+    const adapter = fakeAdapter(response("additionalApprovalsRequired"));
+    const coordination = fakeCoordination(() => [
+      { version: "1", type: "CoordinationActionUpdate", actionRef: actionRef(), state: "executed", expiresAt: EXPIRES_AT },
+    ]);
+    const { engine, store } = makeEngine({ adapter, coordination });
+
+    await engine.propose(proposalInput());
+    await engine.pollOnce();
+
+    expect(store.getWorkflow(ACTION_ID)?.resolution).toMatchObject({
+      kind: "unresolvable",
+      errorCode: "RESULT_UNAVAILABLE",
+    });
   });
 
   it("marks an envelope-expired active workflow unresolvable during the sweep", async () => {
@@ -314,6 +347,7 @@ describe("waitForResult (client track observation)", () => {
         type: "CoordinationActionUpdate",
         actionRef: actionRef(),
         state: "readyForResubmission",
+        expiresAt: EXPIRES_AT,
         actionPackage: completedPackage as CoordinationActionUpdate["actionPackage"],
       },
     ]);

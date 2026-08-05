@@ -140,4 +140,4 @@ Maintainer release instructions are documented in
 
 ## Tests
 
-59 tests covering all proposer-side primitives, hash utilities, bridge integration, and type conformance.
+Tests cover proposer-side primitives, hash utilities, bridge integration, verification, and type conformance.
