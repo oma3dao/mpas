@@ -40,6 +40,14 @@ describe("strictJsonParse", () => {
     expect(strictJsonParse('{"a":{"k":1},"b":{"k":2}}')).toEqual({ a: { k: 1 }, b: { k: 2 } });
   });
 
+  it("parses __proto__ as an ordinary own member without changing the object prototype", () => {
+    const parsed = strictJsonParse('{"__proto__":{"polluted":true}}') as Record<string, unknown>;
+    expect(Object.getPrototypeOf(parsed)).toBe(Object.prototype);
+    expect(Object.hasOwn(parsed, "__proto__")).toBe(true);
+    expect(parsed.__proto__).toEqual({ polluted: true });
+    expect(({} as { polluted?: boolean }).polluted).toBeUndefined();
+  });
+
   it("reports the key and path of the duplicate", () => {
     try {
       strictJsonParse('{"outer":{"dup":1,"dup":2}}');

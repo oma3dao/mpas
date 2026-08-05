@@ -124,7 +124,11 @@ export async function checkAttestation(
 ): Promise<AttestationCheckResult> {
   const trust =
     artifactTrust ??
-    await fetchArtifactTrust(artifactDid, context.artifactTrustApiUrl);
+    await fetchArtifactTrust(
+      artifactDid,
+      context.artifactTrustApiUrl,
+      context.expectedChain,
+    );
   const allClaims = trust.responsibilityClaims.map(summarize);
   const responsibilityClaims = allClaims.filter((claim) =>
     isDeclaredPublisher(claim, publisherDid)

@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  DEFAULT_ARTIFACT_TRUST_API_URL,
   fetchArtifactTrust,
   parseArtifactTrustResponse,
 } from "../../src/adapter/artifact-trust-client.js";
@@ -70,9 +69,38 @@ describe("artifact trust API client", () => {
     expect(fetchMock).toHaveBeenCalledOnce();
     const [url, init] = fetchMock.mock.calls[0] as [URL, RequestInit];
     expect(url.toString()).toBe(
-      `${DEFAULT_ARTIFACT_TRUST_API_URL}?artifactDid=${encodeURIComponent(artifactDid)}`,
+      `https://api.omatrust.org/v1/artifact-trust?artifactDid=${encodeURIComponent(artifactDid)}`,
     );
     expect(init.headers).toEqual({ Accept: "application/json" });
+  });
+
+  it("rejects evidence from an unexpected chain or EAS deployment", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify(
+      makeArtifactTrustResponse({
+        chain: {
+          chainId: 66238,
+          caip2: "eip155:66238",
+          easContract: "0x8835AF90f1537777F52E482C8630cE4e947eCa32",
+        },
+      }),
+    ), { status: 200 }));
+    await expect(fetchArtifactTrust(artifactDid)).rejects.toThrow("unexpected chain");
+
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify(
+      makeArtifactTrustResponse({
+        chain: {
+          chainId: 6623,
+          caip2: "eip155:6623",
+          easContract: "0x1111111111111111111111111111111111111111",
+        },
+      }),
+    ), { status: 200 }));
+    await expect(fetchArtifactTrust(artifactDid)).rejects.toThrow(
+      "unexpected EAS contract",
+    );
   });
 
   it("treats non-2xx and malformed JSON shapes as unavailable", async () => {

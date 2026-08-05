@@ -287,6 +287,7 @@ function buildActionUpdate(stored: StoredAction): ActionUpdate {
     type: "CoordinationActionUpdate",
     actionRef: stored.actionRef,
     state: stored.state,
+    expiresAt: stored.actionPackage.actionEnvelope.expiresAt,
   };
 
   if (stored.state === "cancelled") {
@@ -295,9 +296,6 @@ function buildActionUpdate(stored: StoredAction): ActionUpdate {
   }
 
   if (stored.state === "expired") {
-    // Expired actions carry no progress or completed package. The expiresAt from the
-    // original Action Envelope indicates when expiry occurred (spec §5.3 / §6.1).
-    update.expiresAt = stored.actionPackage.actionEnvelope.expiresAt;
     return update;
   }
 

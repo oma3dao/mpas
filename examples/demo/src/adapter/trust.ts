@@ -13,8 +13,10 @@
 import type { MpasApplicationPlugin } from "../core/plugin-loader.js";
 import type { DeploymentConfig } from "./config-loader.js";
 import {
+  DEFAULT_ARTIFACT_TRUST_CHAIN,
   DEFAULT_ARTIFACT_TRUST_API_URL,
   fetchArtifactTrust,
+  type ArtifactTrustChainExpectation,
 } from "./artifact-trust-client.js";
 import { checkAttestation, type AttestationCheckResult } from "./trust-attestation.js";
 import {
@@ -37,10 +39,13 @@ export interface TrustReason {
 export interface TrustContext {
   /** Full Artifact Trust API URL. Internal injection point for tests/embedding. */
   artifactTrustApiUrl: string;
+  /** Chain and EAS deployment that responses from this endpoint must identify. */
+  expectedChain: ArtifactTrustChainExpectation;
 }
 
 export const DEFAULT_TRUST_CONTEXT: TrustContext = {
   artifactTrustApiUrl: DEFAULT_ARTIFACT_TRUST_API_URL,
+  expectedChain: DEFAULT_ARTIFACT_TRUST_CHAIN,
 };
 
 export interface PluginTrustReport {
@@ -105,6 +110,7 @@ export async function canTrust(
   const artifactTrust = await fetchArtifactTrust(
     artifactDid,
     trustContext.artifactTrustApiUrl,
+    trustContext.expectedChain,
   );
   const attestationResult = await checkAttestation(
     artifactDid,
@@ -132,6 +138,7 @@ export async function buildTrustReport(
   const artifactTrust = await fetchArtifactTrust(
     artifactDid,
     trustContext.artifactTrustApiUrl,
+    trustContext.expectedChain,
   );
   const [attestationResult, linkedIdentifiers] = await Promise.all([
     checkAttestation(

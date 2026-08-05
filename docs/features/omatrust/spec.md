@@ -2,7 +2,7 @@
 
 **Status:** Implemented
 **Created:** 2026-07-01
-**Scope:** Credential Adapter evaluates plugin trustworthiness via `canTrust` before loading  
+**Scope:** Credential Adapter builds an OMATrust report before loading a plugin
 **Goal:** Give operators verified trust evidence for each plugin at startup, clearly distinguish technical verification from responsible-party legitimacy, and require an informed confirmation
 
 ---
@@ -19,17 +19,17 @@ loading a plugin.
 
 ## 2. Solution Overview
 
-After the adapter verifies a plugin's artifact hash, it calls `canTrust()` to
-evaluate the plugin's trust evidence. It always displays the result and asks
+After the adapter verifies a plugin's artifact hash, it calls
+`buildTrustReport()` to evaluate the plugin's trust evidence and collect the
+evidence shown to the operator. It always displays the result and asks
 the operator whether to continue. A responsibility claim or cybersecurity
 assessment is sufficient to suppress the warning; both are not required. If
 neither primary signal is present—or the check is unavailable—the prompt also
 contains a warning.
 
-The `canTrust` function is a single evidence-evaluation boundary. Its internal
-checks will evolve over time (and may eventually become policy-driven), but it
-does not decide whether a responsible party is legitimate or trusted by the
-operator.
+`canTrust()` exposes the same verdict-only evaluation for callers that do not
+need the full report. Neither function decides whether a responsible party is
+legitimate or trusted by the operator.
 
 ---
 
@@ -151,18 +151,26 @@ check.
 
 `TrustContext` is an internal injection point, not operator configuration.
 Normal daemon startup uses the complete production Artifact Trust API URL.
-Chain, RPC, EAS, schema, issuer, and verification policy remain backend
-concerns.
+RPC, schema, issuer, and verification policy remain backend concerns. MPAS
+binds each endpoint context to the chain and EAS deployment it expects so a
+valid response from the wrong network cannot be accepted.
 
 ```typescript
 interface TrustContext {
   /** Full Artifact Trust API URL */
   artifactTrustApiUrl: string;
+  /** Expected chain and EAS deployment for responses from that URL */
+  expectedChain: {
+    chainId: number;
+    easContract: string;
+  };
 }
 ```
 
-The default is
-`https://api.omatrust.org/v1/artifact-trust`. The adapter adds only
+The default is `https://api.omatrust.org/v1/artifact-trust`, bound to OMAChain
+mainnet (`chainId` 6623, CAIP-2 `eip155:6623`) and EAS contract
+`0x00Bd6f0Ee99bD76273B57e6dDEc5B00850c6b76C`. The adapter rejects a response
+whose chain ID, CAIP-2 identifier, or EAS contract does not match. It adds only
 the encoded `artifactDid` query parameter, calls the URL once per plugin load,
 and shares that response across both MPAS checks.
 
@@ -172,11 +180,11 @@ and shares that response across both MPAS checks.
 
 ```
 ┌──────────────────┐     ┌─────────────────┐     ┌──────────────┐
-│  Config Loader   │────▶│   canTrust()    │────▶│ OMATrust API │
+│  Config Loader   │────▶│buildTrustReport │────▶│ OMATrust API │
 │                  │     │                 │     │              │
 │ 1. Load plugin   │     │ Check 1:        │     │              │
 │ 2. Verify hash   │     │  attestations   │     │              │
-│ 3. canTrust()    │◀────│ Check 2:        │◀────│              │
+│ 3. Build report  │◀────│ Check 2:        │◀────│              │
 │ 4. Show + prompt │     │  approved issuer│     │              │
 │ 5. Load or abort │     └─────────────────┘     └──────────────┘
 └──────────────────┘
@@ -185,8 +193,9 @@ and shares that response across both MPAS checks.
 ### Step-by-step:
 
 1. Adapter loads plugin and verifies `artifactDid` hash (existing behavior)
-2. Adapter calls `canTrust(plugin, config, trustContext)`
-3. `canTrust` requests the backend's complete, verified artifact evidence once
+2. Adapter calls `buildTrustReport(plugin, config, trustContext)`
+3. `buildTrustReport` requests the backend's complete, verified artifact
+   evidence once and rejects evidence from a different chain or EAS deployment
 4. Returns a trust report with pass/fail per check and human-readable reasons
 5. Adapter displays responsibility, cybersecurity, informational, and
    linked-identifier evidence
@@ -368,11 +377,13 @@ interface LinkedIdentifierSummary {
 
 ## 9. Endpoint Selection
 
-No OMATrust configuration is required in v1. MPAS uses the complete public
-Artifact Trust API URL by default and does not expose a backend base URL, RPC
-URL, or API-key setting. A future premium endpoint may introduce an explicit
-configuration contract containing the endpoint and authentication material;
-that contract is outside this feature.
+No OMATrust configuration is required in v1. MPAS uses the production/mainnet
+Artifact Trust API URL and its pinned OMAChain mainnet deployment by default.
+It does not expose a backend base URL, chain override, RPC URL, or API-key
+setting. Tests and embedded callers may inject a different endpoint only by
+also specifying its expected chain and EAS contract. A future premium endpoint
+may introduce an explicit configuration contract containing the endpoint and
+authentication material; that contract is outside this feature.
 
 ---
 

@@ -132,7 +132,7 @@ export type AuthorizationRequirements =
   | BaseAuthorizationRequirements
   | AdditionalApprovalsAuthorizationRequirements;
 
-interface BaseAuthorizationRequirements {
+export interface BaseAuthorizationRequirements {
   version: MpasVersion;
   type: "AuthorizationRequirements";
   actionEnvelopeHash: HashObject;
@@ -145,7 +145,7 @@ interface BaseAuthorizationRequirements {
   expiresAt?: Timestamp;
 }
 
-interface AdditionalApprovalsAuthorizationRequirements {
+export interface AdditionalApprovalsAuthorizationRequirements {
   version: MpasVersion;
   type: "AuthorizationRequirements";
   actionEnvelopeHash: HashObject;
@@ -192,7 +192,13 @@ export interface ReceiptPayload {
 
 export type ActionStatus = "pending" | "approved" | "rejected" | "executed" | "failed" | "expired" | "cancelled";
 
-export type CoordinationState = "awaitingApprovals" | "readyForResubmission" | "cancelled" | "expired";
+export type CoordinationState =
+  | "awaitingApprovals"
+  | "readyForResubmission"
+  | "executed"
+  | "rejected"
+  | "cancelled"
+  | "expired";
 
 export interface ActionReference {
   version: MpasVersion;
@@ -207,6 +213,34 @@ export interface CoordinationActionResponse {
   actionRef: ActionReference;
   state: CoordinationState;
   createdAt?: Timestamp;
+}
+
+export interface CoordinationActionRequest {
+  version: MpasVersion;
+  type: "CoordinationActionRequest";
+  actionPackage: ActionPackage;
+  authorizationRequirements?: AuthorizationRequirements;
+  context?: JsonObject;
+}
+
+export interface CoordinationPollRequest {
+  version: MpasVersion;
+  type: "CoordinationPollRequest";
+  did: Did;
+}
+
+export interface CoordinationApprovalSubmission {
+  version: MpasVersion;
+  type: "CoordinationApprovalSubmission";
+  actionEnvelopeHash: HashObject;
+  approval: Approval;
+}
+
+export interface CoordinationActionCancelRequest {
+  version: MpasVersion;
+  type: "CoordinationActionCancelRequest";
+  actionId: ActionId;
+  proposerDid: Did;
 }
 
 export interface SignerReviewSet {
@@ -238,9 +272,12 @@ export interface CoordinationActionUpdate {
   type: "CoordinationActionUpdate";
   actionRef: ActionReference;
   state: CoordinationState;
+  /** The authoritative deadline copied from ActionEnvelope.expiresAt. */
+  expiresAt: Timestamp;
   progress?: CoordinationProgress;
   actionPackage?: ActionPackage;
   cancelledAt?: Timestamp;
+  rejectedAt?: Timestamp;
 }
 
 export interface CoordinationPollResponse {

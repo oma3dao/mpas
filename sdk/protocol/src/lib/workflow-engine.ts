@@ -217,6 +217,20 @@ export class BridgeWorkflowEngine {
       case "expired":
         this.resolveUnresolvable(actionId, "ACTION_EXPIRED_BEFORE_RESOLUTION", "The Action expired before Approvals completed.");
         break;
+      case "rejected":
+        this.resolveUnresolvable(
+          actionId,
+          "COORDINATION_REJECTED",
+          "The coordination workflow was rejected before completion.",
+        );
+        break;
+      case "executed":
+        this.resolveUnresolvable(
+          actionId,
+          "RESULT_UNAVAILABLE",
+          "Coordination reports execution, but the authoritative Verifier result is unavailable.",
+        );
+        break;
       case "cancelled":
         this.resolveUnresolvable(actionId, "ACTION_CANCELLED", "The coordination workflow was cancelled before completion.");
         break;

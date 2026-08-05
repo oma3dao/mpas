@@ -51,10 +51,10 @@ export interface ActionUpdate {
   type: "CoordinationActionUpdate";
   actionRef: ActionRef;
   state: CoordinationState;
+  expiresAt: string;
   progress?: CoordinationProgress;
   actionPackage?: ActionPackage;
   cancelledAt?: string;
-  expiresAt?: string;
 }
 
 export interface CoordinationActionRequest {

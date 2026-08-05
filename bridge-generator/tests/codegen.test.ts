@@ -141,6 +141,42 @@ describe("generatePlugin", () => {
       generatePlugin(upstream.tools, upstream.protocolVersion),
     );
   });
+
+  it("rebases input-schema JSON Pointer references after nesting under arguments", () => {
+    const plugin = JSON.parse(generatePlugin([
+      {
+        name: "add_reference_variable",
+        inputSchema: {
+          type: "object",
+          $defs: {
+            ReferenceVariable: {
+              type: "object",
+              properties: { name: { type: "string" } },
+            },
+          },
+          properties: {
+            variables: {
+              type: "array",
+              items: { $ref: "#/$defs/ReferenceVariable" },
+            },
+            recursive: { $ref: "#" },
+            external: { $ref: "https://example.com/schema.json" },
+          },
+        },
+      },
+    ], upstream.protocolVersion)) as {
+      operations: Record<string, { executionPayloadSchema: {
+        properties: { arguments: { properties: Record<string, { $ref: string }> } };
+      } }>;
+    };
+
+    const properties = plugin.operations.add_reference_variable.executionPayloadSchema.properties.arguments.properties;
+    expect(properties.variables).toMatchObject({
+      items: { $ref: "#/properties/arguments/$defs/ReferenceVariable" },
+    });
+    expect(properties.recursive.$ref).toBe("#/properties/arguments");
+    expect(properties.external.$ref).toBe("https://example.com/schema.json");
+  });
 });
 
 describe("inferImpact", () => {

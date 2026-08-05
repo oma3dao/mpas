@@ -23,6 +23,7 @@ describe("CoordinationStore", () => {
 
     const result = store.submitAction(request);
     const maintainerPoll = store.poll((await fixtureKey("maintainer-a")).did);
+    const proposerPoll = store.poll(request.actionPackage.actionEnvelope.proposer.did);
     const outsiderPoll = store.poll("did:web:agents.example:outsider" as Did);
 
     expect(result.created).toBe(true);
@@ -31,6 +32,10 @@ describe("CoordinationStore", () => {
     expect(maintainerPoll.approvalRequests[0].signerReviewSet.authorizationRequirements).toBe(
       request.authorizationRequirements,
     );
+    expect(proposerPoll.actionUpdates[0]).toMatchObject({
+      state: "awaitingApprovals",
+      expiresAt: request.actionPackage.actionEnvelope.expiresAt,
+    });
     expect(outsiderPoll.approvalRequests).toHaveLength(0);
   });
 
@@ -85,6 +90,7 @@ describe("CoordinationStore", () => {
 
     expect(ready.state).toBe("readyForResubmission");
     expect(readyUpdate.state).toBe("readyForResubmission");
+    expect(readyUpdate.expiresAt).toBe(request.actionPackage.actionEnvelope.expiresAt);
     expect(readyUpdate.actionPackage?.approvalBundle.approvals).toHaveLength(3);
     expect(store.poll(maintainerB.did).approvalRequests).toHaveLength(0);
   });
@@ -128,6 +134,7 @@ describe("CoordinationStore", () => {
     expect(store.poll(maintainerA.did).approvalRequests).toHaveLength(0);
     expect(store.poll(request.actionPackage.actionEnvelope.proposer.did).actionUpdates[0]).toMatchObject({
       state: "cancelled",
+      expiresAt: request.actionPackage.actionEnvelope.expiresAt,
     });
     expect(() =>
       store.submitApproval({

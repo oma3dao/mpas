@@ -52,7 +52,7 @@ export function makeArtifactTrustResponse(
     chain: {
       chainId: 6623,
       caip2: "eip155:6623",
-      easContract: "0x1111111111111111111111111111111111111111",
+      easContract: "0x00Bd6f0Ee99bD76273B57e6dDEc5B00850c6b76C",
     },
     trustAnchorsVersion: 1,
     ...groups,

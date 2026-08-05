@@ -4,6 +4,11 @@ export interface ArtifactTrustChain {
   easContract: string;
 }
 
+export interface ArtifactTrustChainExpectation {
+  chainId: number;
+  easContract: string;
+}
+
 export interface ArtifactTrustAttestation {
   uid: string;
   schema: string;
@@ -41,11 +46,14 @@ export interface ArtifactTrustResponse {
   };
 }
 
-// Staging CA test against the testnet gateway or backend origin:
-// "https://test.api.omatrust.org/v1/artifact-trust"
-// "https://test.backend.omatrust.org/api/public/artifact-trust"
+// Production is OMAChain mainnet. Test-only contexts must pair the test API
+// URL with the expected OMAChain testnet chain and EAS contract.
 export const DEFAULT_ARTIFACT_TRUST_API_URL =
   "https://api.omatrust.org/v1/artifact-trust";
+export const DEFAULT_ARTIFACT_TRUST_CHAIN: ArtifactTrustChainExpectation = {
+  chainId: 6623,
+  easContract: "0x00Bd6f0Ee99bD76273B57e6dDEc5B00850c6b76C",
+};
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -186,6 +194,7 @@ export function parseArtifactTrustResponse(value: unknown): ArtifactTrustRespons
 export async function fetchArtifactTrust(
   artifactDid: string,
   artifactTrustApiUrl = DEFAULT_ARTIFACT_TRUST_API_URL,
+  expectedChain = DEFAULT_ARTIFACT_TRUST_CHAIN,
 ): Promise<ArtifactTrustResponse> {
   const endpoint = new URL(artifactTrustApiUrl);
   endpoint.searchParams.set("artifactDid", artifactDid);
@@ -203,6 +212,19 @@ export async function fetchArtifactTrust(
   const result = parseArtifactTrustResponse(await response.json());
   if (result.artifactDid !== artifactDid) {
     throw new Error("Artifact trust API returned evidence for a different artifact");
+  }
+  if (
+    result.chain.chainId !== expectedChain.chainId ||
+    result.chain.caip2 !== `eip155:${expectedChain.chainId}`
+  ) {
+    throw new Error("Artifact trust API returned evidence from an unexpected chain");
+  }
+  if (
+    result.chain.easContract.toLowerCase() !== expectedChain.easContract.toLowerCase()
+  ) {
+    throw new Error(
+      "Artifact trust API returned evidence from an unexpected EAS contract",
+    );
   }
   return result;
 }
