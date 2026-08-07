@@ -67,11 +67,11 @@ This profile does not define:
 - Billing, tenant, notification-vendor, or dashboard-specific APIs.
 - Application-specific Execution Payload schemas.
 - Human-readable rendering descriptors.
-- DID authentication, OAuth, passkey, SSO, mTLS, or enterprise identity protocols.
+- DID authentication, OAuth, passkey, SSO, mTLS, or enterprise identity protocols other than the RFC 9421 profile defined in §4.6.
 - Smart contract interfaces.
 - MPC/TSS signing protocols.
 
-Authentication, tenancy, authorization to call an HTTP endpoint, rate limiting, and service operator policy are deployment-specific. HTTP authentication is not an MPAS Approval.
+Authentication is defined in §4.6. Tenancy, rate limiting, and service operator policy beyond authentication are deployment-specific. HTTP authentication is not an MPAS Approval.
 
 ---
 
@@ -101,7 +101,7 @@ This HTTP profile adds a concrete API contract so independently implemented Prop
 
 HTTP endpoints implementing this profile **MUST** use HTTPS in production deployments.
 
-Plain HTTP **MAY** be used only for local development, loopback connections, test fixtures, or private test networks where transport security is provided by other means.
+Plain HTTP **MAY** be used only in non-production deployments where transport risk is addressed. This allowance never relaxes the authentication enforcement requirements in §4.6.5.
 
 ### 4.2 Content Type
 
@@ -126,7 +126,7 @@ This profile intentionally avoids using `GET` for protocol operations because MP
 
 HTTP authentication identifies the caller to the service. It is not an MPAS Approval.
 
-Implementations **MAY** use API keys, OAuth2, OIDC, SAML, DID-auth, mTLS, signed HTTP requests, passkeys, enterprise SSO, or another authentication mechanism.
+MPAS participant authentication **MUST** use the RFC 9421 profile defined in §4.6. Deployments **MAY** additionally impose transport or infrastructure controls (mTLS, enterprise SSO, gateway authentication, network allowlists); these are not a substitute for the §4.6 profile and **MUST NOT** be used to derive participant identity.
 
 A Verifier **MUST NOT** treat HTTP authentication, Coordination Service routing, notification delivery, or transport metadata as an Approval unless the Verifier's policy explicitly recognizes a corresponding MPAS Approval or trusted external approval record.
 
@@ -146,7 +146,134 @@ Idempotency keys are especially important for:
 
 If the same idempotency key is reused with a different request body, the server **SHOULD** return `409 Conflict`.
 
-### 4.6 HTTP Status Codes vs MPAS Result Codes
+`Idempotency-Key` and RFC 9421 signature `nonce` (§4.6) are orthogonal. A retry carries the same idempotency key (to get the stored result) and a fresh nonce (to pass replay protection). Collapsing them would cause a legitimate retry to be rejected as a replay.
+
+### 4.6 Authentication Profile (RFC 9421)
+
+Authentication enforcement is determined solely by the trust boundary and endpoint role (§4.6.5).
+
+Authentication uses [RFC 9421 HTTP Message Signatures](https://www.rfc-editor.org/rfc/rfc9421) with [RFC 9530 Content-Digest](https://www.rfc-editor.org/rfc/rfc9530). The caller proves control of the DID it claims by signing the request with the corresponding Ed25519 key.
+
+#### 4.6.1 Wire Format
+
+```http
+POST /mpas/v1/coordination/poll HTTP/1.1
+Content-Type: application/mpas+json
+Content-Digest: sha-256=:X48E9qOokqqrvdts8nOJRJN3OWDUoyWxBf7kbu9DBPE=:
+Signature-Input: mpas=("@method" "@path" "content-digest");\
+  created=1754400000;expires=1754400060;\
+  keyid="did:jwk:eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6Ii4uLiJ9";\
+  nonce="f9a3c1b7e2d4508a";tag="mpas-v1"
+Signature: mpas=:K2qGT5srn2OGbOIDzQ6kYT+ruaycnDAAUpKv+ePFfD0RAxn...:
+
+{"version":"1","type":"CoordinationPollRequest",
+ "did":"did:jwk:eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6Ii4uLiJ9",
+ "audience":"https://coordination.example.com"}
+```
+
+Signature base:
+
+```
+"@method": POST
+"@path": /mpas/v1/coordination/poll
+"content-digest": sha-256=:X48E9qOokqqrvdts8nOJRJN3OWDUoyWxBf7kbu9DBPE=:
+"@signature-params": ("@method" "@path" "content-digest");created=1754400000;\
+expires=1754400060;keyid="did:jwk:...";nonce="f9a3c1b7e2d4508a";tag="mpas-v1"
+```
+
+#### 4.6.2 Signature Requirements
+
+Covered components **MUST** be exactly `("@method" "@path" "content-digest")`. `@authority` and `@target-uri` **MUST NOT** be covered — TLS-terminating reverse proxies may rewrite `Host`, making verification brittle.
+
+`keyid` **MUST** be the caller's DID. The DID **MUST** use the `did:jwk` method. The verification key **MUST** be derived from `keyid` by decoding the embedded JWK. The embedded JWK **MUST** contain public key material only; a verifier **MUST** reject any `did:jwk` containing private key material. No DID document is fetched; no resolver is invoked.
+
+The algorithm is EdDSA, derived from the Ed25519 key in the `did:jwk`. If `alg` is present in signature parameters, it **MUST** equal `ed25519`; any other value **MUST** be rejected. (Note: `EdDSA` is the JWS/JWK algorithm name; `ed25519` is the RFC 9421 HTTP Message Signatures registry name. They refer to the same algorithm.) Future key types define their own algorithm binding.
+
+Signers **SHOULD** omit `alg` to match the canonical wire example in §4.6.1 and avoid redundant metadata when the key embedded in `keyid` already determines the algorithm. Omitting it also keeps RFC 9421 B.2.6 directly usable as the byte-exact known-answer gate. Verifiers **MUST** accept a signature whose parameters omit `alg`, and **MUST** accept one where it is present and equal to `ed25519`. Both forms interoperate and can be fixtured independently; every byte-exact fixture must specify which form it covers because `@signature-params` is reproduced verbatim in the signature base.
+
+`created` and `expires` **MUST** be present integer timestamps. `expires` **MUST** be strictly greater than `created`, and `expires - created` **MUST NOT** exceed 60 seconds. This ceiling is the declared-lifetime MPAS profile constraint that bounds replay exposure and nonce-retention requirements. Clients and deployments **MAY** choose a shorter period but not a longer one. The server **MUST** reject requests whose `created` is in the future beyond configured `clockSkew` (suggested default: 30 seconds), or whose `expires` has passed. The declared maximum lifetime remains 60 seconds, but configured future clock skew can extend the server-observed acceptance horizon by up to `clockSkew`.
+
+`nonce` **MUST** be present. On state-mutating endpoints, only after signature, digest, freshness, audience, identity, authorization, and side-effect-free business preflight validation succeeds and immediately before mutation, the server **MUST** atomically claim `(keyid, nonce)`. Exactly one concurrent claim **MUST** succeed. A successful claim **MUST** remain retained through `expires`; a failed claim **MUST** be rejected as replay. Invalid requests **MUST NOT** consume a nonce. An integration whose store operation combines validation and mutation **MUST** introduce a side-effect-free preflight so that the nonce claim can occur after validation and before commit. On read-only idempotent endpoints, freshness validation alone is acceptable. For Coordination Service endpoints specifically: `action`, `approval`, and `action-cancel` are state-mutating; `poll` is read-only.
+
+Signers **MUST** set the `tag` signature parameter to `mpas-v1`. The `tag` identifies the MPAS application profile and, as a signature parameter, is covered by `@signature-params`. A dictionary member's label correlates its `Signature-Input` value with the member of the same label in `Signature`; the label does not authenticate identity. The label **SHOULD** be `mpas`, but an alternate label is conforming when it matches in both dictionaries.
+
+A verifier **MUST** parse both dictionaries. Absence of both signature headers is handled as missing authentication under §4.6.6. If only one header is present, either dictionary is malformed, or the selected input lacks its same-label `Signature` member, verification **MUST** fail as `signature_invalid`. The verifier **MUST** select exactly one `Signature-Input` member tagged `mpas-v1`; unrelated members with other tags are ignored for MPAS candidate selection. Zero or multiple `mpas-v1` candidates **MUST** be rejected. For example, `Signature-Input: legacy=(...);tag="other", alt=(...);tag="mpas-v1"` is conforming when `Signature` contains an `alt` member; the alternate `alt` label carries no identity semantics.
+
+`Content-Digest` **MUST** be present and **MUST** use the `sha-256` algorithm (RFC 9530). The server **MUST** verify the digest against the received body.
+
+#### 4.6.3 Audience
+
+Every request carrying an MPAS HTTP Message Signature **MUST** carry an `audience` field in its body. In this version, the four Coordination Service request types define that field (§8.4–8.7). Other interfaces (Verifier, Signer) add `audience` to their request schemas when they adopt enforcement (§4.6.4.2, §4.6.4.3).
+
+The client derives `audience` from the origin of its configured service URL: scheme + host + port when non-default, with no path or trailing slash. For example, `https://coordination.example.com/mpas/v1/coordination/` yields `https://coordination.example.com`. This derivation is the only audience configuration clients and bridges need.
+
+An enforcing server's configured audience is a non-empty set of valid origins. The server **MUST** compare the request's `audience` against each configured value using exact string match; no normalization or subdomain matching is applied. A match against any member satisfies the check. Every configured origin **MUST** genuinely be an origin of that service.
+
+`audience` is bound to the signature transitively through `content-digest`. It prevents a signature captured at one deployment from being replayed at another.
+
+An unsigned request sent to a service that does not enforce authentication **MAY** omit `audience`. A server that does not enforce authentication **MUST** ignore `audience` if present. This ensures signed and unsigned clients work against unenforcing servers without special-casing.
+
+#### 4.6.4 Identity Binding and Endpoint Authorization
+
+Before processing a signed Coordination Service request, every representation of the participant identity required by that endpoint **MUST** be equal. Any mismatch **MUST** be rejected with `403 permission_denied`. Once the representations are equal, this profile does not prescribe which equal representation an implementation uses internally.
+
+Each endpoint interface defines the required equality invariant and resulting scope.
+
+##### 4.6.4.1 Coordination Service
+
+- `poll`: signature `keyid` **MUST** equal `CoordinationPollRequest.did`; the request **MUST** be scoped to that agreed DID.
+- `action-cancel`: signature `keyid` **MUST** equal request `proposerDid`, and both **MUST** equal the stored proposer.
+- `action`: signature `keyid` **MUST** equal `actionPackage.actionEnvelope.proposer.did`.
+- `approval`: signature `keyid` **MUST** equal the signer DID decoded from the Approval, and that DID **MUST** be an eligible signer for the referenced workflow.
+
+Each equality and eligibility check occurs before processing, and any mismatch or ineligibility **MUST** be rejected with `403 permission_denied`. Version 1 retains the required `CoordinationPollRequest.did` and `CoordinationActionCancelRequest.proposerDid` fields. A future request schema version **MAY** remove redundant fields only at an explicit version boundary; v1 will not be mutated in place. Migration and versioning details will be decided if a future revision is proposed.
+
+##### 4.6.4.2 Verifier / Credential Adapter
+
+Identity binding for `POST /mpas/v1/action` is not yet defined. Until this section is specified, a Verifier or Credential Adapter that adopts §4.6 authentication establishes caller identity for rate limiting, audit, and access control only — with no authorization effect on MPAS policy evaluation.
+
+##### 4.6.4.3 Signer
+
+Identity binding for `POST /mpas/v1/approval-request` is not yet defined. Until this section is specified, a Signer endpoint that adopts §4.6 authentication establishes caller identity for rate limiting and audit only — with no effect on the Signer's approval decision.
+
+#### 4.6.5 Enforcement
+
+The **trust boundary** is the operator-defined set of components and administrative principals within which unauthenticated participant identity claims are accepted. Authentication **MAY** be disabled only if every caller able to reach that Coordination Service is trusted to make any participant claim the instance accepts, or equivalent isolation prevents cross-participant access. Access to participant keys is relevant evidence in deployment assessment but does not define the boundary. Network placement alone does not define it. Outside this boundary, Coordination Service authentication **MUST** be enforced.
+
+Enforcement requirements by role:
+
+- A **Coordination Service** outside the trust boundary **MUST** enforce authentication.
+- Any other **MPAS endpoint** (Verifier, Signer, Credential Adapter) outside that boundary **MAY** enforce authentication. Identity binding for those interfaces remains limited as specified in §4.6.4.2 and §4.6.4.3.
+
+A fresh hosted Coordination Service outside the trust boundary **MUST** default enforcement on and **MUST NOT** be exposed unenforced. Existing deployments use a coordinated cutover so callers sign before enforcement is enabled.
+
+Production HTTPS remains independently required by §4.1. TLS protects transport but does not replace authentication when this section requires enforcement.
+
+Configuration **MUST** fail closed: enforcement enabled with an empty configured audience set or any configured value that is not a valid origin **MUST** refuse to start.
+
+Health-check endpoints (`GET /mpas/v1/coordination/health` and equivalents) **SHOULD** remain unauthenticated so deployment probes and monitoring continue to function.
+
+#### 4.6.6 Error Responses
+
+When enforcement is enabled, a request with no signature headers returns `401 authentication_required`. A request that presents signature headers but fails candidate selection; has malformed input or a missing or wrong required signature parameter, including `tag`; has an invalid or mismatched key; fails cryptographic verification; or fails freshness, nonce, or audience validation uniformly returns `401 signature_invalid`. This prevents an attacker from distinguishing signature-validation failure modes. A `Content-Digest` mismatch remains `400 artifact_hash_mismatch`, and an authenticated caller that is not authorized for the requested operation remains `403 permission_denied`.
+
+Failures **MUST NOT** disclose whether a DID exists or has pending work.
+
+| Condition | Status | Code |
+|---|---|---|
+| Signature headers absent while enforcing | 401 | `authentication_required` |
+| Presented-signature selection, required-parameter or tag, key, cryptographic, freshness, nonce, or audience failure | 401 | `signature_invalid` |
+| `Content-Digest` mismatch | 400 | `artifact_hash_mismatch` |
+| Authenticated but not authorized for the requested operation | 403 | `permission_denied` |
+| Required Coordination Service identity representations are not all equal | 403 | `permission_denied` |
+
+Signature values, `Signature-Input`, `keyid`, nonce values, and body content **MUST NOT** be logged by application, framework, or error logging. A logged `Signature` header is a replayable credential for the duration of the freshness window.
+
+#### 4.6.7 Applicability
+
+This profile is the sole MPAS participant authentication mechanism defined by this HTTP profile. Enforcement requirements per role are in §4.6.5. Future versions may define additional mechanisms; until then, implementations that authenticate **MUST** use this profile.
+
+### 4.7 HTTP Status Codes vs MPAS Result Codes
 
 HTTP status codes describe transport/API processing. MPAS result values describe protocol outcomes.
 
@@ -184,7 +311,7 @@ Content-Type: application/mpas+json
 
 This is a deterministic MPAS protocol rejection, not an HTTP authorization failure. The response MUST NOT include Authorization Requirements, and the Verifier MUST NOT dispatch the action.
 
-### 4.7 Standard HTTP Status Mapping
+### 4.8 Standard HTTP Status Mapping
 
 |                  HTTP Status | Meaning                                                                                                      |
 | ---------------------------: | ------------------------------------------------------------------------------------------------------------ |
@@ -203,7 +330,7 @@ This is a deterministic MPAS protocol rejection, not an HTTP authorization failu
 |  `500 Internal Server Error` | Unexpected server error.                                                                                     |
 |    `503 Service Unavailable` | Temporary policy, verifier, application, or dependency unavailability.                                       |
 
-### 4.8 Standard Error Envelope
+### 4.9 Standard Error Envelope
 
 When returning a transport or structural error, implementations **SHOULD** use `MpasHttpError`.
 
@@ -240,7 +367,7 @@ Recommended error codes:
 | `artifact_malformed`           | MPAS artifact is malformed.                                                 |
 | `artifact_not_canonicalizable` | MPAS artifact cannot be canonicalized.                                      |
 | `artifact_hash_mismatch`       | Hash binding does not match the supplied artifact.                          |
-| `signature_invalid`            | Signature verification failed.                                              |
+| `signature_invalid`            | Signature verification failed. Under §4.6, this also covers HTTP Message Signature failures including expired/future timestamps, replayed nonce, and audience mismatch. |
 | `not_supported`                | Target application, operation, signature format, or profile is unsupported. |
 | `policy_unavailable`           | Policy could not be loaded or evaluated.                                    |
 | `expired`                      | Artifact or coordination workflow expired.                                  |
@@ -457,7 +584,7 @@ Fields:
 | `authorizationRequirements` | Conditional | Required when `result` is `additionalApprovalsRequired`.                                                                                                 |
 | `executionReceipt`          | Conditional | Recommended when the Action is resolved. Required by profiles that require receipts for completed Actions.                                               |
 | `executionResult`           |  Optional   | INFORMATIVE execution-profile-native response content (see Section 6.4.1). Not hash-bound, not covered by the receipt signature, not an attestation of output. |
-| `error`                     |  Optional   | Machine-readable detail for `rejected`/`failed`/`malformed` results (`{ code, message }`). Distinct from the transport-level `MpasHttpError` (Section 4.8). |
+| `error`                     |  Optional   | Machine-readable detail for `rejected`/`failed`/`malformed` results (`{ code, message }`). Distinct from the transport-level `MpasHttpError` (Section 4.9). |
 | `actionRequestId`           |  Optional   | Verifier-local identifier for async processing.                                                                                                          |
 | `pollAfter`                 |  Optional   | Suggested time after which the caller may poll or retry, if async behavior is supported.                                                                 |
 | `context`                   |  Optional   | Non-authoritative explanatory metadata, including profile-defined diagnostics (Section 6.4.2).                                                           |
@@ -918,6 +1045,7 @@ Fields:
 | `type`                      |     Yes     | MUST be `CoordinationActionRequest`.                                                                                                               |
 | `actionPackage`             |     Yes     | Complete MPAS Action Package.                                                                                                                      |
 | `authorizationRequirements` | Recommended | Authorization Requirements returned by the Verifier. Tells the Coordination Service what approvals are needed so it can route to eligible Signers. |
+| `audience`                  | Conditional | Configured service URL origin (§4.6.3). Required whenever the request carries an MPAS signature; MAY be omitted only on an unsigned request to an unenforcing service. |
 | `context`                   |  Optional   | Non-authoritative metadata.                                                                                                                        |
 
 Response:
@@ -944,6 +1072,7 @@ Response:
 
 Rules:
 
+- On a signed request, signature `keyid` **MUST** equal `actionPackage.actionEnvelope.proposer.did` before processing; mismatch **MUST** be rejected with `403`.
 - The Coordination Service **MUST** compute the Action Envelope hash from the received Action Envelope.
 - The Coordination Service **SHOULD** compute and store the Execution Payload hash and Action Package hash for audit/debugging, but those hashes are not substitutes for the normative Action Envelope binding.
 - If `authorizationRequirements` are provided, the Coordination Service **SHOULD** use them to determine which Signers are eligible and expose Approval Requests accordingly.
@@ -955,7 +1084,10 @@ Used by Signers and Proposers to poll for pending work and action state updates.
 
 Polling is mandatory for Coordination Service interoperability. Participants using a Coordination Service topology **MUST** be able to retrieve pending messages by polling, even when push notifications or webhooks are also supported.
 
-The Coordination Service determines what to return based on the participant's DID alone:
+The Coordination Service determines what to return based on the participant DID:
+
+- When authentication is enforced (§4.6), signature `keyid` and the required body `did` **MUST** be equal before processing; mismatch is `403`. The response is scoped to that agreed DID, without prescribing which equal representation is used internally.
+- When authentication is not enforced, the participant's DID is the body-supplied `did` field.
 
 - **Signers** receive `approvalRequests` — pending Approval Requests for actions where their DID is listed in `eligibleSigners` and the action is in `awaitingApprovals` state.
 - **Proposers** receive `actionUpdates` — state and progress updates for actions they proposed, including completed Action Packages when state is `readyForResubmission`.
@@ -978,8 +1110,9 @@ Fields:
 | --------- | :------: | ----------------------------------------------------------- |
 | `version` |   Yes    | MUST be `"1"`.                                              |
 | `type`    |   Yes    | MUST be `CoordinationPollRequest`.                          |
-| `did`     |   Yes    | DID of the participant polling for work or status updates.  |
-| `cursor`  | Optional | Opaque continuation token from a previous response's `nextCursor`. Paginating servers use it to resume; omit it to start from the beginning. |
+| `did`      |   Yes    | DID of the participant polling for work or status updates. Required in request schema v1. On a signed request, signature `keyid` **MUST** equal this field before processing or the server rejects with `403`; the response is scoped to that agreed DID. |
+| `audience` | Conditional | Configured service URL origin (§4.6.3). Required whenever the request carries an MPAS signature; MAY be omitted only on an unsigned request to an unenforcing service. |
+| `cursor`   | Optional | Opaque continuation token from a previous response's `nextCursor`. Paginating servers use it to resume; omit it to start from the beginning. |
 
 Response:
 
@@ -1045,6 +1178,7 @@ Response:
 
 Rules:
 
+- On a signed request, the server **MUST** establish `keyid == did` before processing, reject mismatch with `403`, and scope all returned data to that agreed DID.
 - `approvalRequests` contains pending Approval Requests for actions where the DID is listed in `eligibleSigners` and the action is in `awaitingApprovals` state. Cancelled actions are not included.
 - `actionUpdates` contains state and progress for actions where the DID is the proposer.
 - Every action update includes `expiresAt`, copied unchanged from `ActionEnvelope.expiresAt`. This is the Action's authoritative deadline, not the time at which the Coordination Service noticed or recorded expiration.
@@ -1097,6 +1231,7 @@ Fields:
 | `type`               |   Yes    | MUST be `CoordinationApprovalSubmission`.                                            |
 | `actionEnvelopeHash` |   Yes    | Hash of the Action Envelope identifying the coordination workflow.                   |
 | `approval`           |   Yes    | The MPAS Approval object.                                                            |
+| `audience`           | Conditional | Configured service URL origin (§4.6.3). Required whenever the request carries an MPAS signature; MAY be omitted only on an unsigned request to an unenforcing service. |
 
 Response:
 
@@ -1123,6 +1258,7 @@ Response:
 
 Rules:
 
+- On a signed request, signature `keyid` **MUST** equal the signer DID decoded from the Approval, and that DID **MUST** be an eligible signer for the referenced workflow before processing; mismatch or ineligibility **MUST** be rejected with `403` before the Approval is stored or counted.
 - The Coordination Service **MUST** store Approval objects unmodified.
 - The Coordination Service **MAY** perform structural checks, hash checks, duplicate detection, and signature pre-validation.
 - Coordination Service pre-validation is not authoritative unless the Verifier explicitly trusts the Coordination Service for that role.
@@ -1154,7 +1290,8 @@ Fields:
 | `version`     |   Yes    | MUST be `"1"`.                                                                         |
 | `type`        |   Yes    | MUST be `CoordinationActionCancelRequest`.                                             |
 | `actionId`    |   Yes    | The Action ID of the action to cancel.                                                 |
-| `proposerDid` |   Yes    | DID of the proposer requesting cancellation. Must match the original proposer's DID.   |
+| `proposerDid` |   Yes    | DID of the proposer requesting cancellation. Required in request schema v1. On a signed request, signature `keyid`, this field, and the stored proposer **MUST** all be equal before processing or the server rejects with `403`. |
+| `audience`    | Conditional | Configured service URL origin (§4.6.3). Required whenever the request carries an MPAS signature; MAY be omitted only on an unsigned request to an unenforcing service. |
 
 Response:
 
@@ -1180,6 +1317,7 @@ Response:
 
 Rules:
 
+- On a signed request, the server **MUST** establish `keyid == proposerDid == stored proposer` before processing; any mismatch **MUST** be rejected with `403`.
 - Only the original proposer (matching `actionPackage.actionEnvelope.proposer.did`) **MAY** cancel an action.
 - Cancellation is only allowed when the action is in `awaitingApprovals` state. If the action is already in `readyForResubmission`, the Coordination Service **MUST** return `409 Conflict`.
 - A cancelled action **MUST NOT** be served to signers in poll responses.
@@ -1288,6 +1426,7 @@ A Signer implementing this profile **MUST**:
 
 A Coordination Service implementing this profile **MUST**:
 
+- authenticate callers using the RFC 9421 authentication profile (§4.6) when outside the trust boundary;
 - store and forward core MPAS artifacts without alteration;
 - compute and store `actionEnvelopeHash` for received Action Packages;
 - reject same-`actionId`, different-`actionEnvelopeHash` conflicts unless a supersession mechanism is explicitly defined;
@@ -1337,6 +1476,7 @@ A conforming Signer endpoint **MUST** support:
 
 A conforming Coordination Service **MUST** support:
 
+- RFC 9421 authentication profile (§4.6) — deterministic signature selection, signature verification, identity binding, freshness, atomic nonce claiming after validation and before mutation, signed-request audience validation, fail-closed configuration, generic external failures, and logging redaction;
 - `POST /mpas/v1/coordination/action`;
 - `POST /mpas/v1/coordination/poll`;
 - `POST /mpas/v1/coordination/approval`;
@@ -1485,7 +1625,7 @@ Future companion profiles may define:
 - webhook subscription management;
 - Credential Adapter application plugin profiles;
 - policy language mappings for OPA/Rego, Cedar, OpenFGA, smart contracts, or enterprise IAM;
-- DID-auth or signed HTTP request profiles;
+- additional authentication mechanisms for MPAS endpoints (§4.6 is the sole mechanism in this version);
 - OMATrust identity and key authorization bindings;
 - x402 payment or receipt extensions.
 
