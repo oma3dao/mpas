@@ -5,7 +5,11 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   CoordinationClient,
+  CoordinationResponseError,
   CoordinationUnavailableError,
+  KeyManager,
+  MpasAuthError,
+  verifyMpasRfc9421,
   type ActionPackage,
   type AdapterResponse,
   type Approval,
@@ -102,8 +106,134 @@ describe("CoordinationClient", () => {
         "/mpas/v1/coordination/approval",
         "/mpas/v1/coordination/action-cancel",
       ]);
+      expect(
+        requests.every(
+          (request) =>
+            typeof request.body === "object" &&
+            request.body !== null &&
+            !("audience" in request.body),
+        ),
+      ).toBe(true);
     } finally {
       await server.close();
+    }
+  });
+
+  it("signs all coordination endpoints with the configured or lazy signer", async () => {
+    const actionPackage = await readJson<ActionPackage>(
+      join(fixturesDir, "action-packages", "valid-create-issue-package.json"),
+    );
+    const needsApprovals = await readJson<AdapterResponse>(
+      join(fixturesDir, "responses", "adapter-response-needs-approvals.json"),
+    );
+    const pollResponse = await readJson<CoordinationPollResponse>(
+      join(fixturesDir, "responses", "coordination-pending-actions.json"),
+    );
+    const approval = actionPackage.approvalBundle.approvals[0] as Approval;
+    const signer = await KeyManager.fromFile(join(fixturesDir, "keys", "proposer.json"));
+    const verifications: Array<Awaited<ReturnType<typeof verifyMpasRfc9421>>> = [];
+    const audiences: unknown[] = [];
+    const requestPaths: string[] = [];
+    const prefix = "/tenant/acme";
+    let expectedAudience = "";
+    const server = await startMockCoordination(async (request, response) => {
+      const body = Buffer.from(await readRequestBody(request));
+      const parsed = JSON.parse(body.toString("utf8")) as Record<string, unknown>;
+      audiences.push(parsed.audience);
+      requestPaths.push(request.url ?? "");
+      verifications.push(
+        await verifyMpasRfc9421({
+          method: request.method ?? "",
+          path: request.url ?? "",
+          headers: request.headers,
+          body,
+          audiences: [expectedAudience],
+        }),
+      );
+
+      const endpointPath = request.url?.slice(prefix.length);
+      if (endpointPath === "/mpas/v1/coordination/action") {
+        sendJson(response, {
+          version: "1",
+          type: "CoordinationActionResponse",
+          actionRef: pollResponse.approvalRequests[0].actionRef,
+          state: "awaitingApprovals",
+        });
+      } else if (endpointPath === "/mpas/v1/coordination/poll") {
+        sendJson(response, pollResponse);
+      } else if (endpointPath === "/mpas/v1/coordination/approval") {
+        sendJson(response, { version: "1", type: "CoordinationApprovalSubmissionResponse", accepted: true });
+      } else if (endpointPath === "/mpas/v1/coordination/action-cancel") {
+        sendJson(response, {
+          version: "1",
+          type: "CoordinationActionCancelResponse",
+          actionRef: pollResponse.approvalRequests[0].actionRef,
+          state: "cancelled",
+          cancelledAt: "2026-06-05T18:20:00.000Z",
+        });
+      }
+    });
+
+    try {
+      expectedAudience = server.url;
+      const client = new CoordinationClient({ url: `${server.url}${prefix}/`, signer: Promise.resolve(signer) });
+      await client.submitAction(actionPackage, needsApprovals.authorizationRequirements!);
+      await client.poll(signer.did);
+      await client.submitApproval(actionPackage.approvalBundle.actionEnvelopeHash, approval);
+      await client.cancelAction(actionPackage.actionEnvelope.actionId, signer.did);
+
+      expect(verifications).toHaveLength(4);
+      expect(verifications.every((result) => result.ok && result.did === signer.did)).toBe(true);
+      expect(audiences).toEqual([expectedAudience, expectedAudience, expectedAudience, expectedAudience]);
+      expect(requestPaths).toEqual([
+        `${prefix}/mpas/v1/coordination/action`,
+        `${prefix}/mpas/v1/coordination/poll`,
+        `${prefix}/mpas/v1/coordination/approval`,
+        `${prefix}/mpas/v1/coordination/action-cancel`,
+      ]);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("does not send when the signer DID differs from the endpoint identity", async () => {
+    const signer = await KeyManager.fromFile(join(fixturesDir, "keys", "proposer.json"));
+    const client = new CoordinationClient({ url: "https://coordination.example.com", signer });
+
+    await expect(client.poll("did:jwk:another" as `did:${string}`)).rejects.toThrow("does not match signer DID");
+  });
+
+  it("surfaces auth, request, and outage responses as distinct errors", async () => {
+    for (const status of [400, 401, 403, 503]) {
+      const server = await startMockCoordination((_request, response) => {
+        sendJson(
+          response,
+          {
+            version: "1",
+            type: "MpasHttpError",
+            error: { code: status === 401 ? "signature_invalid" : "permission_denied", message: "request denied" },
+          },
+          status,
+        );
+      });
+
+      try {
+        const client = new CoordinationClient({ url: server.url });
+        const rejection = client.poll("did:jwk:test" as `did:${string}`);
+        if (status === 400) {
+          await expect(rejection).rejects.toBeInstanceOf(CoordinationResponseError);
+        } else if (status === 503) {
+          await expect(rejection).rejects.toBeInstanceOf(CoordinationUnavailableError);
+        } else {
+          await expect(rejection).rejects.toMatchObject({
+            name: "MpasAuthError",
+            status,
+            authCode: status === 401 ? "signature_invalid" : "permission_denied",
+          } satisfies Partial<MpasAuthError>);
+        }
+      } finally {
+        await server.close();
+      }
     }
   });
 

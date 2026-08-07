@@ -1,0 +1,35 @@
+{
+  "source": "RFC 9421 Appendix B.1.4, B.2, and B.2.6",
+  "privateJwk": {
+    "kty": "OKP",
+    "crv": "Ed25519",
+    "kid": "test-key-ed25519",
+    "d": "n4Ni-HpISpVObnQMW0wOhCKROaIKqKtW_2ZYb2p9KcU",
+    "x": "JrQLj5P_89iXES9-vFgrIy29clF9CC_oPPsw3c5D0bs"
+  },
+  "request": {
+    "method": "POST",
+    "url": "https://example.com/foo?param=Value&Pet=dog",
+    "headers": {
+      "host": "example.com",
+      "date": "Tue, 20 Apr 2021 02:07:55 GMT",
+      "content-type": "application/json",
+      "content-digest": "sha-512=:WZDPaVn/7XgHaAy8pmojAkGWoRx2UFChF41A2svX+TaPm+AbwAgBWnrIiYllu7BNNyealdVLvRwEmTHWXvJwew==:",
+      "content-length": "18"
+    },
+    "body": "{\"hello\": \"world\"}"
+  },
+  "fields": [
+    "date",
+    "@method",
+    "@path",
+    "@authority",
+    "content-type",
+    "content-length"
+  ],
+  "created": 1618884473,
+  "keyid": "test-key-ed25519",
+  "signatureBase": "\"date\": Tue, 20 Apr 2021 02:07:55 GMT\n\"@method\": POST\n\"@path\": /foo\n\"@authority\": example.com\n\"content-type\": application/json\n\"content-length\": 18\n\"@signature-params\": (\"date\" \"@method\" \"@path\" \"@authority\" \"content-type\" \"content-length\");created=1618884473;keyid=\"test-key-ed25519\"",
+  "signatureInput": "sig-b26=(\"date\" \"@method\" \"@path\" \"@authority\" \"content-type\" \"content-length\");created=1618884473;keyid=\"test-key-ed25519\"",
+  "signature": "sig-b26=:wqcAqbmYJ2ji2glfAMaRy4gruYYnx2nEFN2HN6jrnDnQCK1u02Gb04v9EDgwUPiu4A0w6vuQv5lIp5WPpBKRCw==:"
+}

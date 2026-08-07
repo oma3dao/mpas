@@ -220,6 +220,7 @@ export interface CoordinationActionRequest {
   type: "CoordinationActionRequest";
   actionPackage: ActionPackage;
   authorizationRequirements?: AuthorizationRequirements;
+  audience?: string;
   context?: JsonObject;
 }
 
@@ -227,6 +228,7 @@ export interface CoordinationPollRequest {
   version: MpasVersion;
   type: "CoordinationPollRequest";
   did: Did;
+  audience?: string;
 }
 
 export interface CoordinationApprovalSubmission {
@@ -234,6 +236,7 @@ export interface CoordinationApprovalSubmission {
   type: "CoordinationApprovalSubmission";
   actionEnvelopeHash: HashObject;
   approval: Approval;
+  audience?: string;
 }
 
 export interface CoordinationActionCancelRequest {
@@ -241,6 +244,7 @@ export interface CoordinationActionCancelRequest {
   type: "CoordinationActionCancelRequest";
   actionId: ActionId;
   proposerDid: Did;
+  audience?: string;
 }
 
 export interface SignerReviewSet {

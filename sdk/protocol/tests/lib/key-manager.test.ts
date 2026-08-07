@@ -36,6 +36,10 @@ describe("KeyManager", () => {
     const jws = await keyManager.sign(payload);
 
     await expect(keyManager.verify(jws)).resolves.toBe(true);
+
+    const rawSignature = await keyManager.signBytes(payload);
+    await expect(keyManager.verifyBytes(payload, rawSignature)).resolves.toBe(true);
+    await expect(keyManager.verifyBytes(Buffer.from("tampered"), rawSignature)).resolves.toBe(false);
   });
 
   it("rejects signing when only a public JWK is available", async () => {
@@ -44,6 +48,7 @@ describe("KeyManager", () => {
 
     expect(keyManager.did).toBe(fixture.did);
     await expect(keyManager.sign(Buffer.from("payload"))).rejects.toThrow("private key material");
+    await expect(keyManager.signBytes(Buffer.from("payload"))).rejects.toThrow("private key material");
   });
 
   it("rejects unsupported JWKs and mismatched configured DIDs", async () => {

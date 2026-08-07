@@ -104,6 +104,8 @@ Signature: legacy=:...:, coord=:...:
 
 Once the representations required by an endpoint are equal, this specification does not prescribe which equal representation an implementation uses internally.
 
+For `action-cancel` and `approval`, an unknown Action or workflow cannot establish the required stored-proposer or eligible-signer relationship. With enforcement enabled this is `403 permission_denied`, avoiding an existence oracle; with enforcement disabled the existing `404 ACTION_NOT_FOUND` behavior remains unchanged.
+
 ### 4.3 Redundant body fields (v1)
 
 | Field | Handling |

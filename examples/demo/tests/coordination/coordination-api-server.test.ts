@@ -130,10 +130,29 @@ describe("coordination HTTP endpoint", () => {
         proposerDid: request.actionPackage.actionEnvelope.proposer.did,
       },
     });
+    const missingHash = { alg: "sha-256", value: "missing-action" } as Hash;
+    const missingApproval = await app.inject({
+      method: "POST",
+      url: "/mpas/v1/coordination/approval",
+      payload: {
+        version: "1",
+        type: "CoordinationApprovalSubmission",
+        actionEnvelopeHash: missingHash,
+        approval: {
+          version: "1",
+          type: "Approval",
+          actionEnvelopeHash: missingHash,
+          decision: "approve",
+          signature: { format: "jws", value: "invalid.invalid.invalid" },
+          createdAt: "2026-06-05T18:03:00.000Z",
+        },
+      },
+    });
 
     expect(conflict.statusCode).toBe(409);
     expect(conflict.json().error.code).toBe("ACTION_ID_CONFLICT");
     expect(missingCancel.statusCode).toBe(404);
+    expect(missingApproval.statusCode).toBe(404);
   });
 
   it("does not import adapter internals", async () => {

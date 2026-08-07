@@ -17,7 +17,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.13.0",
-    "@oma3/mpas": "^0.1.0-alpha.3",
+    "@oma3/mpas": "file:../../sdk/protocol",
     "@oma3/omatrust": "^0.1.0-alpha.13",
     "ajv": "^8.17.1",
     "ethers": "^6.17.0",

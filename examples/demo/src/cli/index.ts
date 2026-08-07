@@ -9,6 +9,7 @@ import { daemonStatus, defaultAdapterKeyPath, defaultConfigDir, defaultCredentia
 import { loadDeploymentConfigs } from "../adapter/config-loader.js";
 import { FileCredentialProvider } from "../adapter/credential-provider.js";
 import { startCoordinationDaemon } from "../coordination/daemon.js";
+import type { CoordinationAuthOptions } from "../coordination/coordination-api-server.js";
 import { policyFromLoadedConfig } from "../adapter/adapter-api-server.js";
 import { evaluatePolicy } from "../core/policy-engine.js";
 import { loadPlugin, validatePayloadAgainstPlugin } from "../core/plugin-loader.js";
@@ -36,6 +37,10 @@ interface ParsedOptions {
   host?: string;
   port?: number;
   coordinationPort?: number;
+  coordinationAuthEnforcement?: boolean;
+  coordinationAuthAudiences?: string[];
+  coordinationAuthClockSkewSeconds?: number;
+  coordinationAuthSignatureLifetimeSeconds?: number;
   url?: string;
   pluginDir?: string;
   value?: string;
@@ -66,6 +71,7 @@ export async function runCli(args = process.argv.slice(2), io: CliIo = defaultIo
           host: options.host,
           port: options.coordinationPort,
           tracePath: options.tracePath,
+          auth: coordinationAuthOptions(options),
         });
         io.stdout.write(
           `${JSON.stringify({
@@ -87,6 +93,7 @@ export async function runCli(args = process.argv.slice(2), io: CliIo = defaultIo
         host: options.host,
         port: options.port,
         tracePath: options.tracePath,
+        auth: coordinationAuthOptions(options),
       });
       io.stdout.write(`${JSON.stringify({ status: "started", address: daemon.address })}\n`);
       return { exitCode: 0 };
@@ -610,6 +617,14 @@ function parseArgs(args: string[]): { positionals: string[]; options: ParsedOpti
       options.port = Number(args[++index]);
     } else if (arg === "--coordination-port") {
       options.coordinationPort = Number(args[++index]);
+    } else if (arg === "--auth-enforcement") {
+      options.coordinationAuthEnforcement = true;
+    } else if (arg === "--auth-audience") {
+      (options.coordinationAuthAudiences ??= []).push(args[++index]);
+    } else if (arg === "--auth-clock-skew-seconds") {
+      options.coordinationAuthClockSkewSeconds = Number(args[++index]);
+    } else if (arg === "--auth-signature-lifetime-seconds") {
+      options.coordinationAuthSignatureLifetimeSeconds = Number(args[++index]);
     } else if (arg === "--url") {
       options.url = args[++index];
     } else if (arg === "--plugin-dir") {
@@ -628,11 +643,12 @@ function parseArgs(args: string[]): { positionals: string[]; options: ParsedOpti
 }
 
 function usage(): string {
+  const coordinationAuthFlags = "[--auth-enforcement] [--auth-audience <origin>] [--auth-clock-skew-seconds <seconds>] [--auth-signature-lifetime-seconds <seconds>]";
   return [
     "Usage:",
-    "  mpas daemon start [--config-dir <dir>] [--credential-dir <dir>] [--adapter-key <file>] [--journal-path <file>] [--trace <file>] [--host <host>] [--port <port>] [--coordination-port <port>]",
+    `  mpas daemon start [--config-dir <dir>] [--credential-dir <dir>] [--adapter-key <file>] [--journal-path <file>] [--trace <file>] [--host <host>] [--port <port>] [--coordination-port <port>] ${coordinationAuthFlags}`,
     "  mpas daemon status [--config-dir <dir>] [--host <host>] [--port <port>]",
-    "  mpas coordination start [--host <host>] [--port <port>] [--trace <file>]",
+    `  mpas coordination start [--host <host>] [--port <port>] [--trace <file>] ${coordinationAuthFlags}`,
     "  mpas signer-server start --config <path>",
     "  mpas key generate <name> [--key-dir <dir>]",
     "  mpas test submit <file> [--url <adapter-url>]",
@@ -644,6 +660,19 @@ function usage(): string {
     "  mpas config validate <name> [--config-dir <dir>] [--credential-dir <dir>]",
     "  mpas trace inspect <file>",
   ].join("\n");
+}
+
+function coordinationAuthOptions(options: ParsedOptions): CoordinationAuthOptions {
+  return {
+    enforcement: options.coordinationAuthEnforcement ?? false,
+    audiences: options.coordinationAuthAudiences ?? [],
+    ...(options.coordinationAuthClockSkewSeconds !== undefined
+      ? { clockSkewSeconds: options.coordinationAuthClockSkewSeconds }
+      : {}),
+    ...(options.coordinationAuthSignatureLifetimeSeconds !== undefined
+      ? { signatureLifetimeSeconds: options.coordinationAuthSignatureLifetimeSeconds }
+      : {}),
+  };
 }
 
 function defaultPluginDir(): string {

@@ -228,6 +228,8 @@ Each endpoint interface defines the required equality invariant and resulting sc
 
 Each equality and eligibility check occurs before processing, and any mismatch or ineligibility **MUST** be rejected with `403 permission_denied`. Version 1 retains the required `CoordinationPollRequest.did` and `CoordinationActionCancelRequest.proposerDid` fields. A future request schema version **MAY** remove redundant fields only at an explicit version boundary; v1 will not be mutated in place. Migration and versioning details will be decided if a future revision is proposed.
 
+When authentication is enforced, an unknown Action or workflow cannot satisfy the stored-proposer or eligible-signer requirement. An enforcing Coordination Service therefore returns `403 permission_denied` for an unknown `action-cancel` target or Approval workflow rather than revealing existence with `404`. With enforcement disabled, the existing Coordination Service `404 ACTION_NOT_FOUND` behavior is unchanged.
+
 ##### 4.6.4.2 Verifier / Credential Adapter
 
 Identity binding for `POST /mpas/v1/action` is not yet defined. Until this section is specified, a Verifier or Credential Adapter that adopts §4.6 authentication establishes caller identity for rate limiting, audit, and access control only — with no authorization effect on MPAS policy evaluation.
