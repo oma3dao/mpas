@@ -1,6 +1,6 @@
 {
   "name": "@oma3/mpas",
-  "version": "0.1.0-alpha.3",
+  "version": "0.1.0-alpha.4",
   "description": "MPAS protocol SDK — types, verification, policy evaluation, receipts, and protocol primitives",
   "license": "Apache-2.0",
   "type": "module",
@@ -56,6 +56,11 @@
       "import": "./dist/lib/coordination-client.js",
       "default": "./dist/lib/coordination-client.js"
     },
+    "./rfc9421": {
+      "types": "./dist/lib/rfc9421.d.ts",
+      "import": "./dist/lib/rfc9421.js",
+      "default": "./dist/lib/rfc9421.js"
+    },
     "./approval-builder": {
       "types": "./dist/lib/approval-builder.d.ts",
       "import": "./dist/lib/approval-builder.js",
@@ -97,8 +102,10 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.13.0",
     "ajv": "^8.17.1",
+    "http-message-signatures": "1.0.6",
     "jose": "^6.0.11",
-    "json-canonicalize": "^2.0.0"
+    "json-canonicalize": "^2.0.0",
+    "structured-headers": "2.0.3"
   },
   "devDependencies": {
     "@types/node": "^22.15.29",

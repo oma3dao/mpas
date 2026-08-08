@@ -62,6 +62,7 @@ export interface CoordinationActionRequest {
   type: "CoordinationActionRequest";
   actionPackage: ActionPackage;
   authorizationRequirements: AdditionalApprovalRequirements;
+  audience?: string;
 }
 
 export interface CoordinationActionResponse {
@@ -76,6 +77,7 @@ export interface CoordinationPollRequest {
   version: "1";
   type: "CoordinationPollRequest";
   did: Did;
+  audience?: string;
 }
 
 export interface CoordinationPollResponse {
@@ -90,6 +92,7 @@ export interface CoordinationApprovalSubmission {
   type: "CoordinationApprovalSubmission";
   actionEnvelopeHash: Hash;
   approval: Approval;
+  audience?: string;
 }
 
 export interface CoordinationApprovalSubmissionResponse {
@@ -106,6 +109,7 @@ export interface CoordinationActionCancelRequest {
   type: "CoordinationActionCancelRequest";
   actionId: ActionId;
   proposerDid: Did;
+  audience?: string;
 }
 
 export interface CoordinationActionCancelResponse {

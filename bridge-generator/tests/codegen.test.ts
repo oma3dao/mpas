@@ -44,6 +44,7 @@ describe("generateBridge", () => {
     // Durable store is emitted repository code, memory store is the fallback.
     expect(source).toContain('from "./sqlite-workflow-store.js"');
     expect(source).toContain("MemoryWorkflowStore");
+    expect(source).toContain("signer: keyManagerPromise");
     // The background workflow loop starts with the server.
     expect(source).toContain("await bridge.start();");
   });

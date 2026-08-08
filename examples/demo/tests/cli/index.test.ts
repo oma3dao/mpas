@@ -55,6 +55,20 @@ afterEach(async () => {
 });
 
 describe("CLI daemon and testing commands", () => {
+  it("fails closed when coordination authentication is enabled without an audience", async () => {
+    const stdout = new MemoryWriter();
+    const stderr = new MemoryWriter();
+
+    const result = await runCli(["coordination", "start", "--port", "0", "--auth-enforcement"], {
+      stdout,
+      stderr,
+    });
+
+    expect(result.exitCode).toBe(1);
+    expect(stdout.text).toBe("");
+    expect(stderr.text).toContain("non-empty set of valid canonical audience origins");
+  });
+
   it("daemon status shows loaded configs and listen address", async () => {
     const stdout = new MemoryWriter();
     const stderr = new MemoryWriter();

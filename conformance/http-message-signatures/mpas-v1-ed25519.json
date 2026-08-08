@@ -1,0 +1,23 @@
+{
+  "profile": "mpas-v1",
+  "algorithm": "ed25519",
+  "label": "mpas",
+  "publicJwk": {
+    "crv": "Ed25519",
+    "kty": "OKP",
+    "x": "k6O7ciQkmphuEEt1i3yAimJJWeGKmOq3t_fsNkzza6o"
+  },
+  "did": "did:jwk:eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6Ims2TzdjaVFrbXBodUVFdDFpM3lBaW1KSldlR0ttT3EzdF9mc05renphNm8ifQ",
+  "request": {
+    "method": "POST",
+    "path": "/mpas/v1/coordination/poll",
+    "body": "{\"version\":\"1\",\"type\":\"CoordinationPollRequest\",\"did\":\"did:jwk:eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6Ims2TzdjaVFrbXBodUVFdDFpM3lBaW1KSldlR0ttT3EzdF9mc05renphNm8ifQ\",\"audience\":\"https://coordination.example.com\"}"
+  },
+  "created": 1786132790,
+  "expires": 1786132850,
+  "nonce": "fixture-nonce",
+  "contentDigest": "sha-256=:DHkdq7DafRYpEjIZjFKkYUWVNdRdGZ+ZKEOxL1ymMgk=:",
+  "signatureInput": "mpas=(\"@method\" \"@path\" \"content-digest\");created=1786132790;expires=1786132850;keyid=\"did:jwk:eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6Ims2TzdjaVFrbXBodUVFdDFpM3lBaW1KSldlR0ttT3EzdF9mc05renphNm8ifQ\";nonce=\"fixture-nonce\";tag=\"mpas-v1\"",
+  "signature": "mpas=:BUnSbw6uDrAqAPeF0BwlYkt6KQo3Q1V0w0LXktBEnQ/kpzTOd2RewVh9X8RKbNHXZlEvxwpfNRESn7jJARTuDA==:",
+  "signatureBase": "\"@method\": POST\n\"@path\": /mpas/v1/coordination/poll\n\"content-digest\": sha-256=:DHkdq7DafRYpEjIZjFKkYUWVNdRdGZ+ZKEOxL1ymMgk=:\n\"@signature-params\": (\"@method\" \"@path\" \"content-digest\");created=1786132790;expires=1786132850;keyid=\"did:jwk:eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6Ims2TzdjaVFrbXBodUVFdDFpM3lBaW1KSldlR0ttT3EzdF9mc05renphNm8ifQ\";nonce=\"fixture-nonce\";tag=\"mpas-v1\""
+}

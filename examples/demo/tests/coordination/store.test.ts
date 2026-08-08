@@ -95,6 +95,24 @@ describe("CoordinationStore", () => {
     expect(store.poll(maintainerB.did).approvalRequests).toHaveLength(0);
   });
 
+  it("preserves unenforcing behavior by storing but not counting an ineligible Approval", async () => {
+    const request = await coordinationActionRequest();
+    const store = new CoordinationStore();
+    const adapter = await fixtureKey("adapter");
+    store.submitAction(request);
+
+    const response = store.submitApproval({
+      version: "1",
+      type: "CoordinationApprovalSubmission",
+      actionEnvelopeHash: request.authorizationRequirements.actionEnvelopeHash,
+      approval: await signApproval(request.authorizationRequirements.actionEnvelopeHash, adapter, "approve"),
+    });
+    const update = store.poll(request.actionPackage.actionEnvelope.proposer.did).actionUpdates[0];
+
+    expect(response).toMatchObject({ accepted: true, state: "awaitingApprovals" });
+    expect(update.progress).toMatchObject({ required: 2, collected: 0 });
+  });
+
   it("rejects self-approval — proposer cannot approve their own action", async () => {
     const request = await coordinationActionRequest();
     const store = new CoordinationStore();
@@ -215,7 +233,7 @@ async function signApproval(
   };
 }
 
-async function fixtureKey(label: "proposer" | "maintainer-a" | "maintainer-b"): Promise<FixtureKey> {
+async function fixtureKey(label: "proposer" | "maintainer-a" | "maintainer-b" | "adapter"): Promise<FixtureKey> {
   return readJson<FixtureKey>(`test-keys/${label}.json`);
 }
 

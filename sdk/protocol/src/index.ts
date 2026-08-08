@@ -13,6 +13,7 @@ export * from "./lib/adapter-client.js";
 export * from "./lib/approval-builder.js";
 export * from "./lib/coordination-client.js";
 export * from "./lib/key-manager.js";
+export * from "./lib/rfc9421.js";
 
 // Protocol primitives — Verifier side
 export * from "./lib/verification.js";

@@ -1,4 +1,11 @@
 import { readFile } from "node:fs/promises";
+import {
+  createPrivateKey,
+  createPublicKey,
+  sign as signEd25519,
+  verify as verifyEd25519,
+  type JsonWebKey,
+} from "node:crypto";
 import { CompactSign, compactVerify, importJWK, type JWK } from "jose";
 import type { Did } from "../types/mpas.js";
 import { deriveDidJwk, didJwkToKid } from "./did-jwk.js";
@@ -52,11 +59,31 @@ export class KeyManager {
     return new CompactSign(payload).setProtectedHeader({ alg: "EdDSA", kid: this.jwk.kid }).sign(key);
   }
 
+  /** Signs raw bytes with Ed25519, without a JWS envelope. */
+  async signBytes(payload: Uint8Array): Promise<Uint8Array> {
+    if (typeof this.jwk.d !== "string" || this.jwk.d.length === 0) {
+      throw new Error("Ed25519 private key material is required for signing.");
+    }
+
+    const key = createPrivateKey({ key: this.jwk as JsonWebKey, format: "jwk" });
+    return signEd25519(null, Buffer.from(payload), key);
+  }
+
   async verify(jws: string): Promise<boolean> {
     try {
       const key = await importJWK(this.publicKey, "EdDSA");
       const { protectedHeader } = await compactVerify(jws, key);
       return protectedHeader.alg === "EdDSA";
+    } catch {
+      return false;
+    }
+  }
+
+  /** Verifies a raw Ed25519 signature over the supplied bytes. */
+  async verifyBytes(payload: Uint8Array, signature: Uint8Array): Promise<boolean> {
+    try {
+      const key = createPublicKey({ key: this.publicKey as JsonWebKey, format: "jwk" });
+      return verifyEd25519(null, Buffer.from(payload), key, Buffer.from(signature));
     } catch {
       return false;
     }

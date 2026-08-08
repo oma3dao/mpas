@@ -47,9 +47,17 @@ export function didJwkToJwk(did: string): JWK {
   }
 
   const encoded = did.slice("did:jwk:".length);
+  if (encoded.length === 0 || !/^[A-Za-z0-9_-]+$/.test(encoded)) {
+    throw new Error("did:jwk payload is not canonical unpadded base64url.");
+  }
+
   let parsed: unknown;
   try {
-    parsed = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8"));
+    const decoded = Buffer.from(encoded, "base64url");
+    if (decoded.toString("base64url") !== encoded) {
+      throw new Error("non-canonical base64url");
+    }
+    parsed = JSON.parse(decoded.toString("utf8"));
   } catch {
     throw new Error("did:jwk payload is not valid base64url-encoded JSON.");
   }
@@ -59,7 +67,7 @@ export function didJwkToJwk(did: string): JWK {
   }
 
   const jwk = parsed as JWK;
-  if (typeof jwk.d === "string") {
+  if (Object.prototype.hasOwnProperty.call(jwk, "d")) {
     throw new Error("did:jwk must not contain private key material.");
   }
   if (jwk.kty !== "OKP" || jwk.crv !== "Ed25519" || typeof jwk.x !== "string" || jwk.x.length === 0) {

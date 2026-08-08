@@ -63,12 +63,8 @@ export class CoordinationStore {
   private readonly actionsByEnvelopeHash = new Map<string, StoredAction>();
 
   submitAction(request: CoordinationActionRequest): SubmitActionResult {
+    this.validateSubmitAction(request);
     const actionEnvelopeHash = computeJsonHash(request.actionPackage.actionEnvelope);
-    const existingById = this.actionsById.get(request.actionPackage.actionEnvelope.actionId.value);
-    if (existingById && existingById.actionRef.actionEnvelopeHash.value !== actionEnvelopeHash.value) {
-      throw new CoordinationStoreError(409, "ACTION_ID_CONFLICT", "Action ID already exists with a different envelope hash.");
-    }
-
     const existingByHash = this.actionsByEnvelopeHash.get(actionEnvelopeHash.value);
     if (existingByHash) {
       this.expireIfNeeded(existingByHash);
@@ -111,35 +107,7 @@ export class CoordinationStore {
   }
 
   submitApproval(request: CoordinationApprovalSubmission): CoordinationApprovalSubmissionResponse {
-    const stored = this.actionsByEnvelopeHash.get(request.actionEnvelopeHash.value);
-    if (!stored) {
-      throw new CoordinationStoreError(404, "ACTION_NOT_FOUND", "Pending action was not found.");
-    }
-
-    // Lazily transition expired actions before processing (spec §6.1). Expired actions
-    // are rejected with 404, matching post-cancellation behavior.
-    this.expireIfNeeded(stored);
-    if (stored.state === "cancelled" || stored.state === "expired") {
-      throw new CoordinationStoreError(404, "ACTION_NOT_FOUND", "Pending action was not found.");
-    }
-
-    if (request.approval.actionEnvelopeHash.value !== stored.actionRef.actionEnvelopeHash.value) {
-      throw new CoordinationStoreError(400, "APPROVAL_HASH_MISMATCH", "Approval is bound to a different action envelope.");
-    }
-
-    const payload = decodeApprovalPayload(request.approval);
-    if (payload?.actionEnvelopeHash.value !== stored.actionRef.actionEnvelopeHash.value) {
-      throw new CoordinationStoreError(400, "APPROVAL_HASH_MISMATCH", "Signed approval payload is bound to a different action envelope.");
-    }
-
-    if (!payload?.signerDid) {
-      throw new CoordinationStoreError(400, "APPROVAL_SIGNER_MISSING", "Signed approval payload does not include signerDid.");
-    }
-
-    // Self-approval prevention: the proposer of an action cannot approve their own action.
-    if (payload.signerDid === stored.actionPackage.actionEnvelope.proposer.did) {
-      throw new CoordinationStoreError(403, "SELF_APPROVAL_DENIED", "The proposer of an action cannot approve their own action.");
-    }
+    const { stored, payload } = this.approvalPreflight(request);
 
     const existing = stored.approvals.some(
       (entry) => entry.signerDid === payload.signerDid && entry.decision === payload.decision,
@@ -196,22 +164,10 @@ export class CoordinationStore {
   }
 
   cancelAction(request: CoordinationActionCancelRequest): CoordinationActionCancelResponse {
+    this.validateCancelAction(request);
     const stored = this.actionsById.get(request.actionId.value);
-    if (!stored || stored.state === "cancelled") {
+    if (!stored) {
       throw new CoordinationStoreError(404, "ACTION_NOT_FOUND", "Pending action was not found.");
-    }
-
-    if (stored.actionPackage.actionEnvelope.proposer.did !== request.proposerDid) {
-      throw new CoordinationStoreError(403, "NOT_PROPOSER", "Only the original proposer can cancel this action.");
-    }
-
-    this.expireIfNeeded(stored);
-    if (stored.state === "expired") {
-      throw new CoordinationStoreError(409, "ACTION_EXPIRED", "Action has expired and can no longer be cancelled.");
-    }
-
-    if (stored.state === "readyForResubmission") {
-      throw new CoordinationStoreError(409, "ACTION_READY", "Action is already ready for resubmission.");
     }
 
     const now = new Date().toISOString();
@@ -228,6 +184,54 @@ export class CoordinationStore {
     };
   }
 
+  validateSubmitAction(request: CoordinationActionRequest): void {
+    const actionEnvelopeHash = computeJsonHash(request.actionPackage.actionEnvelope);
+    const existingById = this.actionsById.get(request.actionPackage.actionEnvelope.actionId.value);
+    if (existingById && existingById.actionRef.actionEnvelopeHash.value !== actionEnvelopeHash.value) {
+      throw new CoordinationStoreError(409, "ACTION_ID_CONFLICT", "Action ID already exists with a different envelope hash.");
+    }
+  }
+
+  validateSubmitApproval(request: CoordinationApprovalSubmission): void {
+    this.approvalPreflight(request);
+  }
+
+  validateCancelAction(request: CoordinationActionCancelRequest): void {
+    const stored = this.actionsById.get(request.actionId.value);
+    if (!stored || stored.state === "cancelled") {
+      throw new CoordinationStoreError(404, "ACTION_NOT_FOUND", "Pending action was not found.");
+    }
+
+    if (stored.actionPackage.actionEnvelope.proposer.did !== request.proposerDid) {
+      throw new CoordinationStoreError(403, "NOT_PROPOSER", "Only the original proposer can cancel this action.");
+    }
+
+    if (this.effectiveState(stored) === "expired") {
+      throw new CoordinationStoreError(409, "ACTION_EXPIRED", "Action has expired and can no longer be cancelled.");
+    }
+
+    if (stored.state === "readyForResubmission") {
+      throw new CoordinationStoreError(409, "ACTION_READY", "Action is already ready for resubmission.");
+    }
+  }
+
+  proposerForAction(actionId: string): Did | undefined {
+    return this.actionsById.get(actionId)?.actionPackage.actionEnvelope.proposer.did;
+  }
+
+  hasActionEnvelopeHash(actionEnvelopeHash: string): boolean {
+    return this.actionsByEnvelopeHash.has(actionEnvelopeHash);
+  }
+
+  isEligibleSigner(actionEnvelopeHash: string, did: Did): boolean {
+    const stored = this.actionsByEnvelopeHash.get(actionEnvelopeHash);
+    return stored
+      ? thresholdsFor(stored.authorizationRequirements.approvalRequirements).some((threshold) =>
+          threshold.eligibleSigners.includes(did),
+        )
+      : false;
+  }
+
   private expireIfNeeded(stored: StoredAction, now = Date.now()): void {
     if (stored.state === "cancelled" || stored.state === "expired") {
       return;
@@ -238,6 +242,42 @@ export class CoordinationStore {
       stored.state = "expired";
       stored.updatedAt = new Date(now).toISOString();
     }
+  }
+
+  private effectiveState(stored: StoredAction, now = Date.now()): CoordinationState {
+    if (stored.state === "cancelled" || stored.state === "expired") return stored.state;
+    const expiresAt = Date.parse(stored.actionPackage.actionEnvelope.expiresAt);
+    return !Number.isNaN(expiresAt) && expiresAt <= now ? "expired" : stored.state;
+  }
+
+  private approvalPreflight(request: CoordinationApprovalSubmission): {
+    stored: StoredAction;
+    payload: CanonicalApprovalPayload & { signerDid: Did };
+  } {
+    const stored = this.actionsByEnvelopeHash.get(request.actionEnvelopeHash.value);
+    if (!stored || this.effectiveState(stored) === "cancelled" || this.effectiveState(stored) === "expired") {
+      throw new CoordinationStoreError(404, "ACTION_NOT_FOUND", "Pending action was not found.");
+    }
+
+    if (request.approval.actionEnvelopeHash.value !== stored.actionRef.actionEnvelopeHash.value) {
+      throw new CoordinationStoreError(400, "APPROVAL_HASH_MISMATCH", "Approval is bound to a different action envelope.");
+    }
+
+    const payload = decodeApprovalPayload(request.approval);
+    if (payload?.actionEnvelopeHash.value !== stored.actionRef.actionEnvelopeHash.value) {
+      throw new CoordinationStoreError(400, "APPROVAL_HASH_MISMATCH", "Signed approval payload is bound to a different action envelope.");
+    }
+
+    if (!payload?.signerDid) {
+      throw new CoordinationStoreError(400, "APPROVAL_SIGNER_MISSING", "Signed approval payload does not include signerDid.");
+    }
+
+    // Self-approval prevention: the proposer of an action cannot approve their own action.
+    if (payload.signerDid === stored.actionPackage.actionEnvelope.proposer.did) {
+      throw new CoordinationStoreError(403, "SELF_APPROVAL_DENIED", "The proposer of an action cannot approve their own action.");
+    }
+
+    return { stored, payload: payload as CanonicalApprovalPayload & { signerDid: Did } };
   }
 
   private approvalRequestFor(stored: StoredAction, did: Did): ApprovalRequest | undefined {
@@ -369,7 +409,11 @@ function thresholdsFor(requirements: ApprovalRequirements): ThresholdRequirement
   return [...(requirements.anyOf ?? []), ...(requirements.allOf ?? [])];
 }
 
-function decodeApprovalPayload(approval: Approval): CanonicalApprovalPayload | undefined {
+function decodeApprovalPayload(approval: Approval | undefined): CanonicalApprovalPayload | undefined {
+  if (!approval || typeof approval.signature?.value !== "string") {
+    return undefined;
+  }
+
   const parts = approval.signature.value.split(".");
   if (parts.length !== 3) {
     return undefined;
@@ -380,4 +424,8 @@ function decodeApprovalPayload(approval: Approval): CanonicalApprovalPayload | u
   } catch {
     return undefined;
   }
+}
+
+export function decodeApprovalSignerDid(approval: Approval | undefined): Did | undefined {
+  return decodeApprovalPayload(approval)?.signerDid;
 }

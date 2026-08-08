@@ -119,10 +119,10 @@ export class GeneratedBridge {
   constructor(config: BridgeConfig) {
     const plugin = loadPlugin(config.plugin);
     const adapterClient = new AdapterClient({ url: config.adapterUrl });
-    const coordination: WorkflowCoordination = config.coordinationUrl
-      ? new CoordinationClient({ url: config.coordinationUrl })
-      : unconfiguredCoordination();
     const keyManagerPromise = loadKeyManager(config.agentKey);
+    const coordination: WorkflowCoordination = config.coordinationUrl
+      ? new CoordinationClient({ url: config.coordinationUrl, signer: keyManagerPromise })
+      : unconfiguredCoordination();
     const workflow = config.workflow ?? {};
     this.store = workflow.dbPath ? new SqliteWorkflowStore(workflow.dbPath) : new MemoryWorkflowStore();
     if (!workflow.dbPath) {

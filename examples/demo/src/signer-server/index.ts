@@ -58,12 +58,15 @@ export class SignerServer {
   private readonly keyManagerPromise: Promise<KeyManager>;
 
   constructor(private readonly config: SignerServerConfig) {
-    this.coordinationClient = new CoordinationClient({ url: config.coordinationUrl });
     this.keyManagerPromise = loadKeyManager(config.signerKey).then((keyManager) => {
       if (config.signerDid && config.signerDid !== keyManager.did) {
         throw new Error(`Configured signer DID ${config.signerDid} does not match derived DID ${keyManager.did}.`);
       }
       return keyManager;
+    });
+    this.coordinationClient = new CoordinationClient({
+      url: config.coordinationUrl,
+      signer: this.keyManagerPromise,
     });
   }
 
