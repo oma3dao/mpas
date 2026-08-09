@@ -8,13 +8,28 @@
 
 ## Strategy
 
-Build the protocol core against deterministic local fixtures, integrate it with the demo Credential Adapter, then validate a real hosted MCP server. Keep OAuth session management separate from Action submission so an agent can neither initiate consent nor turn OAuth authentication into MPAS authorization.
+Use the official `@modelcontextprotocol/sdk` OAuth client and
+`StreamableHTTPClientTransport` rather than implementing the MCP OAuth protocol
+from scratch. The Credential Adapter supplies an `OAuthClientProvider` backed by
+its own secure session store and retains responsibility for MPAS-specific trust
+boundaries, operator workflows, durable credential lifecycle, and dispatch
+semantics.
+
+Before treating the SDK as satisfying a requirement, run a focused conformance
+spike against the deterministic fixtures. Where the SDK does not enforce a
+requirement in [spec.md](./spec.md), prefer a narrow wrapper, custom `fetch`
+policy, or upstream SDK fix. Introduce a second OAuth library only for a proven
+gap; `oauth4webapi` is the preferred low-level fallback. Do not duplicate SDK
+behavior merely to mirror the specification structure.
+
+Keep OAuth session management separate from Action submission so an agent can
+neither initiate consent nor turn OAuth authentication into MPAS authorization.
 
 ```text
-spec + threat model
+spec + threat model + SDK conformance spike
         │
         ▼
-OAuth client/session library ──► deterministic OAuth + MCP fixtures
+CA OAuthClientProvider ─────────► deterministic OAuth + MCP fixtures
         │
         ▼
 CA operator login/status/logout
@@ -39,6 +54,32 @@ conformance, hardening, documentation
 
 **Exit:** contracts, trust boundary, and unresolved decisions are explicit before implementation dependencies are selected.
 
+## Phase 0A: MCP SDK conformance spike
+
+**Primary dependency:** `@modelcontextprotocol/sdk` 1.30.x (reviewed and pinned)
+
+- [ ] Upgrade the demo's declared MCP SDK dependency from `^1.13.0` to the
+  reviewed 1.30.x release; do not rely on an incidental lockfile resolution.
+- [ ] Build a throwaway `OAuthClientProvider` and connect it through
+  `StreamableHTTPClientTransport({ authProvider })` to a minimal local OAuth +
+  MCP fixture.
+- [ ] Verify SDK handling of RFC 9728 protected-resource discovery, ordered RFC
+  8414/OIDC discovery, exact issuer checks, advertised PKCE S256, CIMD URL client
+  IDs, deprecated dynamic registration, authorization-code exchange, refresh,
+  resource indicators, and `WWW-Authenticate` challenges.
+- [ ] Verify that a custom bounded `fetch` policy can enforce HTTPS, redirect,
+  response-size, timeout, and Authorization-header forwarding requirements.
+- [ ] Verify callback `iss`, exact resource-path binding, refresh-token rotation,
+  and downstream 401 behavior. Record every requirement that remains the CA's
+  responsibility.
+- [ ] Decide from evidence whether the SDK alone is sufficient, needs a narrow
+  adapter/upstream patch, or needs `oauth4webapi` for a specific missing check.
+
+**Exit:** a requirement-to-owner matrix identifies each OAuth requirement as
+SDK-provided, CA-provider responsibility, transport-policy responsibility, or a
+documented gap. The spike is disposable; its conformance cases move into the
+fixture suite.
+
 ## Phase 1: deterministic OAuth and protected MCP fixtures
 
 **Area:** `examples/demo/tests/fixtures/`
@@ -55,25 +96,35 @@ conformance, hardening, documentation
 
 **Exit:** all OAuth lifecycle behavior can be tested offline and deterministically; third-party credentials are unnecessary for CI.
 
-## Phase 2: OAuth session core
+## Phase 2: CA OAuth provider and session core
 
 **Area:** reference Credential Adapter OAuth module
 
-- [ ] Define typed models for protected-resource metadata, RFC 8414 and OpenID Connect authorization-server metadata, CIMD, dynamic client registration, authorization sessions, token sets, session bindings, and public session status.
-- [ ] Implement bounded protected-resource metadata retrieval with exact ordered probes: challenge URL, RFC 9728 path-specific URI, then root URI.
-- [ ] Implement exact authorization-server probe ordering: RFC 8414 path insertion, OIDC path insertion, then OIDC path appending for an issuer with a path. Stop at the first acceptable document whose issuer exactly matches; do not require multiple documents to agree.
-- [ ] Require advertised `code_challenge_methods_supported` containing `S256`; refuse missing/unsupported metadata without inference or `plain` fallback.
-- [ ] Implement CIMD as a first-class mode when authorization-server metadata advertises `client_id_metadata_document_supported: true`, including an HTTPS URL with a path, required `client_id`/`client_name`/`redirect_uris`, refresh `grant_types`, exact document binding, and redirect validation.
-- [ ] Implement `auto` selection order and explicit fail-closed modes. Implement dynamic client registration only as advertised deprecated compatibility behavior, including `application_type: "native"` for loopback and `"web"` for HTTPS callbacks; prohibit post-selection fallback.
-- [ ] Implement authorization URL construction with resource indicators, requested scopes, random state, and PKCE S256.
+- [ ] Implement a CA `OAuthClientProvider` for the official MCP SDK. It exposes
+  only the callbacks and state required by the SDK and never returns credential
+  material through the operator or MPAS APIs.
+- [ ] Reuse SDK metadata types, discovery, PKCE, CIMD/DCR, token exchange,
+  refresh, resource-indicator, challenge parsing, and authenticated Streamable
+  HTTP behavior where Phase 0A proves conformance.
+- [ ] Add narrow validation or fetch-policy wrappers for requirements the SDK
+  does not itself guarantee; keep these gaps explicit in the requirement-owner
+  matrix and test each wrapper independently.
+- [ ] Implement configured static/pre-registered client precedence and explicit
+  fail-closed client modes around the SDK provider contract; prohibit
+  post-selection fallback.
 - [ ] Implement atomic, expiring, single-use authorization-session storage.
-- [ ] Implement callback validation and authorization-code exchange, including RFC 9207 `iss` rules for success and error callbacks.
-- [ ] Treat access tokens as opaque: validate token response type/expiry/scope fields when present, then bind locally to the validated issuer/client/exact-resource transaction without requiring JWT claims.
-- [ ] Include the same exact canonical MCP resource URI in authorization, code exchange, and refresh requests.
+- [ ] Validate callback state, session ownership, expiry, single use, redirect
+  URI, and RFC 9207 `iss` before passing the authorization code to the SDK's
+  completion flow.
+- [ ] Bind SDK-managed opaque tokens locally to the validated Application DID,
+  issuer, client, exact MCP resource, and scope transaction.
 - [ ] Define typed, redacted failures for discovery, registration, login, exchange, and binding errors.
 - [ ] Unit tests for every OAUTH-06 through OAUTH-23 requirement, including all OAUTH-11 and OAUTH-15 lettered requirements.
 
-**Exit:** the library can create and complete a bound OAuth session against the local fixture without an MCP dispatch.
+**Exit:** the CA provider can create and complete a bound OAuth session through
+the official MCP SDK against the local fixture without an MCP dispatch; no
+second general-purpose OAuth implementation exists without a documented SDK
+gap.
 
 ## Phase 3: secure credential persistence and refresh
 
@@ -119,6 +170,9 @@ conformance, hardening, documentation
 - [ ] Validate the full session tuple: Application DID, exact canonical MCP resource URI, issuer, client, and configured/granted scopes.
 - [ ] Resolve or refresh OAuth credentials only after MPAS verification and policy satisfaction.
 - [ ] Attach the Bearer token to every Streamable HTTP lifecycle request (initialize, `tools/call`, GET, DELETE, and session management) while preventing cross-origin or cross-resource Authorization-header forwarding.
+- [ ] Construct `StreamableHTTPClientTransport` with the CA
+  `OAuthClientProvider`; do not maintain a parallel authenticated MCP HTTP
+  transport.
 - [ ] Keep discovery, refresh, connection, and initialization before the dispatch-ledger `executing` write.
 - [ ] Preserve existing timeout and indeterminate-result rules after the ledger write.
 - [ ] On a downstream 401 after request transmission, do not refresh and replay the tool call automatically; resolve conservatively under existing dispatch semantics.
@@ -161,8 +215,8 @@ conformance, hardening, documentation
 Keep reviews single-purpose:
 
 1. Specification and threat-model docs.
-2. Deterministic OAuth + MCP fixtures.
-3. OAuth discovery, registration, and authorization-session core.
+2. MCP SDK conformance spike and deterministic OAuth + MCP fixtures.
+3. CA `OAuthClientProvider`, validation wrappers, and authorization-session core.
 4. Secure store and refresh lifecycle.
 5. Operator login/status/logout workflows.
 6. MCP HTTP dispatch integration and ledger-boundary tests.

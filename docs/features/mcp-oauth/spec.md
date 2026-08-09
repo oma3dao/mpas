@@ -357,3 +357,20 @@ invalidation.
 2. Which encrypted fallback store is acceptable on platforms without an OS secret service?
 3. Should revocation be mandatory when advertised, or remain a `SHOULD` so local logout cannot be blocked by an unavailable server?
 4. Should a CA support device authorization grant in a later version for headless environments that cannot receive callbacks?
+
+## Appendix A: non-normative implementation guidance
+
+The reference TypeScript Credential Adapter should prefer the official
+`@modelcontextprotocol/sdk` OAuth client and
+`StreamableHTTPClientTransport` over a parallel MCP OAuth implementation. A CA
+can implement the SDK's `OAuthClientProvider` interface while keeping token
+storage, session binding, operator authorization, callback correlation,
+redaction, and MPAS dispatch controls inside the CA trust boundary.
+
+Library use does not weaken or replace any requirement in this specification.
+The implementation plan requires a conformance spike and a
+requirement-to-owner matrix before relying on SDK behavior. Any uncovered gap
+must be handled by a narrow CA wrapper, a custom bounded transport policy, or an
+upstream SDK fix. A second general-purpose OAuth library should be introduced
+only for a demonstrated gap; `oauth4webapi` is the preferred low-level fallback
+for the TypeScript reference implementation.
