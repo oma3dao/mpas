@@ -6,6 +6,7 @@
 **Companion:** [plan.md](./plan.md)
 **Affects:** Credential Adapter, MCP execution target configuration, operator tooling
 **Motivating target:** Official Vercel MCP server (`https://mcp.vercel.com`)
+**Normative baseline:** MCP Authorization specification `2026-07-28` and the RFCs/drafts it references
 
 ---
 
@@ -23,8 +24,9 @@ OAuth authenticates the CA to the downstream MCP server. It does not authorize a
 
 - OAuth 2.1 authorization-code flow with PKCE for remote MCP servers.
 - MCP protected-resource and authorization-server metadata discovery.
-- OAuth Authorization Server Metadata discovery.
-- Dynamic client registration when supported.
+- OAuth Authorization Server Metadata and OpenID Connect Discovery.
+- Client ID Metadata Documents, static preregistration, and deprecated
+  compatibility-only dynamic client registration.
 - Operator-configured static client information when registration is unavailable.
 - Secure persistence and refresh-token rotation.
 - Resource and scope binding.
@@ -68,9 +70,10 @@ OAuth is selected by an `mcp.http` execution target. The following shape is an i
       "type": "oauth2",
       "session": "example-production",
       "scopes": ["example:mcp"],
+      "scopePolicy": "fixed",
       "client": {
-        "type": "cimd",
-        "clientId": "https://adapter.example.com/oauth/client-metadata.json"
+        "type": "auto",
+        "clientIdMetadataDocument": "https://adapter.example.com/oauth/client-metadata.json"
       }
     }
   }
@@ -94,10 +97,11 @@ Requirements:
 | # | Requirement |
 | :--- | :--- |
 | OAUTH-01 | The session name MUST resolve within the selected Application DID and execution target; it is not a globally interchangeable token handle. |
-| OAUTH-02 | The CA MUST bind a session to the canonical protected-resource origin, authorization-server issuer, client identity, and granted scopes. |
+| OAUTH-02 | The CA MUST bind a session to the tuple `(Application DID, exact canonical MCP resource URI, authorization-server issuer, client identity, granted scopes)`. Resource paths are security boundaries: `https://host/mcp-a` and `https://host/mcp-b` MUST NOT share a resource binding merely because their origins match. |
 | OAUTH-03 | Configuration MUST NOT contain access tokens, refresh tokens, authorization codes, PKCE verifiers, or literal client secrets. |
 | OAUTH-04 | Redirect URIs and requested scopes MUST be operator-controlled configuration or values derived under documented CA rules. Untrusted MCP tool arguments MUST NOT alter them. |
-| OAUTH-05 | Changing the resource, issuer, client identity, or requested scopes MUST invalidate the session for dispatch until the operator authorizes the new binding. |
+| OAUTH-05 | Changing the Application DID, exact canonical MCP resource URI, issuer, client identity, or requested scopes MUST invalidate the session for dispatch until the operator authorizes the new binding. |
+| OAUTH-05A | `scopePolicy` defaults to `fixed`. Under `fixed`, only configured scopes may be requested and a challenge requiring any other scope produces `oauth_insufficient_scope`. An implementation MAY support operator-initiated `step_up` constrained to a deployment-defined `allowedScopes` allowlist. An Action or tool argument MUST NOT initiate consent or scope escalation. |
 
 ## 5. Discovery and server validation
 
@@ -106,55 +110,71 @@ The CA follows the MCP Authorization specification and the OAuth metadata specif
 1. Connect to the configured MCP resource URL without credentials when no usable session exists.
 2. If the response includes a `WWW-Authenticate` challenge with a
    `resource_metadata` parameter, retrieve protected-resource metadata from
-   that URL. Otherwise, use the RFC 9728 well-known protected-resource
-   metadata fallback derived from the configured MCP resource URL.
+   that URL. Otherwise, probe RFC 9728 well-known URIs in this order:
+   1. for a resource URI with a path, insert the path after
+      `/.well-known/oauth-protected-resource` (for example,
+      `https://host/.well-known/oauth-protected-resource/mcp/a`);
+   2. probe the origin-root URI
+      `https://host/.well-known/oauth-protected-resource`.
 3. Select an advertised authorization server under operator policy.
-4. Retrieve authorization-server metadata from the issuer, supporting both
-   OAuth Authorization Server Metadata (RFC 8414) and OpenID Connect
-   Discovery. If both are available, they MUST describe the same issuer and
-   compatible endpoints.
+4. Probe authorization-server metadata in the current MCP-required order,
+   stopping at the first acceptable document whose `issuer` exactly matches
+   the selected issuer:
+   1. RFC 8414 OAuth Authorization Server Metadata with well-known path
+      insertion;
+   2. OpenID Connect Discovery with well-known path insertion;
+   3. when the issuer has a path, OpenID Connect Discovery with
+      `/.well-known/openid-configuration` appended to the issuer path.
+   An unavailable or invalid probe advances to the next candidate. The CA does
+   not require multiple published documents to exist or agree on optional
+   endpoints.
 5. Validate metadata and endpoints before beginning authorization.
 
 | # | Requirement |
 | :--- | :--- |
 | OAUTH-06 | Production authorization, token, registration, revocation, and protected-resource endpoints MUST use HTTPS. Loopback redirect URIs are the only HTTP exception. |
 | OAUTH-07 | Redirects during metadata retrieval MUST be bounded and MUST NOT permit downgrade from HTTPS. |
-| OAUTH-08 | The CA MUST validate issuer equality according to the applicable metadata specification and reject conflicting metadata. |
+| OAUTH-08 | For each authorization-server metadata candidate, the CA MUST require exact string equality between the document's `issuer` and the selected issuer. An issuer mismatch makes that candidate invalid and MUST NOT be accepted; discovery then follows the ordered MCP algorithm. |
 | OAUTH-09 | The CA MUST reject an authorization server that is not advertised for the configured protected resource unless the operator explicitly pins that issuer in deployment configuration. |
 | OAUTH-10 | Discovery responses MUST have size and time limits and MUST be parsed as untrusted input. |
-| OAUTH-11 | The CA MUST preserve the configured MCP resource binding in authorization and token requests as required by the MCP Authorization specification. Tokens obtained for one resource MUST NOT be used for another. |
-| OAUTH-11A | The CA MUST prefer a protected resource's `WWW-Authenticate` `resource_metadata` URL and MUST support the RFC 9728 well-known fallback when that parameter is absent. A challenge-provided metadata URL remains untrusted and is subject to OAUTH-06 through OAUTH-10. |
-| OAUTH-11B | The CA MUST support authorization-server discovery through both RFC 8414 OAuth Authorization Server Metadata and OpenID Connect Discovery. Conflicting issuer or endpoint claims MUST fail closed. |
+| OAUTH-11 | The CA MUST send the same exact canonical MCP resource URI as the `resource` parameter in the authorization request, authorization-code token exchange, and every refresh-token request. Tokens acquired for one exact resource URI MUST NOT be used for another. |
+| OAUTH-11A | The CA MUST prefer a protected resource's `WWW-Authenticate` `resource_metadata` URL. When absent, it MUST probe the RFC 9728 path-specific well-known URI first and the origin-root well-known URI second. A challenge-provided metadata URL remains untrusted and is subject to OAUTH-06 through OAUTH-10. |
+| OAUTH-11B | The CA MUST implement the authorization-server probe order in step 4 verbatim. It MUST accept the first valid, exact-issuer document and MUST NOT require a second metadata format to exist or compare optional endpoints across independently published documents. |
 | OAUTH-11C | Before starting authorization, the CA MUST verify that `code_challenge_methods_supported` is present and includes `S256`. Missing metadata or a list without `S256` MUST be rejected; the CA MUST NOT infer support or fall back to `plain`. |
 
 ## 6. Client registration
 
-The first implementation supports three modes. Client ID Metadata Documents
+The first implementation supports four selection modes. Client ID Metadata Documents
 (CIMD) are a first-class mode for current MCP Authorization interoperability;
-dynamic registration remains a backwards-compatibility option. A deployment
+dynamic registration is deprecated and compatibility-only. A deployment
 with existing pre-registered client information may continue to select static
 mode explicitly.
 
+- **Automatic (`auto`):** use an operator-configured pre-registered/static
+  client when available; otherwise use CIMD when advertised; otherwise use
+  dynamic registration when advertised; otherwise return an actionable
+  operator-configuration error. The selected mode is fixed before
+  authorization begins.
 - **Client ID Metadata Document (`cimd`):** use an HTTPS URL as the OAuth
   `client_id`. The document at that exact URL describes the client and its
   redirect URIs. The CA operator controls the document and deployment binding;
   the authorization server retrieves and validates it.
-- **Dynamic:** register a public OAuth client using advertised registration
-  metadata when CIMD is unavailable and the authorization server supports
-  dynamic client registration. The CA persists the resulting client
-  information with the OAuth session.
+- **Dynamic:** when explicitly selected or reached by `auto`, register a public
+  OAuth client using advertised dynamic client registration. This deprecated
+  compatibility mode persists the resulting client information with the OAuth
+  session.
 - **Static:** use operator-provisioned client information. A client secret, when present, is resolved only inside the CA secret-store boundary.
 
 | # | Requirement |
 | :--- | :--- |
-| OAUTH-12 | In CIMD mode, the `client_id` MUST be the exact HTTPS URL of the Client ID Metadata Document. The CA MUST reject redirects, non-HTTPS URLs, a document whose declared `client_id` differs from its URL, and redirect URIs that do not exactly match CA configuration. |
+| OAUTH-12 | In CIMD mode, the `client_id` MUST be the exact HTTPS URL of the Client ID Metadata Document and that URL MUST contain a non-root path component. The CA MUST reject redirects, non-HTTPS URLs, a document whose declared `client_id` differs from its URL, and redirect URIs that do not exactly match CA configuration. The document MUST contain `client_id`, `client_name`, and `redirect_uris`; when refresh is requested, its `grant_types` MUST advertise `refresh_token`. |
 | OAUTH-12A | The CA MUST select CIMD only when authorization-server metadata advertises `client_id_metadata_document_supported: true`. If CIMD is configured but not advertised, the CA MUST fail with an actionable registration error rather than silently selecting another mode. |
 | OAUTH-13 | Registration access tokens and client secrets are credentials and receive the same storage and redaction protections as OAuth tokens. |
 | OAUTH-14 | A public client MUST use PKCE and MUST NOT invent or persist a client secret. |
 | OAUTH-15 | Static-client mode MUST fail closed when required client information cannot be resolved. |
-| OAUTH-15A | The CA and its operator tooling SHOULD support publishing or validating a CIMD containing only the client metadata required for MCP OAuth. The document MUST NOT contain credentials or deployment-secret references. |
-| OAUTH-15B | Dynamic registration MUST be used only when advertised by the authorization server and selected by deployment policy. It MUST use exact redirect URIs and MUST NOT request capabilities beyond authorization code + PKCE and refresh. |
-| OAUTH-15C | Client mode is part of the session binding. The CA MUST NOT silently fall back among CIMD, dynamic, and static modes after authorization begins. |
+| OAUTH-15A | The CA operator tooling MUST validate a CIMD before login and SHOULD be able to publish it at the stable configured HTTPS URL. Publication and rotation MUST be an authenticated operator action, use atomic replacement, preserve the URL-form `client_id`, and require reauthorization before incompatible redirect, grant, or key metadata changes take effect. The document MUST NOT contain credentials or deployment-secret references. |
+| OAUTH-15B | Deprecated compatibility-only dynamic registration MUST be used only when advertised by the authorization server and selected by `auto` or explicit deployment policy. It MUST use exact redirect URIs, set `application_type: "native"` for local loopback CLI callbacks or `application_type: "web"` for remote HTTPS callbacks, and MUST NOT request capabilities beyond authorization code + PKCE and refresh. |
+| OAUTH-15C | Client mode is part of the session binding. Explicit `cimd`, `dynamic`, and `static` modes fail closed. `auto` MUST apply the order static/pre-registered, CIMD, deprecated DCR, then actionable error; after it selects a mode, the CA MUST NOT silently fall back during that authorization attempt or session. |
 
 ## 7. Authorization-code flow
 
@@ -166,21 +186,30 @@ The operator opens the returned authorization URL, authenticates to the authoriz
 | :--- | :--- |
 | OAUTH-16 | PKCE with `S256` is mandatory and may be used only after OAUTH-11C metadata validation succeeds. `plain` PKCE MUST NOT be used. |
 | OAUTH-17 | `state` and the PKCE verifier MUST contain at least 256 bits of cryptographically random entropy. |
-| OAUTH-18 | Authorization sessions MUST be single-use, expire within 10 minutes by default, and be atomically consumed before code exchange. |
-| OAUTH-19 | The callback MUST match the expected state, redirect URI, issuer/session binding, and an outstanding unexpired authorization session. |
+| OAUTH-18 | Authorization sessions MUST be single-use, expire within 10 minutes by default, and be atomically consumed before code exchange. If the CA crashes after consumption but before durable token persistence, it MUST require clean reauthorization and MUST NOT retry or reuse the code. |
+| OAUTH-19 | The callback MUST match the expected state, redirect URI, and an outstanding unexpired authorization session containing the validated issuer. If authorization-server metadata advertises `authorization_response_iss_parameter_supported`, a callback without `iss` MUST be rejected. Whenever `iss` is present, it MUST exactly equal the recorded issuer. These rules apply to successful and OAuth error callbacks before error details are exposed. |
 | OAUTH-20 | Authorization codes MUST be sent only to the discovered token endpoint and only with the verifier from their originating session. |
-| OAUTH-21 | The CA MUST reject token responses whose granted scope, resource, issuer, or client binding is incompatible with the configured session. |
+| OAUTH-21 | The CA MUST validate token response syntax, supported `token_type`, expiry data, and returned scope when present. It MUST NOT assume an opaque access token exposes issuer, client, audience, or resource claims. Instead, it MUST bind the token locally to the validated issuer/client/exact-resource transaction that acquired it, send it only to that exact resource, and rely on the protected resource to validate token audience. |
 | OAUTH-22 | Authorization codes and PKCE verifiers MUST NOT be persisted after a terminal exchange and MUST never appear in logs. |
 | OAUTH-23 | The browser-facing completion page MUST reveal no token material and SHOULD tell the operator that the window may be closed. |
 
-### 7.1 Headless operation
+### 7.1 Callback deployment modes
 
-The CA MAY expose either:
+- **Local native CA:** use a preconfigured loopback redirect URI. The listener
+  MUST bind strictly to a loopback address, follow the configured fixed-port or
+  authorization-server-supported ephemeral-port policy, accept only the exact
+  callback path, and close after the bounded session completes.
+- **Remote CA:** use an exact pre-registered HTTPS redirect URI. Only an
+  authenticated and authorized operator may initiate the session; the callback
+  correlates state to that operator and session but does not use browser
+  cookies as the OAuth security binding.
+- **Browser and callback on different machines:** v1 requires an
+  operator-controlled tunnel that preserves the exact pre-registered redirect
+  URI and terminates only at the CA callback listener. Implementations without
+  such a controlled route MUST defer this topology until a future device
+  authorization grant rather than inventing a copy/paste callback flow.
 
-- a loopback callback listener on the operator's machine through a documented tunnel; or
-- an HTTPS callback endpoint reachable by the browser.
-
-The callback endpoint is an OAuth protocol endpoint, not an MPAS submission endpoint. If it is remotely reachable, it MUST be protected against cross-session confusion by the requirements above and SHOULD expose only generic success or failure text.
+The callback endpoint is an OAuth protocol endpoint, not an MPAS submission endpoint. It MUST expose only generic success or failure text and follow OAUTH-19 before revealing even sanitized OAuth error details.
 
 ## 8. Credential storage and lifecycle
 
@@ -208,7 +237,9 @@ Dispatch order:
 3. Refresh the session if necessary.
 4. Establish the MCP connection and complete initialization.
 5. Write the dispatch-ledger `executing` entry according to the existing CA lifecycle.
-6. Send the `tools/call` request with the access token in the HTTP `Authorization` header.
+6. Send every MCP Streamable HTTP request in the connection lifecycle with the
+   access token in the HTTP `Authorization` header, including initialization,
+   `tools/call`, and any GET, DELETE, or session-management requests.
 7. Resolve the ledger and issue the normal signed Execution Receipt.
 
 | # | Requirement |
@@ -217,7 +248,7 @@ Dispatch order:
 | OAUTH-33 | The CA MUST NOT begin OAuth dispatch preparation for an Action that has failed MPAS verification or policy evaluation. Interactive login remains a separate operator workflow and is not triggered by an unapproved Action. |
 | OAUTH-34 | Discovery, token refresh, and MCP connection setup are pre-dispatch preparation. A definitive failure before the `executing` ledger write rejects the submission without dispatch. |
 | OAUTH-35 | After the `executing` entry, existing MPAS indeterminate-result rules apply. The CA MUST NOT refresh and automatically replay a tool call in response to a downstream 401 after request transmission. |
-| OAUTH-36 | The Bearer token MUST be attached only to requests whose origin and resource binding match the session. Redirects MUST NOT forward the `Authorization` header across origins. |
+| OAUTH-36 | The Bearer token MUST be attached to every MCP Streamable HTTP request and only when the request targets the session's exact canonical MCP resource URI under the transport's defined request routing. Redirects MUST NOT forward the `Authorization` header across origins or escape the exact resource binding. |
 | OAUTH-37 | The access token MUST NOT appear in the Execution Receipt, execution reference, MCP result, or externally visible error. |
 
 ## 10. Operator interface
@@ -233,6 +264,12 @@ mpas oauth logout --deployment <id> --session <name>
 `login` returns or opens an authorization URL and waits only for the bounded OAuth callback, not for MPAS approval. `status` returns issuer, resource, client mode, granted scope names, expiry/refreshability state, and whether reauthorization is required. It MUST NOT return tokens, client secrets, authorization codes, PKCE material, or raw callback data.
 
 Implementations SHOULD support a non-browser-opening mode that prints the authorization URL for headless operation.
+
+| # | Requirement |
+| :--- | :--- |
+| OAUTH-37A | Remote operator CLI/API endpoints MUST authenticate the operator and authorize login, status, CIMD publication/rotation, step-up, session replacement, logout, and revocation separately. Local CLI access MUST rely on an explicit OS-user/process trust boundary rather than unauthenticated network reachability. |
+| OAUTH-37B | Each OAuth session MUST have an operator owner and an explicit sharing policy identifying which deployments or operator principals may use or administer it. Rebinding a shared session to another downstream account requires an authorized replacement workflow and invalidates the prior binding. |
+| OAUTH-37C | Every operator-plane mutation MUST record the authenticated operator identity, session, deployment, action, outcome, and timestamp in the audit log without OAuth secrets. Status output MUST be limited by the same ownership and sharing policy. |
 
 ## 11. Errors
 
@@ -254,7 +291,7 @@ Error messages MUST NOT distinguish sensitive account details, echo OAuth respon
 | # | Requirement |
 | :--- | :--- |
 | OAUTH-38 | Logs MUST redact `Authorization`, tokens, authorization codes, PKCE values, client secrets, registration access tokens, cookies, callback query strings, and token endpoint response bodies. |
-| OAUTH-39 | Audit events SHOULD record session identifier, issuer origin, resource origin, requested/granted scope names, client mode, event type, outcome, and timestamps without credential values. |
+| OAUTH-39 | Audit events SHOULD record session identifier, exact issuer, exact canonical MCP resource URI, requested/granted scope names, client mode, authenticated operator identity when applicable, event type, outcome, and timestamps without credential values. |
 | OAUTH-40 | Login, refresh, reauthorization-required, logout, revocation, and binding-change events SHOULD be auditable. |
 | OAUTH-41 | Debug modes MUST preserve the same secret-redaction rules. |
 
@@ -262,25 +299,38 @@ Error messages MUST NOT distinguish sensitive account details, echo OAuth respon
 
 A conforming implementation MUST test:
 
-- metadata discovery success, issuer mismatch, malicious redirects, oversized documents, and timeouts;
+- exact ordered metadata probes, including path-bearing MCP resources and
+  path-bearing issuers; issuer mismatch; malicious redirects; oversized
+  documents; and timeouts;
 - PKCE S256, state entropy, mismatch, expiry, single-use, and concurrent callback consumption;
-- CIMD, dynamic, and static client modes, including CIMD URL/document binding,
-  redirect rejection, and no silent mode fallback;
+- auto, CIMD, deprecated dynamic, and static client modes, including selection
+  order, CIMD required fields/path/document binding, DCR `application_type`,
+  redirect rejection, and no post-selection fallback;
 - protected-resource discovery through `WWW-Authenticate resource_metadata`
   and through the RFC 9728 well-known fallback;
-- authorization-server discovery through RFC 8414 and OpenID Connect
-  Discovery, including conflicting metadata;
+- authorization-server discovery through RFC 8414 path insertion, OIDC path
+  insertion, and OIDC path appending, accepting the first valid exact-issuer
+  document without requiring multiple formats;
 - PKCE metadata with `S256`, without `S256`, and with
   `code_challenge_methods_supported` absent;
-- secure restart persistence without returning secrets through APIs or logs;
+- authorization response `iss` present/matching, present/mismatching,
+  advertised-but-absent, and OAuth error callback cases;
+- secure restart persistence without returning secrets through APIs or logs,
+  including crash after state consumption but before token persistence;
 - refresh before expiry, refresh-token rotation, concurrent refresh serialization, transient failure, `invalid_grant`, and revocation;
-- exact resource/origin/client/scope binding and cross-session isolation;
+- exact Application DID/resource URI/issuer/client/scope binding and
+  cross-session isolation; `resource` in authorization, code exchange, and
+  refresh requests;
 - no Authorization-header forwarding across origins;
-- authenticated MCP initialization and `tools/call` dispatch;
+- Bearer authentication on every Streamable HTTP lifecycle request, including
+  initialize, `tools/call`, GET, DELETE, and session management;
 - OAuth preparation before the ledger `executing` write and no automatic replay after it;
 - OAuth outcomes never satisfying MPAS approvals;
 - redaction from logs, errors, Action Packages, coordination records, receipts, and MCP results;
-- operator login, status, headless callback, reauthorization, and logout paths.
+- fixed-scope challenge handling and operator-initiated allowlisted step-up;
+- operator authentication/authorization, ownership/sharing, login, status,
+  callback modes, CIMD rotation, session replacement, reauthorization, and
+  logout paths.
 
 The test suite SHOULD include an in-process OAuth authorization server and protected MCP resource for deterministic conformance tests. A separately gated integration test MAY exercise the official Vercel MCP server with operator-owned test credentials; CI MUST NOT depend on an interactive third-party login.
 
@@ -292,9 +342,14 @@ Existing static credential injection remains supported. An `mcp.http` target wit
 2. completing operator login;
 3. verifying authenticated MCP initialization and a read-only call;
 4. removing the static token binding;
-5. deleting the copied token from legacy stores and configuration history where possible.
+5. revoking or rotating the copied grant/token where possible, then deleting
+   local copies from legacy stores and configuration history.
 
 No deployment silently converts a static token into a managed OAuth session.
+Copied Bearer tokens are incident-remediation material: commits, backups,
+support bundles, and third-party logs may be immutable or outside the
+operator's control, so deletion alone is not sufficient evidence of
+invalidation.
 
 ## 15. Open questions
 
