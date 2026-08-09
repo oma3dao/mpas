@@ -18,7 +18,9 @@ import { generateEd25519Key, didJwkToJwk, isDidJwk } from "../core/did-jwk.js";
 import type { Did } from "../core/types.js";
 import {
   type OAuthOperatorService,
+  type ResolveOAuthDeployment,
   unavailableOAuthOperatorService,
+  validateOAuthSessionName,
 } from "../adapter/oauth-operator.js";
 
 export interface CliIo {
@@ -55,6 +57,7 @@ interface ParsedOptions {
 
 export interface CliDependencies {
   oauthOperator?: OAuthOperatorService;
+  resolveOAuthDeployment?: ResolveOAuthDeployment;
 }
 
 const defaultIo: CliIo = {
@@ -126,9 +129,12 @@ export async function runCli(
 
     if (domain === "oauth" && ["login", "status", "logout"].includes(command ?? "")) {
       if (!options.deployment || !options.session) {
-        io.stderr.write("OAuth commands require --deployment <id> and --session <name>\n");
+        io.stderr.write("OAuth commands require --deployment <deployment-name> and --session <session-name>\n");
         return { exitCode: 2 };
       }
+      validateOAuthSessionName(options.session);
+      const resolveDeployment = dependencies.resolveOAuthDeployment ?? resolveOAuthDeployment;
+      await resolveDeployment(options.configDir ?? defaultConfigDir(), options.deployment);
       const service = dependencies.oauthOperator ?? unavailableOAuthOperatorService();
       const request = { deployment: options.deployment, session: options.session };
       const response = command === "login"
@@ -694,9 +700,9 @@ function usage(): string {
     "  mpas plugin list [--plugin-dir <dir>]",
     "  mpas credential set <handle> [--credential-dir <dir>] [--value <secret>]",
     "  mpas credential list [--credential-dir <dir>]",
-    "  mpas oauth login --deployment <id> --session <name> [--no-browser]",
-    "  mpas oauth status --deployment <id> --session <name>",
-    "  mpas oauth logout --deployment <id> --session <name>",
+    "  mpas oauth login --deployment <deployment-name> --session <session-name> [--no-browser] [--config-dir <dir>]",
+    "  mpas oauth status --deployment <deployment-name> --session <session-name> [--config-dir <dir>]",
+    "  mpas oauth logout --deployment <deployment-name> --session <session-name> [--config-dir <dir>]",
     "  mpas config validate <name> [--config-dir <dir>] [--credential-dir <dir>]",
     "  mpas trace inspect <file>",
   ].join("\n");
@@ -721,6 +727,21 @@ function defaultPluginDir(): string {
 
 function defaultKeyDir(): string {
   return process.env.MPAS_KEY_DIR ?? join(homedir(), ".mpas", "keys");
+}
+
+async function resolveOAuthDeployment(configDir: string, deploymentName: string) {
+  const loaded = await loadDeploymentConfigs(configDir);
+  if (!loaded.ok) throw new Error(loaded.error.message);
+  const deployment = loaded.configs.find(({ config }) => config.name === deploymentName);
+  if (!deployment) throw new Error(`Unknown OAuth deployment: ${deploymentName}`);
+  if (deployment.config.executionTarget.type !== "mcp.http") {
+    throw new Error(`OAuth deployment must use an mcp.http execution target: ${deploymentName}`);
+  }
+  return {
+    name: deployment.config.name,
+    applicationDid: deployment.config.target.applicationDid,
+    resourceUrl: deployment.config.executionTarget.url,
+  };
 }
 
 async function readStdin(): Promise<string> {

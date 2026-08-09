@@ -15,15 +15,25 @@ the design authority; this guide explains how to operate the reference demo.
 mpas daemon start
 mpas daemon status
 
-mpas oauth login  --deployment <id> --session <name>
-mpas oauth status --deployment <id> --session <name>
-mpas oauth logout --deployment <id> --session <name>
+mpas oauth login  --deployment <deployment-name> --session <session-name>
+mpas oauth status --deployment <deployment-name> --session <session-name>
+mpas oauth logout --deployment <deployment-name> --session <session-name>
 ```
 
 Use `mpas oauth login ... --no-browser` for a print-only/headless login flow.
 Only an operator should execute OAuth login. Agents, proposer bridges, Action
 submission, and automatic retries must never open the authorization URL or
 initiate consent.
+
+`deployment-name` is the exact top-level `name` in an adapter deployment config
+loaded from `--config-dir` (by default `$MPAS_HOME/config`). OAuth commands
+reject unknown deployments and deployments whose execution target is not
+`mcp.http`.
+
+`session-name` is an operator-chosen stable alias for one downstream account or
+grant within that deployment, such as `primary` or `release-bot`. It is not an
+OAuth server session identifier. Names are 1-64 characters and may contain only
+letters, numbers, `.`, `_`, and `-`; the first character must be alphanumeric.
 
 ## Current managed OAuth status
 

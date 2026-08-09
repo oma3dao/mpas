@@ -40,13 +40,19 @@ function service(): OAuthOperatorService {
   };
 }
 
+const resolveOAuthDeployment = vi.fn(async (_configDir: string, name: string) => ({
+  name,
+  applicationDid: "did:web:netlify.example",
+  resourceUrl: "https://mcp.netlify.com/mcp",
+}));
+
 describe("OAuth operator CLI", () => {
   it("requires deployment and session selectors", async () => {
     const stdout = new MemoryWriter();
     const stderr = new MemoryWriter();
     const result = await runCli(["oauth", "status"], { stdout, stderr });
     expect(result.exitCode).toBe(2);
-    expect(stderr.text).toContain("--deployment <id> and --session <name>");
+    expect(stderr.text).toContain("--deployment <deployment-name> and --session <session-name>");
   });
 
   it("delegates operator login and honors print-only mode", async () => {
@@ -55,7 +61,7 @@ describe("OAuth operator CLI", () => {
     const stderr = new MemoryWriter();
     const result = await runCli([
       "oauth", "login", "--deployment", "netlify", "--session", "primary", "--no-browser",
-    ], { stdout, stderr }, { oauthOperator });
+    ], { stdout, stderr }, { oauthOperator, resolveOAuthDeployment });
 
     expect(result.exitCode).toBe(0);
     expect(oauthOperator.login).toHaveBeenCalledWith({
@@ -72,7 +78,7 @@ describe("OAuth operator CLI", () => {
     const stderr = new MemoryWriter();
     const result = await runCli([
       "oauth", command, "--deployment", "netlify", "--session", "primary",
-    ], { stdout, stderr }, { oauthOperator });
+    ], { stdout, stderr }, { oauthOperator, resolveOAuthDeployment });
     expect(result.exitCode).toBe(0);
     expect(oauthOperator[command]).toHaveBeenCalledWith({ deployment: "netlify", session: "primary" });
     expect(JSON.parse(stdout.text)).not.toHaveProperty("accessToken");
@@ -81,5 +87,17 @@ describe("OAuth operator CLI", () => {
   it("shell-quotes the exact operator command", () => {
     expect(oauthLoginCommand({ deployment: "tenant one", session: "user's session" }))
       .toBe(`mpas oauth login --deployment 'tenant one' --session 'user'"'"'s session'`);
+  });
+
+  it("rejects unsafe session aliases before service delegation", async () => {
+    const oauthOperator = service();
+    const stdout = new MemoryWriter();
+    const stderr = new MemoryWriter();
+    const result = await runCli([
+      "oauth", "status", "--deployment", "netlify", "--session", "../other-user",
+    ], { stdout, stderr }, { oauthOperator, resolveOAuthDeployment });
+    expect(result.exitCode).toBe(1);
+    expect(stderr.text).toContain("OAuth session name must be 1-64 characters");
+    expect(oauthOperator.status).not.toHaveBeenCalled();
   });
 });

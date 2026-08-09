@@ -40,6 +40,23 @@ export interface OAuthOperatorService {
   logout(request: OAuthOperatorRequest): Promise<OAuthOperatorResult>;
 }
 
+export interface OAuthDeploymentSelection {
+  name: string;
+  applicationDid: string;
+  resourceUrl: string;
+}
+
+export type ResolveOAuthDeployment = (
+  configDir: string,
+  deploymentName: string,
+) => Promise<OAuthDeploymentSelection>;
+
+export function validateOAuthSessionName(sessionName: string): void {
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(sessionName)) {
+    throw new Error("OAuth session name must be 1-64 characters using letters, numbers, '.', '_', or '-'");
+  }
+}
+
 export function oauthLoginCommand(request: OAuthOperatorRequest): string {
   return `mpas oauth login --deployment ${shellQuote(request.deployment)} --session ${shellQuote(request.session)}`;
 }
