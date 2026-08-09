@@ -244,7 +244,7 @@ OAuth preparation failures are stateless Action rejections before dispatch. Impl
 | `oauth_reauthorization_required` | Grant is revoked, invalid, or no longer satisfies the binding. | Log in again. |
 | `oauth_insufficient_scope` | Session lacks a configured required scope. | Reauthorize with the required scopes. |
 | `oauth_discovery_failed` | Protected-resource or issuer metadata is invalid/unavailable. | Check server and configuration. |
-| `oauth_client_registration_failed` | Dynamic registration failed or static client configuration is incomplete. | Correct client configuration. |
+| `oauth_client_registration_failed` | CIMD validation failed, dynamic registration failed, or static client configuration is incomplete. | Correct client configuration. |
 | `oauth_token_refresh_failed` | A retryable refresh failure exhausted its bounded retry policy. | Retry later; do not resubmit if dispatch may have begun. |
 
 Error messages MUST NOT distinguish sensitive account details, echo OAuth responses verbatim, or include credentials.

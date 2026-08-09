@@ -108,7 +108,7 @@ conformance, hardening, documentation
 
 **Area:** CA MCP execution target
 
-- [ ] Extend `mcp.http` configuration with OAuth session, scopes, and dynamic/static client mode.
+- [ ] Extend `mcp.http` configuration with OAuth session, scopes, and CIMD/dynamic/static client mode.
 - [ ] Validate session binding to Application DID, MCP resource, issuer, client, and configured scopes.
 - [ ] Resolve or refresh OAuth credentials only after MPAS verification and policy satisfaction.
 - [ ] Initialize the remote MCP transport with a Bearer token while preventing cross-origin Authorization-header forwarding.
