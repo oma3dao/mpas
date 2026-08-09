@@ -9,7 +9,12 @@ import type {
   OAuthClientMetadata,
   OAuthTokens,
 } from "@modelcontextprotocol/sdk/shared/auth.js";
+import type { OAuthDiscoveryState } from "@modelcontextprotocol/sdk/client/auth.js";
 import { afterEach, describe, expect, it } from "vitest";
+import {
+  assertExactAuthorizationServerIssuer,
+  OAuthIssuerMismatchError,
+} from "../../src/adapter/oauth-discovery.js";
 import {
   pkceS256,
   startOAuthProtectedMcpFixture,
@@ -62,6 +67,10 @@ class FixtureOAuthProvider implements OAuthClientProvider {
 
   saveCodeVerifier(codeVerifier: string): void {
     this.savedVerifier = codeVerifier;
+  }
+
+  saveDiscoveryState(state: OAuthDiscoveryState): void {
+    assertExactAuthorizationServerIssuer(state);
   }
 
   codeVerifier(): string {
@@ -117,6 +126,42 @@ describe("official MCP SDK OAuth conformance spike", () => {
     } finally {
       await authenticatedClient.close().catch(() => {});
       await firstClient.close().catch(() => {});
+    }
+  });
+
+  it("rejects authorization-server metadata without PKCE S256", async () => {
+    fixture = await startOAuthProtectedMcpFixture({ codeChallengeMethodsSupported: ["plain"] });
+    const provider = new FixtureOAuthProvider(new URL("http://127.0.0.1:49152/oauth/callback"));
+    const transport = new StreamableHTTPClientTransport(new URL(fixture.resourceUrl), {
+      authProvider: provider,
+    });
+    const client = new Client({ name: "oauth-spike", version: "1.0.0" });
+
+    try {
+      await expect(client.connect(transport)).rejects.toThrow();
+      expect(provider.authorizationUrl).toBeUndefined();
+      expect(provider.savedVerifier).toBeUndefined();
+    } finally {
+      await client.close().catch(() => {});
+    }
+  });
+
+  it("rejects an issuer mismatch through the CA provider validation wrapper", async () => {
+    fixture = await startOAuthProtectedMcpFixture({
+      authorizationServerIssuer: "https://attacker.invalid/issuer",
+    });
+    const provider = new FixtureOAuthProvider(new URL("http://127.0.0.1:49152/oauth/callback"));
+    const transport = new StreamableHTTPClientTransport(new URL(fixture.resourceUrl), {
+      authProvider: provider,
+    });
+    const client = new Client({ name: "oauth-spike", version: "1.0.0" });
+
+    try {
+      await expect(client.connect(transport)).rejects.toBeInstanceOf(OAuthIssuerMismatchError);
+      expect(provider.authorizationUrl).toBeUndefined();
+      expect(provider.savedVerifier).toBeUndefined();
+    } finally {
+      await client.close().catch(() => {});
     }
   });
 });

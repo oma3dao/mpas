@@ -9,7 +9,14 @@ export interface OAuthProtectedMcpFixture {
   close(): Promise<void>;
 }
 
-export async function startOAuthProtectedMcpFixture(): Promise<OAuthProtectedMcpFixture> {
+export interface OAuthProtectedMcpFixtureOptions {
+  authorizationServerIssuer?: string;
+  codeChallengeMethodsSupported?: string[];
+}
+
+export async function startOAuthProtectedMcpFixture(
+  options: OAuthProtectedMcpFixtureOptions = {},
+): Promise<OAuthProtectedMcpFixture> {
   const requests: OAuthProtectedMcpFixture["requests"] = [];
   const tokenRequests: URLSearchParams[] = [];
   let origin = "";
@@ -33,10 +40,10 @@ export async function startOAuthProtectedMcpFixture(): Promise<OAuthProtectedMcp
 
     if (path === "/.well-known/oauth-authorization-server/issuer") {
       return json(response, 200, {
-        issuer: `${origin}/issuer`,
+        issuer: options.authorizationServerIssuer ?? `${origin}/issuer`,
         authorization_endpoint: `${origin}/authorize`,
         token_endpoint: `${origin}/token`,
-        code_challenge_methods_supported: ["S256"],
+        code_challenge_methods_supported: options.codeChallengeMethodsSupported ?? ["S256"],
         response_types_supported: ["code"],
         grant_types_supported: ["authorization_code", "refresh_token"],
         token_endpoint_auth_methods_supported: ["none"],
