@@ -180,7 +180,14 @@ mode explicitly.
 
 The CA creates an authorization session containing a cryptographically random `state`, PKCE verifier, derived `S256` challenge, redirect URI, issuer, resource, client identity, requested scopes, creation time, and expiration time.
 
-The operator opens the returned authorization URL, authenticates to the authorization server, and grants consent. The authorization server redirects to the CA callback. The CA validates the callback and exchanges the code directly with the token endpoint.
+The operator starts the login workflow by executing an explicit CA operator
+command. That command may open the authorization URL in the operator's browser,
+where the operator authenticates and grants consent. An agent, proposer, bridge,
+or submitted Action may report that login is required and display the command
+for the operator to run, but MUST NOT execute the command, open a browser, or
+start consent itself. The authorization server redirects to the CA callback.
+The CA validates the callback and exchanges the code directly with the token
+endpoint.
 
 | # | Requirement |
 | :--- | :--- |
@@ -246,6 +253,7 @@ Dispatch order:
 | :--- | :--- |
 | OAUTH-32 | A transport-authenticated OAuth identity, consent result, or scope grant MUST NOT count as an Approval or satisfy Authorization Requirements. |
 | OAUTH-33 | The CA MUST NOT begin OAuth dispatch preparation for an Action that has failed MPAS verification or policy evaluation. Interactive login remains a separate operator workflow and is not triggered by an unapproved Action. |
+| OAUTH-33A | An agent, proposer, bridge, Action submission, or automatic retry MUST NOT execute an OAuth login command, open a browser, follow an authorization URL, or initiate interactive consent. When login or reauthorization is required, it MAY return a redacted status containing the exact operator command to run. Only an authenticated operator action executing that command may start the login workflow and optionally open the browser. |
 | OAUTH-34 | Discovery, token refresh, and MCP connection setup are pre-dispatch preparation. A definitive failure before the `executing` ledger write rejects the submission without dispatch. |
 | OAUTH-35 | After the `executing` entry, existing MPAS indeterminate-result rules apply. The CA MUST NOT refresh and automatically replay a tool call in response to a downstream 401 after request transmission. |
 | OAUTH-36 | The Bearer token MUST be attached to every MCP Streamable HTTP request and only when the request targets the session's exact canonical MCP resource URI under the transport's defined request routing. Redirects MUST NOT forward the `Authorization` header across origins or escape the exact resource binding. |
@@ -261,7 +269,14 @@ mpas oauth status --deployment <id> --session <name>
 mpas oauth logout --deployment <id> --session <name>
 ```
 
-`login` returns or opens an authorization URL and waits only for the bounded OAuth callback, not for MPAS approval. `status` returns issuer, resource, client mode, granted scope names, expiry/refreshability state, and whether reauthorization is required. It MUST NOT return tokens, client secrets, authorization codes, PKCE material, or raw callback data.
+`login` is an operator-only command. After the operator executes it, the command
+returns or opens an authorization URL and waits only for the bounded OAuth
+callback, not for MPAS approval. An agent-facing failure or status response may
+tell the operator to run `mpas oauth login --deployment <id> --session <name>`,
+but the agent does not execute it. `status` returns issuer, resource, client
+mode, granted scope names, expiry/refreshability state, and whether
+reauthorization is required. It MUST NOT return tokens, client secrets,
+authorization codes, PKCE material, or raw callback data.
 
 Implementations SHOULD support a non-browser-opening mode that prints the authorization URL for headless operation.
 
@@ -277,8 +292,8 @@ OAuth preparation failures are stateless Action rejections before dispatch. Impl
 
 | Code | Meaning | Operator action |
 | :--- | :--- | :--- |
-| `oauth_login_required` | No authorized session exists. | Run the login workflow. |
-| `oauth_reauthorization_required` | Grant is revoked, invalid, or no longer satisfies the binding. | Log in again. |
+| `oauth_login_required` | No authorized session exists. The response may include a non-secret operator command, but must not start login. | Operator runs the displayed login command. |
+| `oauth_reauthorization_required` | Grant is revoked, invalid, or no longer satisfies the binding. The response may include a non-secret operator command, but must not start login. | Operator runs the displayed login command again. |
 | `oauth_insufficient_scope` | Session lacks a configured required scope. | Reauthorize with the required scopes. |
 | `oauth_discovery_failed` | Protected-resource or issuer metadata is invalid/unavailable. | Check server and configuration. |
 | `oauth_client_registration_failed` | CIMD validation failed, dynamic registration failed, or static client configuration is incomplete. | Correct client configuration. |
@@ -325,6 +340,8 @@ A conforming implementation MUST test:
 - Bearer authentication on every Streamable HTTP lifecycle request, including
   initialize, `tools/call`, GET, DELETE, and session management;
 - OAuth preparation before the ledger `executing` write and no automatic replay after it;
+- agent/action paths report an operator login command without executing it,
+  opening a browser, or initiating consent;
 - OAuth outcomes never satisfying MPAS approvals;
 - redaction from logs, errors, Action Packages, coordination records, receipts, and MCP results;
 - fixed-scope challenge handling and operator-initiated allowlisted step-up;

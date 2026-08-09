@@ -24,6 +24,8 @@ behavior merely to mirror the specification structure.
 
 Keep OAuth session management separate from Action submission so an agent can
 neither initiate consent nor turn OAuth authentication into MPAS authorization.
+If credentials are missing, the agent reports the exact operator command that
+must be run; only the operator's execution of that command may open a browser.
 
 ```text
 spec + threat model + SDK conformance spike
@@ -148,7 +150,9 @@ gap.
 **Area:** Credential Adapter CLI/API
 
 - [ ] Implement `oauth login` selection by deployment and session.
-- [ ] Support automatic browser opening and print-only authorization URLs.
+- [ ] Allow the operator-only `oauth login` command to open the browser or print
+  the authorization URL. Do not expose browser-opening behavior on agent,
+  proposer, bridge, Action-submission, or automatic-retry paths.
 - [ ] Implement a local-native callback bound strictly to loopback with an exact callback path and documented fixed/ephemeral port policy.
 - [ ] Implement an exact pre-registered HTTPS callback for remote CAs, correlated to an authenticated operator initiation and OAuth state.
 - [ ] Define the only v1 cross-machine mode as an operator-controlled tunnel preserving the exact redirect URI; defer deployments without that route to a future device authorization grant.
@@ -156,9 +160,16 @@ gap.
 - [ ] Implement authenticated CIMD validation, stable hosting/publication, and atomic rotation without changing its URL-form client ID.
 - [ ] Implement redacted `oauth status` output.
 - [ ] Implement `oauth logout`, remote revocation when advertised, and unconditional local deletion.
-- [ ] Prevent Action submission from automatically opening a browser or starting an interactive grant.
+- [ ] Return a stable, redacted `oauth_login_required` or
+  `oauth_reauthorization_required` result containing the exact operator command
+  to run. The agent communicates that command to the operator but MUST NOT
+  execute it, open a browser, follow the authorization URL, or start consent.
 - [ ] Audit login, exchange, refresh, reauthorization-required, revocation, and logout without secret values.
-- [ ] Tests for simultaneous login sessions, callback to the wrong session, expired callbacks, operator cancellation, unavailable browser, exact remote callback routing, unauthorized operator mutation/status, shared-session replacement, and CIMD rotation.
+- [ ] Tests for simultaneous login sessions, callback to the wrong session,
+  expired callbacks, operator cancellation, unavailable browser, exact remote
+  callback routing, unauthorized operator mutation/status, shared-session
+  replacement, CIMD rotation, and agent/Action paths that emit—but cannot
+  execute—the operator login command.
 
 **Exit:** an operator can provision and remove a session without manually viewing or copying any token.
 
