@@ -69,7 +69,8 @@ OAuth is selected by an `mcp.http` execution target. The following shape is an i
       "session": "example-production",
       "scopes": ["example:mcp"],
       "client": {
-        "type": "dynamic"
+        "type": "cimd",
+        "clientId": "https://adapter.example.com/oauth/client-metadata.json"
       }
     }
   }
@@ -103,9 +104,15 @@ Requirements:
 The CA follows the MCP Authorization specification and the OAuth metadata specifications it references.
 
 1. Connect to the configured MCP resource URL without credentials when no usable session exists.
-2. Interpret the protected-resource challenge and discover protected-resource metadata.
+2. If the response includes a `WWW-Authenticate` challenge with a
+   `resource_metadata` parameter, retrieve protected-resource metadata from
+   that URL. Otherwise, use the RFC 9728 well-known protected-resource
+   metadata fallback derived from the configured MCP resource URL.
 3. Select an advertised authorization server under operator policy.
-4. Retrieve authorization-server metadata from the issuer.
+4. Retrieve authorization-server metadata from the issuer, supporting both
+   OAuth Authorization Server Metadata (RFC 8414) and OpenID Connect
+   Discovery. If both are available, they MUST describe the same issuer and
+   compatible endpoints.
 5. Validate metadata and endpoints before beginning authorization.
 
 | # | Requirement |
@@ -116,20 +123,38 @@ The CA follows the MCP Authorization specification and the OAuth metadata specif
 | OAUTH-09 | The CA MUST reject an authorization server that is not advertised for the configured protected resource unless the operator explicitly pins that issuer in deployment configuration. |
 | OAUTH-10 | Discovery responses MUST have size and time limits and MUST be parsed as untrusted input. |
 | OAUTH-11 | The CA MUST preserve the configured MCP resource binding in authorization and token requests as required by the MCP Authorization specification. Tokens obtained for one resource MUST NOT be used for another. |
+| OAUTH-11A | The CA MUST prefer a protected resource's `WWW-Authenticate` `resource_metadata` URL and MUST support the RFC 9728 well-known fallback when that parameter is absent. A challenge-provided metadata URL remains untrusted and is subject to OAUTH-06 through OAUTH-10. |
+| OAUTH-11B | The CA MUST support authorization-server discovery through both RFC 8414 OAuth Authorization Server Metadata and OpenID Connect Discovery. Conflicting issuer or endpoint claims MUST fail closed. |
+| OAUTH-11C | Before starting authorization, the CA MUST verify that `code_challenge_methods_supported` is present and includes `S256`. Missing metadata or a list without `S256` MUST be rejected; the CA MUST NOT infer support or fall back to `plain`. |
 
 ## 6. Client registration
 
-The first implementation supports two modes:
+The first implementation supports three modes. Client ID Metadata Documents
+(CIMD) are a first-class mode for current MCP Authorization interoperability;
+dynamic registration remains a backwards-compatibility option. A deployment
+with existing pre-registered client information may continue to select static
+mode explicitly.
 
-- **Dynamic:** register a public OAuth client using advertised registration metadata. The CA persists the resulting client information with the OAuth session.
+- **Client ID Metadata Document (`cimd`):** use an HTTPS URL as the OAuth
+  `client_id`. The document at that exact URL describes the client and its
+  redirect URIs. The CA operator controls the document and deployment binding;
+  the authorization server retrieves and validates it.
+- **Dynamic:** register a public OAuth client using advertised registration
+  metadata when CIMD is unavailable and the authorization server supports
+  dynamic client registration. The CA persists the resulting client
+  information with the OAuth session.
 - **Static:** use operator-provisioned client information. A client secret, when present, is resolved only inside the CA secret-store boundary.
 
 | # | Requirement |
 | :--- | :--- |
-| OAUTH-12 | Dynamic registration MUST use an exact redirect URI and MUST NOT request privileged client capabilities beyond those required for authorization code + PKCE and refresh. |
+| OAUTH-12 | In CIMD mode, the `client_id` MUST be the exact HTTPS URL of the Client ID Metadata Document. The CA MUST reject redirects, non-HTTPS URLs, a document whose declared `client_id` differs from its URL, and redirect URIs that do not exactly match CA configuration. |
+| OAUTH-12A | The CA MUST select CIMD only when authorization-server metadata advertises `client_id_metadata_document_supported: true`. If CIMD is configured but not advertised, the CA MUST fail with an actionable registration error rather than silently selecting another mode. |
 | OAUTH-13 | Registration access tokens and client secrets are credentials and receive the same storage and redaction protections as OAuth tokens. |
 | OAUTH-14 | A public client MUST use PKCE and MUST NOT invent or persist a client secret. |
 | OAUTH-15 | Static-client mode MUST fail closed when required client information cannot be resolved. |
+| OAUTH-15A | The CA and its operator tooling SHOULD support publishing or validating a CIMD containing only the client metadata required for MCP OAuth. The document MUST NOT contain credentials or deployment-secret references. |
+| OAUTH-15B | Dynamic registration MUST be used only when advertised by the authorization server and selected by deployment policy. It MUST use exact redirect URIs and MUST NOT request capabilities beyond authorization code + PKCE and refresh. |
+| OAUTH-15C | Client mode is part of the session binding. The CA MUST NOT silently fall back among CIMD, dynamic, and static modes after authorization begins. |
 
 ## 7. Authorization-code flow
 
@@ -139,7 +164,7 @@ The operator opens the returned authorization URL, authenticates to the authoriz
 
 | # | Requirement |
 | :--- | :--- |
-| OAUTH-16 | PKCE with `S256` is mandatory. `plain` PKCE MUST NOT be used. |
+| OAUTH-16 | PKCE with `S256` is mandatory and may be used only after OAUTH-11C metadata validation succeeds. `plain` PKCE MUST NOT be used. |
 | OAUTH-17 | `state` and the PKCE verifier MUST contain at least 256 bits of cryptographically random entropy. |
 | OAUTH-18 | Authorization sessions MUST be single-use, expire within 10 minutes by default, and be atomically consumed before code exchange. |
 | OAUTH-19 | The callback MUST match the expected state, redirect URI, issuer/session binding, and an outstanding unexpired authorization session. |
@@ -239,7 +264,14 @@ A conforming implementation MUST test:
 
 - metadata discovery success, issuer mismatch, malicious redirects, oversized documents, and timeouts;
 - PKCE S256, state entropy, mismatch, expiry, single-use, and concurrent callback consumption;
-- dynamic and static client modes;
+- CIMD, dynamic, and static client modes, including CIMD URL/document binding,
+  redirect rejection, and no silent mode fallback;
+- protected-resource discovery through `WWW-Authenticate resource_metadata`
+  and through the RFC 9728 well-known fallback;
+- authorization-server discovery through RFC 8414 and OpenID Connect
+  Discovery, including conflicting metadata;
+- PKCE metadata with `S256`, without `S256`, and with
+  `code_challenge_methods_supported` absent;
 - secure restart persistence without returning secrets through APIs or logs;
 - refresh before expiry, refresh-token rotation, concurrent refresh serialization, transient failure, `invalid_grant`, and revocation;
 - exact resource/origin/client/scope binding and cross-session isolation;

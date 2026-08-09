@@ -43,10 +43,12 @@ conformance, hardening, documentation
 
 **Area:** `examples/demo/tests/fixtures/`
 
-- [ ] Add an in-process authorization server fixture with protected-resource metadata, authorization-server metadata, authorization endpoint, token endpoint, optional registration endpoint, and revocation endpoint.
+- [ ] Add an in-process authorization server fixture with protected-resource metadata, RFC 8414 and OpenID Connect authorization-server metadata, authorization endpoint, token endpoint, optional registration endpoint, Client ID Metadata Document retrieval, and revocation endpoint.
+- [ ] Exercise protected-resource discovery through both `WWW-Authenticate resource_metadata` and the RFC 9728 well-known fallback.
+- [ ] Exercise CIMD as the preferred client mode, with dynamic registration as a backwards-compatibility mode and static preregistration as an operator-configured mode.
 - [ ] Support authorization code + PKCE, access-token expiry, refresh-token rotation, scope enforcement, resource binding, revocation, and configurable failure injection.
 - [ ] Add a Streamable HTTP MCP fixture that challenges unauthenticated clients and accepts fixture-issued Bearer tokens.
-- [ ] Add malicious fixture modes: issuer mismatch, cross-origin redirect, altered state, repeated callback, wrong resource, insufficient scope, oversized metadata, slow endpoint, malformed token response, and `invalid_grant`.
+- [ ] Add malicious fixture modes: issuer mismatch, conflicting RFC 8414/OIDC metadata, cross-origin redirect, altered state, repeated callback, wrong resource, insufficient scope, oversized metadata, slow endpoint, malformed token response, invalid CIMD URL/document/redirect binding, missing or unsupported PKCE metadata, and `invalid_grant`.
 - [ ] Ensure test fixtures never log fixture secrets by default.
 
 **Exit:** all OAuth lifecycle behavior can be tested offline and deterministically; third-party credentials are unnecessary for CI.
@@ -55,15 +57,18 @@ conformance, hardening, documentation
 
 **Area:** reference Credential Adapter OAuth module
 
-- [ ] Define typed models for protected-resource metadata, authorization-server metadata, client registration, authorization sessions, token sets, session bindings, and public session status.
-- [ ] Implement bounded metadata retrieval, redirect policy, HTTPS enforcement, issuer validation, and authorization-server selection.
-- [ ] Implement dynamic client registration and static client configuration through secret references.
+- [ ] Define typed models for protected-resource metadata, RFC 8414 and OpenID Connect authorization-server metadata, CIMD, dynamic client registration, authorization sessions, token sets, session bindings, and public session status.
+- [ ] Implement bounded protected-resource metadata retrieval, preferring `WWW-Authenticate resource_metadata` and falling back to RFC 9728 well-known discovery.
+- [ ] Implement RFC 8414 and OpenID Connect authorization-server discovery, redirect policy, HTTPS enforcement, issuer validation, conflict rejection, and authorization-server selection.
+- [ ] Require advertised `code_challenge_methods_supported` containing `S256`; refuse missing/unsupported metadata without inference or `plain` fallback.
+- [ ] Implement CIMD as a first-class mode when authorization-server metadata advertises `client_id_metadata_document_supported: true`, including exact HTTPS client-ID/document binding and redirect validation.
+- [ ] Implement dynamic client registration as an advertised backwards-compatibility mode and static client configuration through secret references; prohibit silent fallback between modes.
 - [ ] Implement authorization URL construction with resource indicators, requested scopes, random state, and PKCE S256.
 - [ ] Implement atomic, expiring, single-use authorization-session storage.
 - [ ] Implement callback validation and authorization-code exchange.
 - [ ] Implement token validation sufficient to enforce token type, expiry, granted scopes, issuer, client, and resource binding without requiring access tokens to be JWTs.
 - [ ] Define typed, redacted failures for discovery, registration, login, exchange, and binding errors.
-- [ ] Unit tests for every OAUTH-06 through OAUTH-23 requirement.
+- [ ] Unit tests for every OAUTH-06 through OAUTH-23 requirement, including all OAUTH-11 and OAUTH-15 lettered requirements.
 
 **Exit:** the library can create and complete a bound OAuth session against the local fixture without an MCP dispatch.
 
