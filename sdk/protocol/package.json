@@ -100,7 +100,7 @@
     "registry": "https://registry.npmjs.org/"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.13.0",
+    "@modelcontextprotocol/sdk": "1.30.0",
     "ajv": "^8.17.1",
     "http-message-signatures": "1.0.6",
     "jose": "^6.0.11",

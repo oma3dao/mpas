@@ -1,7 +1,7 @@
 import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
 
 export interface OAuthFetchPolicyOptions {
-  allowHttpLoopback?: boolean;
+  testOnlyAllowHttpLoopback?: boolean;
   bearerTokenResourceUrl?: string;
   fetch?: FetchLike;
   maxJsonResponseBytes?: number;
@@ -24,7 +24,7 @@ export function createOAuthFetchPolicy(options: OAuthFetchPolicyOptions = {}): F
 
   return async (input, init) => {
     const url = new URL(String(input));
-    if (!isAllowedUrl(url, options.allowHttpLoopback === true)) {
+    if (!isAllowedUrl(url, options.testOnlyAllowHttpLoopback === true)) {
       throw new OAuthFetchPolicyError("OAuth requests require HTTPS");
     }
     assertBearerTarget(init, url, options.bearerTokenResourceUrl);
@@ -45,7 +45,8 @@ export function createOAuthFetchPolicy(options: OAuthFetchPolicyOptions = {}): F
     if (response.status >= 300 && response.status < 400) {
       throw new OAuthFetchPolicyError("OAuth requests must not follow redirects");
     }
-    return boundJsonResponse(response, maxJsonResponseBytes);
+    await assertBoundedJsonResponse(response, maxJsonResponseBytes);
+    return response;
   };
 }
 
@@ -63,28 +64,23 @@ function assertBearerTarget(
   }
 }
 
-async function boundJsonResponse(response: Response, maxBytes: number): Promise<Response> {
+async function assertBoundedJsonResponse(response: Response, maxBytes: number): Promise<void> {
   const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
-  if (!contentType.includes("json")) return response;
+  if (!contentType.includes("json")) return;
 
   const declaredLength = Number(response.headers.get("content-length"));
   if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
     throw new OAuthFetchPolicyError("OAuth JSON response exceeds the size limit");
   }
 
-  const body = await response.arrayBuffer();
+  const body = await response.clone().arrayBuffer();
   if (body.byteLength > maxBytes) {
     throw new OAuthFetchPolicyError("OAuth JSON response exceeds the size limit");
   }
-  return new Response(body, {
-    status: response.status,
-    statusText: response.statusText,
-    headers: response.headers,
-  });
 }
 
 function isAllowedUrl(url: URL, allowHttpLoopback: boolean): boolean {
   if (url.protocol === "https:") return true;
   return allowHttpLoopback && url.protocol === "http:" &&
-    (url.hostname === "127.0.0.1" || url.hostname === "[::1]" || url.hostname === "localhost");
+    (url.hostname === "127.0.0.1" || url.hostname === "[::1]");
 }

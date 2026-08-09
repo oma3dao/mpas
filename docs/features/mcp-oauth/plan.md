@@ -82,6 +82,30 @@ SDK-provided, CA-provider responsibility, transport-policy responsibility, or a
 documented gap. The spike is disposable; its conformance cases move into the
 fixture suite.
 
+### Phase 0A requirement ownership
+
+The reviewed baseline is `@modelcontextprotocol/sdk` 1.30.0. SDK mechanisms do
+not waive the corresponding requirements in [spec.md](./spec.md).
+
+| Concern | Primary owner | Spike evidence / remaining work |
+| :--- | :--- | :--- |
+| Protected-resource challenge and RFC 9728 discovery | SDK + CA policy | The SDK implements challenge and fallback discovery. The CA policy must reject absent protected-resource metadata rather than accept the SDK's origin-root fallback as an exact issuer binding. |
+| RFC 8414/OIDC authorization-server discovery | SDK + CA validation/fetch policy | The SDK discovers path-bearing issuers but accepts mismatched declared issuers. The CA provider rejects absent resource metadata, absent issuer metadata, and non-exact issuer matches before authorization or persistence. |
+| PKCE S256 and authorization URL construction | SDK + CA validation | The SDK creates S256 PKCE and rejects metadata advertising only `plain`, but skips the check when `code_challenge_methods_supported` or all metadata is absent. The CA must require explicit S256 metadata. |
+| Static client information, CIMD, and deprecated DCR | SDK + CA policy | SDK supplies protocol mechanisms. CA configuration owns selection order, static precedence, fail-closed behavior, and CIMD publication. Dedicated CIMD/DCR cases remain. |
+| Authorization-code exchange and resource indicator | SDK | The fixture rejects exchange without the exact resource or verifier. The CA validates callback state, issuer, and session before completion. |
+| Token refresh and rotation | SDK + CA store | SDK supplies refresh requests. The CA owns encrypted persistence, single-flight refresh, atomic rotation, binding, invalidation, and crash recovery. |
+| Bearer authentication on Streamable HTTP | SDK + CA transport policy | The SDK authenticates the MCP lifecycle. The CA permits Bearer authorization only on the configured exact MCP resource URL. |
+| Browser and operator interaction | CA operator plane | Only an operator-executed login command may open a browser; agent paths return the command without executing it. |
+| HTTPS, redirect, response-size, and timeout limits | CA OAuth fetch policy | A fetch policy composed directly with SDK `auth` requires HTTPS, rejects redirects, bounds time and JSON size, and is deliberately not installed as the MCP transport fetch so it cannot terminate SSE or cap tool results. Numeric loopback HTTP is test-only. |
+| Application DID/resource/issuer/client/scope binding | CA session service | Persist and validate the complete tuple; tokens remain opaque. |
+| MPAS verification, approval, ledger boundary, and replay rules | Credential Adapter | OAuth never satisfies MPAS authorization. Preparation occurs only after policy satisfaction, with no automatic replay after possible transmission. |
+| Secret storage, redaction, audit, logout, and revocation | Credential Adapter | Deferred to the secure-store and operator slices. |
+
+**Decision:** use the official MCP SDK as the sole general-purpose OAuth
+implementation. The observed gaps are covered by narrow CA provider validation
+and an OAuth-only fetch policy; none currently justifies `oauth4webapi`.
+
 ## Phase 1: deterministic OAuth and protected MCP fixtures
 
 **Area:** `examples/demo/tests/fixtures/`

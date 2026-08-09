@@ -1,7 +1,7 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import {
+  auth,
   type OAuthClientProvider,
-  UnauthorizedError,
 } from "@modelcontextprotocol/sdk/client/auth.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type {
@@ -15,6 +15,7 @@ import {
   assertExactAuthorizationServerIssuer,
   OAuthIssuerMismatchError,
 } from "../../src/adapter/oauth-discovery.js";
+import { createOAuthFetchPolicy } from "../../src/adapter/oauth-fetch-policy.js";
 import {
   pkceS256,
   startOAuthProtectedMcpFixture,
@@ -32,6 +33,7 @@ class FixtureOAuthProvider implements OAuthClientProvider {
   authorizationUrl?: URL;
   savedVerifier?: string;
   savedTokens?: OAuthTokens;
+  savedDiscovery?: OAuthDiscoveryState;
 
   constructor(readonly redirectUrl: URL) {}
 
@@ -71,6 +73,11 @@ class FixtureOAuthProvider implements OAuthClientProvider {
 
   saveDiscoveryState(state: OAuthDiscoveryState): void {
     assertExactAuthorizationServerIssuer(state);
+    this.savedDiscovery = state;
+  }
+
+  discoveryState(): OAuthDiscoveryState | undefined {
+    return this.savedDiscovery;
   }
 
   codeVerifier(): string {
@@ -85,17 +92,18 @@ describe("official MCP SDK OAuth conformance spike", () => {
   it("discovers metadata, starts PKCE, exchanges with an exact resource, and authenticates MCP", async () => {
     fixture = await startOAuthProtectedMcpFixture();
     const provider = new FixtureOAuthProvider(new URL("http://127.0.0.1:49152/oauth/callback"));
-    const transport = new StreamableHTTPClientTransport(new URL(fixture.resourceUrl), {
-      authProvider: provider,
+    const oauthFetch = createOAuthFetchPolicy({
+      testOnlyAllowHttpLoopback: true,
+      bearerTokenResourceUrl: fixture.resourceUrl,
     });
-    const firstClient = new Client({ name: "oauth-spike", version: "1.0.0" });
 
-    await expect(firstClient.connect(transport)).rejects.toBeInstanceOf(UnauthorizedError);
+    await expect(auth(provider, { serverUrl: fixture.resourceUrl, fetchFn: oauthFetch }))
+      .resolves.toBe("REDIRECT");
     expect(provider.authorizationUrl).toBeDefined();
     expect(provider.savedVerifier).toBeDefined();
 
     const authorizationUrl = provider.authorizationUrl!;
-    expect(authorizationUrl.origin + authorizationUrl.pathname).toBe(`${fixture.issuer.replace("/issuer", "")}/authorize`);
+    expect(authorizationUrl.origin + authorizationUrl.pathname).toBe(`${fixture.origin}/authorize`);
     expect(authorizationUrl.searchParams.get("client_id")).toBe("fixture-public-client");
     expect(authorizationUrl.searchParams.get("redirect_uri")).toBe(provider.redirectUrl.toString());
     expect(authorizationUrl.searchParams.get("resource")).toBe(fixture.resourceUrl);
@@ -103,7 +111,11 @@ describe("official MCP SDK OAuth conformance spike", () => {
     expect(authorizationUrl.searchParams.get("code_challenge")).toBe(pkceS256(provider.savedVerifier!));
     expect(authorizationUrl.searchParams.get("state")).toBe(provider.state());
 
-    await transport.finishAuth("fixture-code");
+    await expect(auth(provider, {
+      serverUrl: fixture.resourceUrl,
+      authorizationCode: "fixture-code",
+      fetchFn: oauthFetch,
+    })).resolves.toBe("AUTHORIZED");
     expect(provider.savedTokens).toMatchObject({
       access_token: "fixture-access-token",
       refresh_token: "fixture-refresh-token",
@@ -125,25 +137,23 @@ describe("official MCP SDK OAuth conformance spike", () => {
       )).toBe(true);
     } finally {
       await authenticatedClient.close().catch(() => {});
-      await firstClient.close().catch(() => {});
     }
   });
 
-  it("rejects authorization-server metadata without PKCE S256", async () => {
-    fixture = await startOAuthProtectedMcpFixture({ codeChallengeMethodsSupported: ["plain"] });
+  it.each([
+    { name: "advertising only plain", options: { codeChallengeMethodsSupported: ["plain"] } },
+    { name: "omitting PKCE metadata", options: { omitCodeChallengeMethodsSupported: true } },
+  ])("rejects authorization-server metadata $name", async ({ options }) => {
+    fixture = await startOAuthProtectedMcpFixture(options);
     const provider = new FixtureOAuthProvider(new URL("http://127.0.0.1:49152/oauth/callback"));
-    const transport = new StreamableHTTPClientTransport(new URL(fixture.resourceUrl), {
-      authProvider: provider,
+    const oauthFetch = createOAuthFetchPolicy({
+      testOnlyAllowHttpLoopback: true,
+      bearerTokenResourceUrl: fixture.resourceUrl,
     });
-    const client = new Client({ name: "oauth-spike", version: "1.0.0" });
 
-    try {
-      await expect(client.connect(transport)).rejects.toThrow();
-      expect(provider.authorizationUrl).toBeUndefined();
-      expect(provider.savedVerifier).toBeUndefined();
-    } finally {
-      await client.close().catch(() => {});
-    }
+    await expect(auth(provider, { serverUrl: fixture.resourceUrl, fetchFn: oauthFetch })).rejects.toThrow();
+    expect(provider.authorizationUrl).toBeUndefined();
+    expect(provider.savedVerifier).toBeUndefined();
   });
 
   it("rejects an issuer mismatch through the CA provider validation wrapper", async () => {
@@ -151,17 +161,14 @@ describe("official MCP SDK OAuth conformance spike", () => {
       authorizationServerIssuer: "https://attacker.invalid/issuer",
     });
     const provider = new FixtureOAuthProvider(new URL("http://127.0.0.1:49152/oauth/callback"));
-    const transport = new StreamableHTTPClientTransport(new URL(fixture.resourceUrl), {
-      authProvider: provider,
+    const oauthFetch = createOAuthFetchPolicy({
+      testOnlyAllowHttpLoopback: true,
+      bearerTokenResourceUrl: fixture.resourceUrl,
     });
-    const client = new Client({ name: "oauth-spike", version: "1.0.0" });
 
-    try {
-      await expect(client.connect(transport)).rejects.toBeInstanceOf(OAuthIssuerMismatchError);
-      expect(provider.authorizationUrl).toBeUndefined();
-      expect(provider.savedVerifier).toBeUndefined();
-    } finally {
-      await client.close().catch(() => {});
-    }
+    await expect(auth(provider, { serverUrl: fixture.resourceUrl, fetchFn: oauthFetch }))
+      .rejects.toBeInstanceOf(OAuthIssuerMismatchError);
+    expect(provider.authorizationUrl).toBeUndefined();
+    expect(provider.savedVerifier).toBeUndefined();
   });
 });

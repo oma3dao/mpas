@@ -16,7 +16,7 @@ describe("OAuth fetch policy", () => {
 
   it("allows HTTP loopback only when explicitly enabled for local fixtures", async () => {
     const fetchFn = vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 200 }));
-    const policy = createOAuthFetchPolicy({ fetch: fetchFn, allowHttpLoopback: true });
+    const policy = createOAuthFetchPolicy({ fetch: fetchFn, testOnlyAllowHttpLoopback: true });
 
     await expect(policy("http://127.0.0.1:49152/mcp")).resolves.toMatchObject({ status: 200 });
   });

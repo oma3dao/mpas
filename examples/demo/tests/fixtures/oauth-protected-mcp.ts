@@ -2,6 +2,7 @@ import http from "node:http";
 import { createHash } from "node:crypto";
 
 export interface OAuthProtectedMcpFixture {
+  origin: string;
   resourceUrl: string;
   issuer: string;
   requests: Array<{ method: string; path: string; authorization?: string }>;
@@ -12,6 +13,7 @@ export interface OAuthProtectedMcpFixture {
 export interface OAuthProtectedMcpFixtureOptions {
   authorizationServerIssuer?: string;
   codeChallengeMethodsSupported?: string[];
+  omitCodeChallengeMethodsSupported?: boolean;
 }
 
 export async function startOAuthProtectedMcpFixture(
@@ -43,7 +45,9 @@ export async function startOAuthProtectedMcpFixture(
         issuer: options.authorizationServerIssuer ?? `${origin}/issuer`,
         authorization_endpoint: `${origin}/authorize`,
         token_endpoint: `${origin}/token`,
-        code_challenge_methods_supported: options.codeChallengeMethodsSupported ?? ["S256"],
+        ...(options.omitCodeChallengeMethodsSupported ? {} : {
+          code_challenge_methods_supported: options.codeChallengeMethodsSupported ?? ["S256"],
+        }),
         response_types_supported: ["code"],
         grant_types_supported: ["authorization_code", "refresh_token"],
         token_endpoint_auth_methods_supported: ["none"],
@@ -121,6 +125,7 @@ export async function startOAuthProtectedMcpFixture(
   origin = `http://127.0.0.1:${address.port}`;
 
   return {
+    origin,
     resourceUrl: `${origin}/mcp`,
     issuer: `${origin}/issuer`,
     requests,
