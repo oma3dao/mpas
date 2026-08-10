@@ -15,14 +15,13 @@ function service(): OAuthOperatorService {
   return {
     login: vi.fn(async (request) => ({
       status: "oauth_login_required" as const,
-      deployment: request.deployment,
-      session: request.session,
+      applicationDid: request.applicationDid,
+      resourceUrl: request.resourceUrl,
       operatorCommand: oauthLoginCommand(request),
     })),
     status: vi.fn(async (request) => ({
       status: "authorized" as const,
-      deployment: request.deployment,
-      session: request.session,
+      applicationDid: request.applicationDid,
       issuer: "https://auth.example",
       resource: "https://mcp.example/tools",
       clientMode: "cimd" as const,
@@ -32,27 +31,27 @@ function service(): OAuthOperatorService {
     })),
     logout: vi.fn(async (request) => ({
       status: "logged_out" as const,
-      deployment: request.deployment,
-      session: request.session,
+      applicationDid: request.applicationDid,
       localCredentialsDeleted: true,
       remoteRevocation: "unavailable" as const,
     })),
   };
 }
 
-const resolveOAuthDeployment = vi.fn(async (_configDir: string, name: string) => ({
-  name,
-  applicationDid: "did:web:netlify.example",
-  resourceUrl: "https://mcp.netlify.com/mcp",
+const applicationDid = "did:web:netlify.example";
+const resourceUrl = "https://mcp.netlify.com/mcp";
+const resolveOAuthDeployment = vi.fn(async (_configDir: string, selectedDid: string) => ({
+  applicationDid: selectedDid,
+  resourceUrl,
 }));
 
 describe("OAuth operator CLI", () => {
-  it("requires deployment and session selectors", async () => {
+  it("requires an Application DID selector", async () => {
     const stdout = new MemoryWriter();
     const stderr = new MemoryWriter();
     const result = await runCli(["oauth", "status"], { stdout, stderr });
     expect(result.exitCode).toBe(2);
-    expect(stderr.text).toContain("--deployment <deployment-name> and --session <session-name>");
+    expect(stderr.text).toContain("--application-did <did>");
   });
 
   it("delegates operator login and honors print-only mode", async () => {
@@ -60,13 +59,13 @@ describe("OAuth operator CLI", () => {
     const stdout = new MemoryWriter();
     const stderr = new MemoryWriter();
     const result = await runCli([
-      "oauth", "login", "--deployment", "netlify", "--session", "primary", "--no-browser",
+      "oauth", "login", "--application-did", applicationDid, "--no-browser",
     ], { stdout, stderr }, { oauthOperator, resolveOAuthDeployment });
 
     expect(result.exitCode).toBe(0);
     expect(oauthOperator.login).toHaveBeenCalledWith({
-      deployment: "netlify",
-      session: "primary",
+      applicationDid,
+      resourceUrl,
       openBrowser: false,
     });
     expect(JSON.parse(stdout.text)).toMatchObject({ status: "oauth_login_required" });
@@ -77,27 +76,15 @@ describe("OAuth operator CLI", () => {
     const stdout = new MemoryWriter();
     const stderr = new MemoryWriter();
     const result = await runCli([
-      "oauth", command, "--deployment", "netlify", "--session", "primary",
+      "oauth", command, "--application-did", applicationDid,
     ], { stdout, stderr }, { oauthOperator, resolveOAuthDeployment });
     expect(result.exitCode).toBe(0);
-    expect(oauthOperator[command]).toHaveBeenCalledWith({ deployment: "netlify", session: "primary" });
+    expect(oauthOperator[command]).toHaveBeenCalledWith({ applicationDid, resourceUrl });
     expect(JSON.parse(stdout.text)).not.toHaveProperty("accessToken");
   });
 
   it("shell-quotes the exact operator command", () => {
-    expect(oauthLoginCommand({ deployment: "tenant one", session: "user's session" }))
-      .toBe(`mpas oauth login --deployment 'tenant one' --session 'user'"'"'s session'`);
-  });
-
-  it("rejects unsafe session aliases before service delegation", async () => {
-    const oauthOperator = service();
-    const stdout = new MemoryWriter();
-    const stderr = new MemoryWriter();
-    const result = await runCli([
-      "oauth", "status", "--deployment", "netlify", "--session", "../other-user",
-    ], { stdout, stderr }, { oauthOperator, resolveOAuthDeployment });
-    expect(result.exitCode).toBe(1);
-    expect(stderr.text).toContain("OAuth session name must be 1-64 characters");
-    expect(oauthOperator.status).not.toHaveBeenCalled();
+    expect(oauthLoginCommand({ applicationDid, resourceUrl }))
+      .toBe(`mpas oauth login --application-did '${applicationDid}'`);
   });
 });

@@ -1,6 +1,6 @@
 export interface OAuthOperatorRequest {
-  deployment: string;
-  session: string;
+  applicationDid: string;
+  resourceUrl: string;
 }
 
 export interface OAuthLoginRequest extends OAuthOperatorRequest {
@@ -10,14 +10,13 @@ export interface OAuthLoginRequest extends OAuthOperatorRequest {
 export type OAuthOperatorResult =
   | {
       status: "oauth_login_required" | "oauth_operator_service_unavailable";
-      deployment: string;
-      session: string;
+      applicationDid: string;
+      resourceUrl: string;
       operatorCommand: string;
     }
   | {
       status: "authorized";
-      deployment: string;
-      session: string;
+      applicationDid: string;
       issuer: string;
       resource: string;
       clientMode: "static" | "cimd" | "dynamic";
@@ -28,8 +27,7 @@ export type OAuthOperatorResult =
     }
   | {
       status: "logged_out";
-      deployment: string;
-      session: string;
+      applicationDid: string;
       localCredentialsDeleted: boolean;
       remoteRevocation: "succeeded" | "unavailable" | "failed";
     };
@@ -41,31 +39,24 @@ export interface OAuthOperatorService {
 }
 
 export interface OAuthDeploymentSelection {
-  name: string;
   applicationDid: string;
   resourceUrl: string;
 }
 
 export type ResolveOAuthDeployment = (
   configDir: string,
-  deploymentName: string,
+  applicationDid: string,
 ) => Promise<OAuthDeploymentSelection>;
 
-export function validateOAuthSessionName(sessionName: string): void {
-  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(sessionName)) {
-    throw new Error("OAuth session name must be 1-64 characters using letters, numbers, '.', '_', or '-'");
-  }
-}
-
 export function oauthLoginCommand(request: OAuthOperatorRequest): string {
-  return `mpas oauth login --deployment ${shellQuote(request.deployment)} --session ${shellQuote(request.session)}`;
+  return `mpas oauth login --application-did ${shellQuote(request.applicationDid)}`;
 }
 
 export function unavailableOAuthOperatorService(): OAuthOperatorService {
   const unavailable = async (request: OAuthOperatorRequest): Promise<OAuthOperatorResult> => ({
     status: "oauth_operator_service_unavailable",
-    deployment: request.deployment,
-    session: request.session,
+    applicationDid: request.applicationDid,
+    resourceUrl: request.resourceUrl,
     operatorCommand: oauthLoginCommand(request),
   });
   return { login: unavailable, status: unavailable, logout: unavailable };

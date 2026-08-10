@@ -20,7 +20,6 @@ import {
   type OAuthOperatorService,
   type ResolveOAuthDeployment,
   unavailableOAuthOperatorService,
-  validateOAuthSessionName,
 } from "../adapter/oauth-operator.js";
 
 export interface CliIo {
@@ -50,8 +49,7 @@ interface ParsedOptions {
   url?: string;
   pluginDir?: string;
   value?: string;
-  deployment?: string;
-  session?: string;
+  applicationDid?: string;
   noBrowser?: boolean;
 }
 
@@ -128,15 +126,14 @@ export async function runCli(
     }
 
     if (domain === "oauth" && ["login", "status", "logout"].includes(command ?? "")) {
-      if (!options.deployment || !options.session) {
-        io.stderr.write("OAuth commands require --deployment <deployment-name> and --session <session-name>\n");
+      if (!options.applicationDid) {
+        io.stderr.write("OAuth commands require --application-did <did>\n");
         return { exitCode: 2 };
       }
-      validateOAuthSessionName(options.session);
       const resolveDeployment = dependencies.resolveOAuthDeployment ?? resolveOAuthDeployment;
-      await resolveDeployment(options.configDir ?? defaultConfigDir(), options.deployment);
+      const selection = await resolveDeployment(options.configDir ?? defaultConfigDir(), options.applicationDid);
       const service = dependencies.oauthOperator ?? unavailableOAuthOperatorService();
-      const request = { deployment: options.deployment, session: options.session };
+      const request = selection;
       const response = command === "login"
         ? await service.login({ ...request, openBrowser: options.noBrowser !== true })
         : command === "status"
@@ -668,10 +665,8 @@ function parseArgs(args: string[]): { positionals: string[]; options: ParsedOpti
       options.pluginDir = args[++index];
     } else if (arg === "--value") {
       options.value = args[++index];
-    } else if (arg === "--deployment") {
-      options.deployment = args[++index];
-    } else if (arg === "--session") {
-      options.session = args[++index];
+    } else if (arg === "--application-did") {
+      options.applicationDid = args[++index];
     } else if (arg === "--no-browser") {
       options.noBrowser = true;
     } else {
@@ -700,9 +695,9 @@ function usage(): string {
     "  mpas plugin list [--plugin-dir <dir>]",
     "  mpas credential set <handle> [--credential-dir <dir>] [--value <secret>]",
     "  mpas credential list [--credential-dir <dir>]",
-    "  mpas oauth login --deployment <deployment-name> --session <session-name> [--no-browser] [--config-dir <dir>]",
-    "  mpas oauth status --deployment <deployment-name> --session <session-name> [--config-dir <dir>]",
-    "  mpas oauth logout --deployment <deployment-name> --session <session-name> [--config-dir <dir>]",
+    "  mpas oauth login --application-did <did> [--no-browser] [--config-dir <dir>]",
+    "  mpas oauth status --application-did <did> [--config-dir <dir>]",
+    "  mpas oauth logout --application-did <did> [--config-dir <dir>]",
     "  mpas config validate <name> [--config-dir <dir>] [--credential-dir <dir>]",
     "  mpas trace inspect <file>",
   ].join("\n");
@@ -729,16 +724,15 @@ function defaultKeyDir(): string {
   return process.env.MPAS_KEY_DIR ?? join(homedir(), ".mpas", "keys");
 }
 
-async function resolveOAuthDeployment(configDir: string, deploymentName: string) {
+async function resolveOAuthDeployment(configDir: string, applicationDid: string) {
   const loaded = await loadDeploymentConfigs(configDir);
   if (!loaded.ok) throw new Error(loaded.error.message);
-  const deployment = loaded.configs.find(({ config }) => config.name === deploymentName);
-  if (!deployment) throw new Error(`Unknown OAuth deployment: ${deploymentName}`);
+  const deployment = loaded.configsByApplicationDid.get(applicationDid as Did);
+  if (!deployment) throw new Error(`Unknown OAuth application DID: ${applicationDid}`);
   if (deployment.config.executionTarget.type !== "mcp.http") {
-    throw new Error(`OAuth deployment must use an mcp.http execution target: ${deploymentName}`);
+    throw new Error(`OAuth application must use an mcp.http execution target: ${applicationDid}`);
   }
   return {
-    name: deployment.config.name,
     applicationDid: deployment.config.target.applicationDid,
     resourceUrl: deployment.config.executionTarget.url,
   };
