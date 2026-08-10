@@ -4,6 +4,10 @@ Local MPAS (Multi-Party Action Security) services — Credential Adapter daemon,
 
 MPAS is a protocol for multi-party approval of AI agent actions. Instead of giving agents direct access to privileged APIs (GitHub, cloud providers, databases), MPAS routes actions through a Credential Adapter that enforces policy-based approval workflows before execution.
 
+Credential Adapter operators should start with the
+[Credential Adapter operator guide](guides/credential-adapter/README.md), which
+covers the adapter trust boundary, commands, and managed OAuth status.
+
 ## Specifications
 
 For the full protocol design, start with the base specification:

@@ -16,6 +16,12 @@ import { loadPlugin, validatePayloadAgainstPlugin } from "../core/plugin-loader.
 import { parseActionPackage, verifyActionPackage } from "../core/verification.js";
 import { generateEd25519Key, didJwkToJwk, isDidJwk } from "../core/did-jwk.js";
 import type { Did } from "../core/types.js";
+import {
+  type OAuthOperatorService,
+  type ResolveOAuthDeployment,
+  resolveOAuthApplication,
+  unavailableOAuthOperatorService,
+} from "../adapter/oauth-operator.js";
 
 export interface CliIo {
   stdout: Pick<typeof process.stdout, "write">;
@@ -44,6 +50,13 @@ interface ParsedOptions {
   url?: string;
   pluginDir?: string;
   value?: string;
+  applicationDid?: string;
+  noBrowser?: boolean;
+}
+
+export interface CliDependencies {
+  oauthOperator?: OAuthOperatorService;
+  resolveOAuthDeployment?: ResolveOAuthDeployment;
 }
 
 const defaultIo: CliIo = {
@@ -51,7 +64,11 @@ const defaultIo: CliIo = {
   stderr: process.stderr,
 };
 
-export async function runCli(args = process.argv.slice(2), io: CliIo = defaultIo): Promise<CliResult> {
+export async function runCli(
+  args = process.argv.slice(2),
+  io: CliIo = defaultIo,
+  dependencies: CliDependencies = {},
+): Promise<CliResult> {
   const { positionals, options } = parseArgs(args);
   const [domain, command, subject] = positionals;
 
@@ -107,6 +124,24 @@ export async function runCli(args = process.argv.slice(2), io: CliIo = defaultIo
       });
       io.stdout.write(`${JSON.stringify(status, null, 2)}\n`);
       return { exitCode: 0 };
+    }
+
+    if (domain === "oauth" && ["login", "status", "logout"].includes(command ?? "")) {
+      if (!options.applicationDid) {
+        io.stderr.write("OAuth commands require --application-did <did>\n");
+        return { exitCode: 2 };
+      }
+      const resolveDeployment = dependencies.resolveOAuthDeployment ?? resolveOAuthApplication;
+      const selection = await resolveDeployment(options.configDir ?? defaultConfigDir(), options.applicationDid);
+      const service = dependencies.oauthOperator ?? unavailableOAuthOperatorService();
+      const request = selection;
+      const response = command === "login"
+        ? await service.login({ ...request, openBrowser: options.noBrowser !== true })
+        : command === "status"
+          ? await service.status(request)
+          : await service.logout(request);
+      io.stdout.write(`${JSON.stringify(response, null, 2)}\n`);
+      return { exitCode: response.status === "oauth_operator_service_unavailable" ? 1 : 0 };
     }
 
     if (domain === "test" && command === "submit" && subject) {
@@ -631,6 +666,10 @@ function parseArgs(args: string[]): { positionals: string[]; options: ParsedOpti
       options.pluginDir = args[++index];
     } else if (arg === "--value") {
       options.value = args[++index];
+    } else if (arg === "--application-did") {
+      options.applicationDid = args[++index];
+    } else if (arg === "--no-browser") {
+      options.noBrowser = true;
     } else {
       positionals.push(arg);
     }
@@ -657,6 +696,9 @@ function usage(): string {
     "  mpas plugin list [--plugin-dir <dir>]",
     "  mpas credential set <handle> [--credential-dir <dir>] [--value <secret>]",
     "  mpas credential list [--credential-dir <dir>]",
+    "  mpas oauth login --application-did <did> [--no-browser] [--config-dir <dir>]",
+    "  mpas oauth status --application-did <did> [--config-dir <dir>]",
+    "  mpas oauth logout --application-did <did> [--config-dir <dir>]",
     "  mpas config validate <name> [--config-dir <dir>] [--credential-dir <dir>]",
     "  mpas trace inspect <file>",
   ].join("\n");

@@ -157,6 +157,7 @@ Each example in `examples/` is self-contained with its own build tooling. The de
 - Specifications: `specs/`
 - Feature documentation: `docs/features/`
 - Demo setup guide: `examples/demo/guides/`
+- Credential Adapter operator guide: [`examples/demo/guides/credential-adapter/`](examples/demo/guides/credential-adapter/README.md)
 - Application registry: `application-registry/`
 - Application plugins and bridges: [oma3dao/mpas-applications](https://github.com/oma3dao/mpas-applications)
 
