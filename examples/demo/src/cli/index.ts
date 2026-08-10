@@ -19,6 +19,7 @@ import type { Did } from "../core/types.js";
 import {
   type OAuthOperatorService,
   type ResolveOAuthDeployment,
+  resolveOAuthApplication,
   unavailableOAuthOperatorService,
 } from "../adapter/oauth-operator.js";
 
@@ -130,7 +131,7 @@ export async function runCli(
         io.stderr.write("OAuth commands require --application-did <did>\n");
         return { exitCode: 2 };
       }
-      const resolveDeployment = dependencies.resolveOAuthDeployment ?? resolveOAuthDeployment;
+      const resolveDeployment = dependencies.resolveOAuthDeployment ?? resolveOAuthApplication;
       const selection = await resolveDeployment(options.configDir ?? defaultConfigDir(), options.applicationDid);
       const service = dependencies.oauthOperator ?? unavailableOAuthOperatorService();
       const request = selection;
@@ -722,20 +723,6 @@ function defaultPluginDir(): string {
 
 function defaultKeyDir(): string {
   return process.env.MPAS_KEY_DIR ?? join(homedir(), ".mpas", "keys");
-}
-
-async function resolveOAuthDeployment(configDir: string, applicationDid: string) {
-  const loaded = await loadDeploymentConfigs(configDir);
-  if (!loaded.ok) throw new Error(loaded.error.message);
-  const deployment = loaded.configsByApplicationDid.get(applicationDid as Did);
-  if (!deployment) throw new Error(`Unknown OAuth application DID: ${applicationDid}`);
-  if (deployment.config.executionTarget.type !== "mcp.http") {
-    throw new Error(`OAuth application must use an mcp.http execution target: ${applicationDid}`);
-  }
-  return {
-    applicationDid: deployment.config.target.applicationDid,
-    resourceUrl: deployment.config.executionTarget.url,
-  };
 }
 
 async function readStdin(): Promise<string> {

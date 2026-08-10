@@ -29,6 +29,8 @@ initiate consent.
 config loaded from `--config-dir` (by default `$MPAS_HOME/config`). The config
 loader already requires it to be unique. OAuth commands reject unknown
 Application DIDs and applications whose execution target is not `mcp.http`.
+Selector resolution reads only the deployment envelope fields needed for OAuth;
+it does not load plugin artifacts or trigger plugin trust prompts.
 
 The first implementation manages one OAuth grant per Application DID. Its
 security binding also includes the exact MCP resource, issuer, client, and

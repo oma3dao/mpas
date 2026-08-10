@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
+import { mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { OAuthOperatorService } from "../../src/adapter/oauth-operator.js";
-import { oauthLoginCommand } from "../../src/adapter/oauth-operator.js";
+import { oauthLoginCommand, resolveOAuthApplication } from "../../src/adapter/oauth-operator.js";
 import { runCli } from "../../src/cli/index.js";
 
 class MemoryWriter {
@@ -86,5 +89,44 @@ describe("OAuth operator CLI", () => {
   it("shell-quotes the exact operator command", () => {
     expect(oauthLoginCommand({ applicationDid, resourceUrl }))
       .toBe(`mpas oauth login --application-did '${applicationDid}'`);
+  });
+
+  it("resolves one HTTP application without loading its plugin", async () => {
+    const configDir = await mkdtemp(join(tmpdir(), "mpas-oauth-config-"));
+    await writeFile(join(configDir, "netlify.json"), JSON.stringify({
+      type: "MpasAdapterDeploymentConfig",
+      target: { applicationDid },
+      executionTarget: { type: "mcp.http", url: resourceUrl },
+      plugin: { path: "missing-plugin.json" },
+    }));
+
+    await expect(resolveOAuthApplication(configDir, applicationDid)).resolves.toEqual({
+      applicationDid,
+      resourceUrl,
+    });
+  });
+
+  it("rejects non-HTTP and duplicate application matches", async () => {
+    const configDir = await mkdtemp(join(tmpdir(), "mpas-oauth-config-"));
+    await writeFile(join(configDir, "one.json"), JSON.stringify({
+      type: "MpasAdapterDeploymentConfig",
+      target: { applicationDid },
+      executionTarget: { type: "mcp.stdio", command: "node" },
+    }));
+    await expect(resolveOAuthApplication(configDir, applicationDid))
+      .rejects.toThrow("must use an mcp.http execution target");
+
+    await writeFile(join(configDir, "one.json"), JSON.stringify({
+      type: "MpasAdapterDeploymentConfig",
+      target: { applicationDid },
+      executionTarget: { type: "mcp.http", url: resourceUrl },
+    }));
+    await writeFile(join(configDir, "two.json"), JSON.stringify({
+      type: "MpasAdapterDeploymentConfig",
+      target: { applicationDid },
+      executionTarget: { type: "mcp.http", url: "https://other.example/mcp" },
+    }));
+    await expect(resolveOAuthApplication(configDir, applicationDid))
+      .rejects.toThrow("Multiple deployment configs");
   });
 });
