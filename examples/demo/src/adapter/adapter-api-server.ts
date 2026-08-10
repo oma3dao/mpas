@@ -26,6 +26,7 @@ import {
 import { DispatchLedger } from "./dispatch-ledger.js";
 import type { LoadedDeploymentConfig } from "./config-loader.js";
 import type { FileCredentialProvider } from "./credential-provider.js";
+import { loadFileOAuthClientProvider, oauthLoginCommand } from "./oauth-operator.js";
 import { prepareMcpHttp } from "./dispatch/mcp-http.js";
 import { prepareMcpStdio, type DispatchPrepareResult, type McpDispatchResult } from "./dispatch/mcp-stdio.js";
 
@@ -288,9 +289,13 @@ export function createAdapterApiServer(options: HttpEndpointOptions): FastifyIns
     // Authorized. Fallible, side-effect-free preparation happens BEFORE the ledger
     // write (Action Lifecycle addition A): credential resolution then target launch.
     // Failures here are stateless rejections — nothing recorded, no receipt.
+    const usesManagedOAuth = loadedConfig.config.executionTarget.type === "mcp.http" &&
+      loadedConfig.config.executionTarget.auth?.type === "oauth2";
     const credentialHandle = loadedConfig.config.credentialBindings[0]?.credentialHandle;
-    const credential = credentialHandle ? await options.credentialProvider.getCredential(credentialHandle) : undefined;
-    if (!credential?.ok) {
+    const credential = usesManagedOAuth
+      ? undefined
+      : credentialHandle ? await options.credentialProvider.getCredential(credentialHandle) : undefined;
+    if (!usesManagedOAuth && !credential?.ok) {
       trace.emit("dispatch", { actionId, result: "rejected", code: credential?.error.code ?? "CREDENTIAL_NOT_FOUND" });
       return actionResponse(options, {
         result: "rejected",
@@ -302,7 +307,7 @@ export function createAdapterApiServer(options: HttpEndpointOptions): FastifyIns
       });
     }
 
-    const prepared = await prepareTarget(loadedConfig, credential.value);
+    const prepared = await prepareTarget(loadedConfig, credential?.ok ? credential.value : undefined);
     if (!prepared.ok) {
       trace.emit("dispatch", { actionId, result: "rejected", code: prepared.error.code, reason: "target_prepare_failed" });
       return actionResponse(options, {
@@ -407,11 +412,37 @@ export function classifyDispatch(dispatchResult: McpDispatchResult): {
   }
 }
 
-async function prepareTarget(loadedConfig: LoadedDeploymentConfig, credential: string): Promise<DispatchPrepareResult> {
+async function prepareTarget(loadedConfig: LoadedDeploymentConfig, credential: string | undefined): Promise<DispatchPrepareResult> {
   const protocolVersion = loadedConfig.plugin.executionProfile.protocolVersion;
-  return loadedConfig.config.executionTarget.type === "mcp.http"
-    ? prepareMcpHttp(loadedConfig.config.executionTarget, credential, protocolVersion)
-    : prepareMcpStdio(loadedConfig.config.executionTarget, credential, protocolVersion);
+  if (loadedConfig.config.executionTarget.type === "mcp.http") {
+    const authProvider = loadedConfig.config.executionTarget.auth?.type === "oauth2"
+      ? await loadFileOAuthClientProvider(
+          loadedConfig.config.executionTarget.auth.session,
+          loadedConfig.config.credentialBindings[0].credentialHandle,
+          loadedConfig.config.target.applicationDid,
+          loadedConfig.config.executionTarget.url,
+        )
+      : undefined;
+    if (loadedConfig.config.executionTarget.auth?.type === "oauth2" && !authProvider) {
+      return {
+        ok: false,
+        error: {
+          code: "TARGET_UNAVAILABLE",
+          message: `OAuth login required. Run ${oauthLoginCommand({
+            applicationDid: loadedConfig.config.target.applicationDid,
+            resourceUrl: loadedConfig.config.executionTarget.url,
+            session: loadedConfig.config.executionTarget.auth.session,
+            credentialHandle: loadedConfig.config.credentialBindings[0].credentialHandle,
+          })}.`,
+        },
+      };
+    }
+    return prepareMcpHttp(loadedConfig.config.executionTarget, credential, protocolVersion, authProvider);
+  }
+  if (credential === undefined) {
+    return { ok: false, error: { code: "TARGET_UNAVAILABLE", message: "No credential binding configured." } };
+  }
+  return prepareMcpStdio(loadedConfig.config.executionTarget, credential, protocolVersion);
 }
 
 export function policyFromLoadedConfig(loadedConfig: LoadedDeploymentConfig): PolicyConfig {

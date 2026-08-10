@@ -321,7 +321,17 @@ async function loadDeploymentConfigFile(
   }
 
   const config = parsed as unknown as DeploymentConfig;
-
+  const oauthAuth = config.executionTarget.type === "mcp.http" && config.executionTarget.auth?.type === "oauth2"
+    ? config.executionTarget.auth
+    : undefined;
+  const usesManagedOAuth = oauthAuth !== undefined;
+  if (oauthAuth && !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(oauthAuth.session ?? "")) {
+    return loadError(
+      "CONFIG_SCHEMA_INVALID",
+      "executionTarget.auth.session must identify the configured OAuth token session.",
+      filePath,
+    );
+  }
   const policyValidation = validatePolicyConfig(config.policy);
   if (!policyValidation.ok) {
     return loadError("CONFIG_SCHEMA_INVALID", `Policy does not conform to the MPAS JSON Verifier Policy Profile: ${policyValidation.message}`, filePath);

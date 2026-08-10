@@ -45,12 +45,24 @@ export async function startOAuthProtectedMcpFixture(
         issuer: options.authorizationServerIssuer ?? `${origin}/issuer`,
         authorization_endpoint: `${origin}/authorize`,
         token_endpoint: `${origin}/token`,
+        registration_endpoint: `${origin}/register`,
         ...(options.omitCodeChallengeMethodsSupported ? {} : {
           code_challenge_methods_supported: options.codeChallengeMethodsSupported ?? ["S256"],
         }),
         response_types_supported: ["code"],
         grant_types_supported: ["authorization_code", "refresh_token"],
         token_endpoint_auth_methods_supported: ["none"],
+      });
+    }
+
+    if (path === "/register" && request.method === "POST") {
+      return readBody(request, (body) => {
+        const metadata = JSON.parse(body);
+        return json(response, 201, {
+          ...metadata,
+          client_id: "fixture-dynamic-client",
+          client_id_issued_at: Math.floor(Date.now() / 1000),
+        });
       });
     }
 

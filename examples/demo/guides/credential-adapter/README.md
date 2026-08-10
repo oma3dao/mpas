@@ -32,6 +32,11 @@ Application DIDs and applications whose execution target is not `mcp.http`.
 Selector resolution reads only the deployment envelope fields needed for OAuth;
 it does not load plugin artifacts or trigger plugin trust prompts.
 
+The deployment's `executionTarget.auth.session` names the logical OAuth session.
+Its `credentialBindings[0].credentialHandle` is the operator-controlled storage
+pointer. The CLI and adapter resolve that handle to
+`~/.mpas/credentials/<handle>.json`; the MCP server does not choose it.
+
 The first implementation manages one OAuth grant per Application DID. Its
 security binding also includes the exact MCP resource, issuer, client, and
 scopes resolved by the secure provider. A future multi-account design may add an
@@ -39,12 +44,18 @@ optional alias, but operators do not choose or persist a session number today.
 
 ## Current managed OAuth status
 
-The OAuth command surface and redacted operator-service contract are present,
-but the secure OAuth session provider, callback listener, encrypted token store,
-refresh lifecycle, and remote revocation are not connected yet. Until that
-provider is installed, the commands fail closed with
-`oauth_operator_service_unavailable`; they do not create plaintext token files
-or open a browser.
+The demo CLI connects the OAuth command surface to a loopback callback listener
+and the MCP SDK authorization flow. `oauth login` opens the operator's browser
+(unless `--no-browser` is used), completes authorization, and stores the grant
+under `~/.mpas/credentials/` using the deployment's credential handle. The
+credential files use restrictive mode `0600`
+permissions and are intended for local development and interoperability testing.
+Production deployments should replace this file-backed provider with an
+OS-managed or encrypted credential store.
+
+The adapter reuses the stored grant for authenticated MCP HTTP dispatch and the
+SDK refresh lifecycle. `oauth logout` deletes the local grant; remote revocation
+is not currently available.
 
 The exact operator command is safe to show in an `oauth_login_required` or
 `oauth_reauthorization_required` result. Tokens, client secrets, authorization
@@ -58,8 +69,7 @@ codes, PKCE material, cookies, and callback query strings must never be printed.
   as an MPAS Approval and never bypasses Action verification or policy.
 - `status` output is deliberately redacted to issuer, exact resource, client
   mode, scope names, expiry/refreshability, and reauthorization state.
-- `logout` must remove local credentials even when remote revocation is
-  unavailable. The connected secure provider will implement that lifecycle.
+- `logout` removes local credentials even when remote revocation is unavailable.
 
 ## Related documentation
 
