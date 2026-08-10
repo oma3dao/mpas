@@ -414,13 +414,6 @@ strings are never printed.
 
 `logout` removes local credentials even when remote revocation is unavailable.
 
-> **Current implementation status:** The OAuth command surface is present, but
-> the secure OAuth session provider, callback listener, encrypted token store,
-> refresh lifecycle, and remote revocation are not fully connected yet. Until
-> that provider is installed, commands fail closed with
-> `oauth_operator_service_unavailable` — they do not create plaintext token
-> files or open a browser.
-
 ---
 
 ## 9. Security boundary

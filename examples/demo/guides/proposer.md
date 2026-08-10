@@ -237,15 +237,13 @@ agent session, ask:
 
 > What MCP tools do you have available?
 
-You should see the bridge tools (e.g. `create_issue_mirror`,
-`delete_branch_mirror`, `merge_pull_request_mirror`) and `mpas_wait_for_action_result`.
+You should see the governed operation tools for the application you connected,
+plus `mpas_wait_for_action_result`.
 
 Then run a pass-through action (no approval needed) to confirm end-to-end
-connectivity:
-
-> Create an issue titled "MPAS proposer wiring check" in `example-org/mpas-demo-repository`.
-
-If it succeeds, the bridge is correctly connected to the adapter.
+connectivity. Use any low-impact read or write operation supported by the
+application you connected. If it succeeds, the bridge is correctly connected
+to the adapter.
 
 ---
 
