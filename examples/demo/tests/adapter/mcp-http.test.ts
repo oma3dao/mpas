@@ -1,6 +1,7 @@
 import http from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
 import { prepareMcpHttp, type McpHttpTarget } from "../../src/adapter/dispatch/mcp-http.js";
+import type { OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
 
 let server: http.Server | undefined;
 let initializedProtocolVersion: string | undefined;
@@ -79,6 +80,34 @@ async function startMcpServer(toolDelayMs = 0): Promise<{ url: string }> {
 }
 
 describe("prepareMcpHttp", () => {
+  it("uses a managed OAuth provider without a static credential", async () => {
+    const { url } = await startMcpServer();
+    const provider: OAuthClientProvider = {
+      redirectUrl: "http://127.0.0.1/oauth/callback",
+      clientMetadata: { client_name: "test", redirect_uris: ["http://127.0.0.1/oauth/callback"] },
+      clientInformation: () => ({ client_id: "test-client" }),
+      tokens: () => ({ access_token: "managed-access-token", token_type: "Bearer" }),
+      saveTokens: () => {},
+      redirectToAuthorization: () => { throw new Error("unexpected login"); },
+      saveCodeVerifier: () => {},
+      codeVerifier: () => "unused",
+    };
+    const prepared = await prepareMcpHttp(
+      { type: "mcp.http", url, auth: { type: "oauth2" } },
+      undefined,
+      "2024-11-05",
+      provider,
+    );
+    expect(prepared.ok).toBe(true);
+    if (!prepared.ok) return;
+    try {
+      const result = await prepared.session.transmit("fixture_tool", {});
+      expect(result).toMatchObject({ ok: true, result: { authorization: "Bearer managed-access-token" } });
+    } finally {
+      await prepared.session.close();
+    }
+  });
+
   it("calls an HTTP MCP endpoint and injects credentials", async () => {
     const { url } = await startMcpServer();
     const target: McpHttpTarget = {

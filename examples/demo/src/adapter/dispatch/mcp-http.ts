@@ -2,6 +2,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { TransportSendOptions } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
+import type { OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
 import { withInitializeProtocolVersion } from "./mcp-protocol-version.js";
 import { errorMessage, McpClientSession, type DispatchPrepareResult } from "./mcp-stdio.js";
 
@@ -10,6 +11,10 @@ export interface McpHttpTarget {
   url: string;
   headers?: Record<string, string>;
   timeoutMs?: number;
+  auth?: {
+    type: "oauth2";
+    scopes?: string[];
+  };
 }
 
 /**
@@ -18,15 +23,17 @@ export interface McpHttpTarget {
  */
 export async function prepareMcpHttp(
   target: McpHttpTarget,
-  credential: string,
+  credential: string | undefined,
   protocolVersion: string,
+  authProvider?: OAuthClientProvider,
 ): Promise<DispatchPrepareResult> {
   const timeoutMs = target.timeoutMs ?? 30_000;
   const transport = new VersionedStreamableHttpClientTransport(
     new URL(target.url),
     {
+      ...(authProvider ? { authProvider } : {}),
       requestInit: {
-        headers: injectCredential(target.headers ?? {}, credential),
+        headers: credential ? injectCredential(target.headers ?? {}, credential) : target.headers,
       },
     },
     protocolVersion,

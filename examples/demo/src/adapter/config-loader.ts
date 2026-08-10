@@ -177,7 +177,7 @@ const deploymentConfigSchema = {
         },
         additionalProperties: false,
       },
-      minItems: 1,
+      minItems: 0,
     },
     executionTarget: { type: "object", required: ["type"] },
     policy: {
@@ -321,6 +321,15 @@ async function loadDeploymentConfigFile(
   }
 
   const config = parsed as unknown as DeploymentConfig;
+  const usesManagedOAuth = config.executionTarget.type === "mcp.http" &&
+    config.executionTarget.auth?.type === "oauth2";
+  if (!usesManagedOAuth && config.credentialBindings.length === 0) {
+    return loadError(
+      "CONFIG_SCHEMA_INVALID",
+      "credentialBindings must contain at least one entry unless executionTarget.auth.type is oauth2.",
+      filePath,
+    );
+  }
 
   const policyValidation = validatePolicyConfig(config.policy);
   if (!policyValidation.ok) {

@@ -19,8 +19,8 @@ import type { Did } from "../core/types.js";
 import {
   type OAuthOperatorService,
   type ResolveOAuthDeployment,
+  fileOAuthOperatorService,
   resolveOAuthApplication,
-  unavailableOAuthOperatorService,
 } from "../adapter/oauth-operator.js";
 
 export interface CliIo {
@@ -133,7 +133,9 @@ export async function runCli(
       }
       const resolveDeployment = dependencies.resolveOAuthDeployment ?? resolveOAuthApplication;
       const selection = await resolveDeployment(options.configDir ?? defaultConfigDir(), options.applicationDid);
-      const service = dependencies.oauthOperator ?? unavailableOAuthOperatorService();
+      const service = dependencies.oauthOperator ?? fileOAuthOperatorService({
+        onAuthorizationUrl: (url) => { io.stderr.write(`Open this URL to authorize the Credential Adapter:\n${url}\n`); },
+      });
       const request = selection;
       const response = command === "login"
         ? await service.login({ ...request, openBrowser: options.noBrowser !== true })

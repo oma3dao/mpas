@@ -3,8 +3,9 @@ import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { OAuthOperatorService } from "../../src/adapter/oauth-operator.js";
-import { oauthLoginCommand, resolveOAuthApplication } from "../../src/adapter/oauth-operator.js";
+import { fileOAuthOperatorService, oauthLoginCommand, resolveOAuthApplication } from "../../src/adapter/oauth-operator.js";
 import { runCli } from "../../src/cli/index.js";
+import { startOAuthProtectedMcpFixture } from "../fixtures/oauth-protected-mcp.js";
 
 class MemoryWriter {
   text = "";
@@ -49,6 +50,38 @@ const resolveOAuthDeployment = vi.fn(async (_configDir: string, selectedDid: str
 }));
 
 describe("OAuth operator CLI", () => {
+  it("completes login, persists a redacted status, and deletes the local session", async () => {
+    const fixture = await startOAuthProtectedMcpFixture();
+    const sessionDir = await mkdtemp(join(tmpdir(), "mpas-oauth-session-"));
+    const service = fileOAuthOperatorService({
+      sessionDir,
+      testOnlyAllowHttpLoopback: true,
+      onAuthorizationUrl: async (url) => {
+        const redirect = new URL(url.searchParams.get("redirect_uri")!);
+        redirect.searchParams.set("code", "fixture-code");
+        redirect.searchParams.set("state", url.searchParams.get("state")!);
+        await fetch(redirect);
+      },
+    });
+    try {
+      await expect(service.login({
+        applicationDid,
+        resourceUrl: fixture.resourceUrl,
+        scopes: ["mcp:tools"],
+        openBrowser: false,
+      })).resolves.toMatchObject({ status: "authorized", refreshable: true });
+      const status = await service.status({ applicationDid, resourceUrl: fixture.resourceUrl });
+      expect(status).toMatchObject({ status: "authorized", scopes: ["mcp:tools"] });
+      expect(JSON.stringify(status)).not.toContain("fixture-access-token");
+      await expect(service.logout({ applicationDid, resourceUrl: fixture.resourceUrl }))
+        .resolves.toMatchObject({ status: "logged_out", localCredentialsDeleted: true });
+      await expect(service.status({ applicationDid, resourceUrl: fixture.resourceUrl }))
+        .resolves.toMatchObject({ status: "oauth_login_required" });
+    } finally {
+      await fixture.close();
+    }
+  });
+
   it("requires an Application DID selector", async () => {
     const stdout = new MemoryWriter();
     const stderr = new MemoryWriter();
