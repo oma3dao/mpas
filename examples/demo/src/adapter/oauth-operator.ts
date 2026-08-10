@@ -13,6 +13,7 @@ export interface OAuthOperatorRequest {
   applicationDid: string;
   resourceUrl: string;
   session: string;
+  credentialHandle: string;
   scopes?: string[];
 }
 
@@ -55,6 +56,7 @@ export interface OAuthDeploymentSelection {
   applicationDid: string;
   resourceUrl: string;
   session: string;
+  credentialHandle: string;
   scopes?: string[];
 }
 
@@ -97,7 +99,18 @@ export async function resolveOAuthApplication(
     const scopes = Array.isArray(oauth?.scopes) && oauth.scopes.every((scope) => typeof scope === "string")
       ? oauth.scopes as string[]
       : undefined;
-    matches.push({ applicationDid, resourceUrl: executionTarget.url, session: oauth.session, ...(scopes ? { scopes } : {}) });
+    const bindings = Array.isArray(value.credentialBindings) ? value.credentialBindings : [];
+    const binding = bindings.length === 1 && isRecord(bindings[0]) ? bindings[0] : undefined;
+    if (typeof binding?.credentialHandle !== "string" || binding.provider !== "file") {
+      throw new Error(`OAuth application must configure one file credential binding: ${applicationDid}`);
+    }
+    matches.push({
+      applicationDid,
+      resourceUrl: executionTarget.url,
+      session: oauth.session,
+      credentialHandle: binding.credentialHandle,
+      ...(scopes ? { scopes } : {}),
+    });
   }
 
   if (matches.length === 0) throw new Error(`Unknown OAuth application DID: ${applicationDid}`);
@@ -122,6 +135,7 @@ export function unavailableOAuthOperatorService(): OAuthOperatorService {
 interface StoredOAuthSession {
   version: 1;
   session: string;
+  credentialHandle: string;
   applicationDid: string;
   resourceUrl: string;
   state: string;
@@ -134,7 +148,7 @@ interface StoredOAuthSession {
 }
 
 export interface FileOAuthOperatorServiceOptions {
-  sessionDir?: string;
+  credentialDir?: string;
   callbackTimeoutMs?: number;
   onAuthorizationUrl?: (url: URL) => void | Promise<void>;
   openBrowser?: (url: URL) => void | Promise<void>;
@@ -142,17 +156,18 @@ export interface FileOAuthOperatorServiceOptions {
 }
 
 export function fileOAuthOperatorService(options: FileOAuthOperatorServiceOptions = {}): OAuthOperatorService {
-  const sessionDir = options.sessionDir ?? join(homedir(), ".mpas", "oauth-sessions");
+  const credentialDir = options.credentialDir ?? join(homedir(), ".mpas", "credentials");
   const callbackTimeoutMs = options.callbackTimeoutMs ?? 300_000;
 
   return {
     async login(request) {
       const callback = await startCallbackServer(callbackTimeoutMs);
-      const path = sessionPath(sessionDir, request.session);
+      const path = credentialPath(credentialDir, request.credentialHandle);
       const previous = await readSession(path);
       const session: StoredOAuthSession = {
         version: 1,
         session: request.session,
+        credentialHandle: request.credentialHandle,
         applicationDid: request.applicationDid,
         resourceUrl: request.resourceUrl,
         state: randomBytes(32).toString("base64url"),
@@ -186,7 +201,7 @@ export function fileOAuthOperatorService(options: FileOAuthOperatorServiceOption
       }
     },
     async status(request) {
-      const session = await readSession(sessionPath(sessionDir, request.session));
+      const session = await readSession(credentialPath(credentialDir, request.credentialHandle));
       if (!session?.tokens) {
         return {
           status: "oauth_login_required",
@@ -198,7 +213,7 @@ export function fileOAuthOperatorService(options: FileOAuthOperatorServiceOption
       return authorizedResult(session);
     },
     async logout(request) {
-      const path = sessionPath(sessionDir, request.session);
+      const path = credentialPath(credentialDir, request.credentialHandle);
       await rm(path, { force: true });
       return {
         status: "logged_out",
@@ -266,13 +281,14 @@ class FileOAuthClientProvider implements OAuthClientProvider {
 
 export async function loadFileOAuthClientProvider(
   sessionName: string,
+  credentialHandle: string,
   applicationDid: string,
   resourceUrl: string,
-  sessionDir = join(homedir(), ".mpas", "oauth-sessions"),
+  credentialDir = join(homedir(), ".mpas", "credentials"),
 ): Promise<OAuthClientProvider | undefined> {
-  const path = sessionPath(sessionDir, sessionName);
+  const path = credentialPath(credentialDir, credentialHandle);
   const session = await readSession(path);
-  if (!session?.tokens || session.session !== sessionName || session.applicationDid !== applicationDid || session.resourceUrl !== resourceUrl) return undefined;
+  if (!session?.tokens || session.session !== sessionName || session.credentialHandle !== credentialHandle || session.applicationDid !== applicationDid || session.resourceUrl !== resourceUrl) return undefined;
   return new FileOAuthClientProvider(session, path, false, {});
 }
 
@@ -341,9 +357,9 @@ async function startCallbackServer(timeoutMs: number): Promise<{
   };
 }
 
-function sessionPath(dir: string, session: string): string {
-  if (!isSessionName(session)) throw new Error("OAuth session name must contain only letters, digits, dots, underscores, or hyphens");
-  return join(dir, `${session}.json`);
+function credentialPath(dir: string, credentialHandle: string): string {
+  if (!isSessionName(credentialHandle)) throw new Error("OAuth credential handle must contain only letters, digits, dots, underscores, or hyphens");
+  return join(dir, `${credentialHandle}.json`);
 }
 
 function isSessionName(value: string): boolean {

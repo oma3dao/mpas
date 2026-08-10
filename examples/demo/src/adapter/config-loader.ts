@@ -177,7 +177,7 @@ const deploymentConfigSchema = {
         },
         additionalProperties: false,
       },
-      minItems: 0,
+      minItems: 1,
     },
     executionTarget: { type: "object", required: ["type"] },
     policy: {
@@ -332,14 +332,6 @@ async function loadDeploymentConfigFile(
       filePath,
     );
   }
-  if (!usesManagedOAuth && config.credentialBindings.length === 0) {
-    return loadError(
-      "CONFIG_SCHEMA_INVALID",
-      "credentialBindings must contain at least one entry unless executionTarget.auth.type is oauth2.",
-      filePath,
-    );
-  }
-
   const policyValidation = validatePolicyConfig(config.policy);
   if (!policyValidation.ok) {
     return loadError("CONFIG_SCHEMA_INVALID", `Policy does not conform to the MPAS JSON Verifier Policy Profile: ${policyValidation.message}`, filePath);

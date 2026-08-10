@@ -418,6 +418,7 @@ async function prepareTarget(loadedConfig: LoadedDeploymentConfig, credential: s
     const authProvider = loadedConfig.config.executionTarget.auth?.type === "oauth2"
       ? await loadFileOAuthClientProvider(
           loadedConfig.config.executionTarget.auth.session,
+          loadedConfig.config.credentialBindings[0].credentialHandle,
           loadedConfig.config.target.applicationDid,
           loadedConfig.config.executionTarget.url,
         )
@@ -431,6 +432,7 @@ async function prepareTarget(loadedConfig: LoadedDeploymentConfig, credential: s
             applicationDid: loadedConfig.config.target.applicationDid,
             resourceUrl: loadedConfig.config.executionTarget.url,
             session: loadedConfig.config.executionTarget.auth.session,
+            credentialHandle: loadedConfig.config.credentialBindings[0].credentialHandle,
           })}.`,
         },
       };

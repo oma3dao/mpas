@@ -32,9 +32,10 @@ Application DIDs and applications whose execution target is not `mcp.http`.
 Selector resolution reads only the deployment envelope fields needed for OAuth;
 it does not load plugin artifacts or trigger plugin trust prompts.
 
-The deployment's `executionTarget.auth.session` is the operator-controlled token
-location name. The CLI and adapter resolve the same name to
-`~/.mpas/oauth-sessions/<session>.json`; the MCP server does not choose it.
+The deployment's `executionTarget.auth.session` names the logical OAuth session.
+Its `credentialBindings[0].credentialHandle` is the operator-controlled storage
+pointer. The CLI and adapter resolve that handle to
+`~/.mpas/credentials/<handle>.json`; the MCP server does not choose it.
 
 The first implementation manages one OAuth grant per Application DID. Its
 security binding also includes the exact MCP resource, issuer, client, and
@@ -46,7 +47,8 @@ optional alias, but operators do not choose or persist a session number today.
 The demo CLI connects the OAuth command surface to a loopback callback listener
 and the MCP SDK authorization flow. `oauth login` opens the operator's browser
 (unless `--no-browser` is used), completes authorization, and stores the grant
-under `~/.mpas/oauth-sessions/`. The session files use restrictive mode `0600`
+under `~/.mpas/credentials/` using the deployment's credential handle. The
+credential files use restrictive mode `0600`
 permissions and are intended for local development and interoperability testing.
 Production deployments should replace this file-backed provider with an
 OS-managed or encrypted credential store.
