@@ -1,3 +1,6 @@
+import { readdir, readFile } from "node:fs/promises";
+import { join } from "node:path";
+
 export interface OAuthOperatorRequest {
   applicationDid: string;
   resourceUrl: string;
@@ -105,5 +108,3 @@ function shellQuote(value: string): string {
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
-import { readdir, readFile } from "node:fs/promises";
-import { join } from "node:path";
