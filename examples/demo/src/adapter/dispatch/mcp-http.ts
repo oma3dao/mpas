@@ -13,6 +13,7 @@ export interface McpHttpTarget {
   timeoutMs?: number;
   auth?: {
     type: "oauth2";
+    session: string;
     scopes?: string[];
   };
 }

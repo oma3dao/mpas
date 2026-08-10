@@ -32,6 +32,10 @@ Application DIDs and applications whose execution target is not `mcp.http`.
 Selector resolution reads only the deployment envelope fields needed for OAuth;
 it does not load plugin artifacts or trigger plugin trust prompts.
 
+The deployment's `executionTarget.auth.session` is the operator-controlled token
+location name. The CLI and adapter resolve the same name to
+`~/.mpas/oauth-sessions/<session>.json`; the MCP server does not choose it.
+
 The first implementation manages one OAuth grant per Application DID. Its
 security binding also includes the exact MCP resource, issuer, client, and
 scopes resolved by the secure provider. A future multi-account design may add an

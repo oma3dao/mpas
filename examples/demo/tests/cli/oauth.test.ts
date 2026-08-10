@@ -44,9 +44,11 @@ function service(): OAuthOperatorService {
 
 const applicationDid = "did:web:netlify.example";
 const resourceUrl = "https://mcp.netlify.com/mcp";
+const session = "netlify-production";
 const resolveOAuthDeployment = vi.fn(async (_configDir: string, selectedDid: string) => ({
   applicationDid: selectedDid,
   resourceUrl,
+  session,
 }));
 
 describe("OAuth operator CLI", () => {
@@ -67,15 +69,16 @@ describe("OAuth operator CLI", () => {
       await expect(service.login({
         applicationDid,
         resourceUrl: fixture.resourceUrl,
+        session,
         scopes: ["mcp:tools"],
         openBrowser: false,
       })).resolves.toMatchObject({ status: "authorized", refreshable: true });
-      const status = await service.status({ applicationDid, resourceUrl: fixture.resourceUrl });
+      const status = await service.status({ applicationDid, resourceUrl: fixture.resourceUrl, session });
       expect(status).toMatchObject({ status: "authorized", scopes: ["mcp:tools"] });
       expect(JSON.stringify(status)).not.toContain("fixture-access-token");
-      await expect(service.logout({ applicationDid, resourceUrl: fixture.resourceUrl }))
+      await expect(service.logout({ applicationDid, resourceUrl: fixture.resourceUrl, session }))
         .resolves.toMatchObject({ status: "logged_out", localCredentialsDeleted: true });
-      await expect(service.status({ applicationDid, resourceUrl: fixture.resourceUrl }))
+      await expect(service.status({ applicationDid, resourceUrl: fixture.resourceUrl, session }))
         .resolves.toMatchObject({ status: "oauth_login_required" });
     } finally {
       await fixture.close();
@@ -102,6 +105,7 @@ describe("OAuth operator CLI", () => {
     expect(oauthOperator.login).toHaveBeenCalledWith({
       applicationDid,
       resourceUrl,
+      session,
       openBrowser: false,
     });
     expect(JSON.parse(stdout.text)).toMatchObject({ status: "oauth_login_required" });
@@ -115,12 +119,12 @@ describe("OAuth operator CLI", () => {
       "oauth", command, "--application-did", applicationDid,
     ], { stdout, stderr }, { oauthOperator, resolveOAuthDeployment });
     expect(result.exitCode).toBe(0);
-    expect(oauthOperator[command]).toHaveBeenCalledWith({ applicationDid, resourceUrl });
+    expect(oauthOperator[command]).toHaveBeenCalledWith({ applicationDid, resourceUrl, session });
     expect(JSON.parse(stdout.text)).not.toHaveProperty("accessToken");
   });
 
   it("shell-quotes the exact operator command", () => {
-    expect(oauthLoginCommand({ applicationDid, resourceUrl }))
+    expect(oauthLoginCommand({ applicationDid, resourceUrl, session }))
       .toBe(`mpas oauth login --application-did '${applicationDid}'`);
   });
 
@@ -129,13 +133,14 @@ describe("OAuth operator CLI", () => {
     await writeFile(join(configDir, "netlify.json"), JSON.stringify({
       type: "MpasAdapterDeploymentConfig",
       target: { applicationDid },
-      executionTarget: { type: "mcp.http", url: resourceUrl },
+      executionTarget: { type: "mcp.http", url: resourceUrl, auth: { type: "oauth2", session } },
       plugin: { path: "missing-plugin.json" },
     }));
 
     await expect(resolveOAuthApplication(configDir, applicationDid)).resolves.toEqual({
       applicationDid,
       resourceUrl,
+      session,
     });
   });
 
@@ -152,12 +157,12 @@ describe("OAuth operator CLI", () => {
     await writeFile(join(configDir, "one.json"), JSON.stringify({
       type: "MpasAdapterDeploymentConfig",
       target: { applicationDid },
-      executionTarget: { type: "mcp.http", url: resourceUrl },
+      executionTarget: { type: "mcp.http", url: resourceUrl, auth: { type: "oauth2", session } },
     }));
     await writeFile(join(configDir, "two.json"), JSON.stringify({
       type: "MpasAdapterDeploymentConfig",
       target: { applicationDid },
-      executionTarget: { type: "mcp.http", url: "https://other.example/mcp" },
+      executionTarget: { type: "mcp.http", url: "https://other.example/mcp", auth: { type: "oauth2", session: "other" } },
     }));
     await expect(resolveOAuthApplication(configDir, applicationDid))
       .rejects.toThrow("Multiple deployment configs");

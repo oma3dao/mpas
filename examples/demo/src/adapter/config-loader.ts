@@ -321,8 +321,17 @@ async function loadDeploymentConfigFile(
   }
 
   const config = parsed as unknown as DeploymentConfig;
-  const usesManagedOAuth = config.executionTarget.type === "mcp.http" &&
-    config.executionTarget.auth?.type === "oauth2";
+  const oauthAuth = config.executionTarget.type === "mcp.http" && config.executionTarget.auth?.type === "oauth2"
+    ? config.executionTarget.auth
+    : undefined;
+  const usesManagedOAuth = oauthAuth !== undefined;
+  if (oauthAuth && !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(oauthAuth.session ?? "")) {
+    return loadError(
+      "CONFIG_SCHEMA_INVALID",
+      "executionTarget.auth.session must identify the configured OAuth token session.",
+      filePath,
+    );
+  }
   if (!usesManagedOAuth && config.credentialBindings.length === 0) {
     return loadError(
       "CONFIG_SCHEMA_INVALID",

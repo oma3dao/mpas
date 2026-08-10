@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
 import { chmod, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
@@ -12,6 +12,7 @@ import { createOAuthFetchPolicy } from "./oauth-fetch-policy.js";
 export interface OAuthOperatorRequest {
   applicationDid: string;
   resourceUrl: string;
+  session: string;
   scopes?: string[];
 }
 
@@ -53,6 +54,7 @@ export interface OAuthOperatorService {
 export interface OAuthDeploymentSelection {
   applicationDid: string;
   resourceUrl: string;
+  session: string;
   scopes?: string[];
 }
 
@@ -89,10 +91,13 @@ export async function resolveOAuthApplication(
       throw new Error(`OAuth application must use an mcp.http execution target: ${applicationDid}`);
     }
     const oauth = isRecord(executionTarget.auth) ? executionTarget.auth : undefined;
+    if (oauth?.type !== "oauth2" || typeof oauth.session !== "string" || !isSessionName(oauth.session)) {
+      throw new Error(`OAuth application must configure a valid executionTarget.auth.session: ${applicationDid}`);
+    }
     const scopes = Array.isArray(oauth?.scopes) && oauth.scopes.every((scope) => typeof scope === "string")
       ? oauth.scopes as string[]
       : undefined;
-    matches.push({ applicationDid, resourceUrl: executionTarget.url, ...(scopes ? { scopes } : {}) });
+    matches.push({ applicationDid, resourceUrl: executionTarget.url, session: oauth.session, ...(scopes ? { scopes } : {}) });
   }
 
   if (matches.length === 0) throw new Error(`Unknown OAuth application DID: ${applicationDid}`);
@@ -116,6 +121,7 @@ export function unavailableOAuthOperatorService(): OAuthOperatorService {
 
 interface StoredOAuthSession {
   version: 1;
+  session: string;
   applicationDid: string;
   resourceUrl: string;
   state: string;
@@ -142,10 +148,11 @@ export function fileOAuthOperatorService(options: FileOAuthOperatorServiceOption
   return {
     async login(request) {
       const callback = await startCallbackServer(callbackTimeoutMs);
-      const path = sessionPath(sessionDir, request.applicationDid, request.resourceUrl);
+      const path = sessionPath(sessionDir, request.session);
       const previous = await readSession(path);
       const session: StoredOAuthSession = {
         version: 1,
+        session: request.session,
         applicationDid: request.applicationDid,
         resourceUrl: request.resourceUrl,
         state: randomBytes(32).toString("base64url"),
@@ -179,7 +186,7 @@ export function fileOAuthOperatorService(options: FileOAuthOperatorServiceOption
       }
     },
     async status(request) {
-      const session = await readSession(sessionPath(sessionDir, request.applicationDid, request.resourceUrl));
+      const session = await readSession(sessionPath(sessionDir, request.session));
       if (!session?.tokens) {
         return {
           status: "oauth_login_required",
@@ -191,7 +198,7 @@ export function fileOAuthOperatorService(options: FileOAuthOperatorServiceOption
       return authorizedResult(session);
     },
     async logout(request) {
-      const path = sessionPath(sessionDir, request.applicationDid, request.resourceUrl);
+      const path = sessionPath(sessionDir, request.session);
       await rm(path, { force: true });
       return {
         status: "logged_out",
@@ -258,13 +265,14 @@ class FileOAuthClientProvider implements OAuthClientProvider {
 }
 
 export async function loadFileOAuthClientProvider(
+  sessionName: string,
   applicationDid: string,
   resourceUrl: string,
   sessionDir = join(homedir(), ".mpas", "oauth-sessions"),
 ): Promise<OAuthClientProvider | undefined> {
-  const path = sessionPath(sessionDir, applicationDid, resourceUrl);
+  const path = sessionPath(sessionDir, sessionName);
   const session = await readSession(path);
-  if (!session?.tokens) return undefined;
+  if (!session?.tokens || session.session !== sessionName || session.applicationDid !== applicationDid || session.resourceUrl !== resourceUrl) return undefined;
   return new FileOAuthClientProvider(session, path, false, {});
 }
 
@@ -333,9 +341,13 @@ async function startCallbackServer(timeoutMs: number): Promise<{
   };
 }
 
-function sessionPath(dir: string, applicationDid: string, resourceUrl: string): string {
-  const key = createHash("sha256").update(`${applicationDid}\0${resourceUrl}`).digest("hex");
-  return join(dir, `${key}.json`);
+function sessionPath(dir: string, session: string): string {
+  if (!isSessionName(session)) throw new Error("OAuth session name must contain only letters, digits, dots, underscores, or hyphens");
+  return join(dir, `${session}.json`);
+}
+
+function isSessionName(value: string): boolean {
+  return /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(value);
 }
 
 async function readSession(path: string): Promise<StoredOAuthSession | undefined> {

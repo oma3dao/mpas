@@ -417,6 +417,7 @@ async function prepareTarget(loadedConfig: LoadedDeploymentConfig, credential: s
   if (loadedConfig.config.executionTarget.type === "mcp.http") {
     const authProvider = loadedConfig.config.executionTarget.auth?.type === "oauth2"
       ? await loadFileOAuthClientProvider(
+          loadedConfig.config.executionTarget.auth.session,
           loadedConfig.config.target.applicationDid,
           loadedConfig.config.executionTarget.url,
         )
@@ -429,6 +430,7 @@ async function prepareTarget(loadedConfig: LoadedDeploymentConfig, credential: s
           message: `OAuth login required. Run ${oauthLoginCommand({
             applicationDid: loadedConfig.config.target.applicationDid,
             resourceUrl: loadedConfig.config.executionTarget.url,
+            session: loadedConfig.config.executionTarget.auth.session,
           })}.`,
         },
       };

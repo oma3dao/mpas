@@ -93,7 +93,7 @@ describe("prepareMcpHttp", () => {
       codeVerifier: () => "unused",
     };
     const prepared = await prepareMcpHttp(
-      { type: "mcp.http", url, auth: { type: "oauth2" } },
+      { type: "mcp.http", url, auth: { type: "oauth2", session: "fixture" } },
       undefined,
       "2024-11-05",
       provider,
