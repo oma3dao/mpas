@@ -53,7 +53,70 @@ describe("discoverUpstream", () => {
     await expect(discoverUpstream("node", [mockServer, "--exit-early"])).rejects.toBeInstanceOf(HandshakeError);
   });
 
+  it("rejects invalid JSON from the upstream", async () => {
+    await expect(discoverUpstream("node", [mockServer, "--bad-json"])).rejects.toThrow(/Invalid JSON from upstream/);
+  });
+
+  it("rejects initialize JSON-RPC errors", async () => {
+    await expect(discoverUpstream("node", [mockServer, "--rpc-error"])).rejects.toThrow(/initialize failed/);
+  });
+
+  it("rejects malformed tools/list payloads", async () => {
+    await expect(discoverUpstream("node", [mockServer, "--bad-tools-list"])).rejects.toBeInstanceOf(ToolsListError);
+  });
+
+  it("rejects duplicate tool names", async () => {
+    await expect(discoverUpstream("node", [mockServer, "--dup-tools"])).rejects.toThrow(/duplicate tool name/);
+  });
+
+  it("rejects a non-string nextCursor", async () => {
+    await expect(discoverUpstream("node", [mockServer, "--bad-cursor"])).rejects.toThrow(/Malformed nextCursor/);
+  });
+
+  it("rejects a repeated tools/list cursor", async () => {
+    await expect(discoverUpstream("node", [mockServer, "--repeat-cursor"])).rejects.toThrow(/Repeated tools\/list cursor/);
+  });
+
   it("rejects when the upstream command cannot be spawned", async () => {
     await expect(discoverUpstream("definitely-not-a-real-command-xyz", [])).rejects.toBeInstanceOf(UpstreamSpawnError);
   });
+
+  it("ignores notifications and orphan responses during discovery", async () => {
+    const upstream = await discoverUpstream("node", [mockServer, "--noise"]);
+    expect(upstream.tools.map((tool) => tool.name)).toEqual(["create_issue", "delete_branch", "merge_pull_request"]);
+  });
+
+  it("rejects tools/list JSON-RPC errors", async () => {
+    await expect(discoverUpstream("node", [mockServer, "--tools-list-rpc-error"])).rejects.toThrow(/tools\/list failed/);
+  });
+
+  it("rejects tools/list JSON-RPC errors that omit a message", async () => {
+    await expect(discoverUpstream("node", [mockServer, "--tools-list-rpc-error-no-message"])).rejects.toThrow(
+      /JSON-RPC error/,
+    );
+  });
+
+  it("forwards upstream stderr while still discovering tools", async () => {
+    const chunks: string[] = [];
+    const original = process.stderr.write.bind(process.stderr);
+    process.stderr.write = ((chunk: string | Uint8Array, ...args: unknown[]) => {
+      chunks.push(chunk.toString());
+      return original(chunk, ...(args as Parameters<typeof original>));
+    }) as typeof process.stderr.write;
+    try {
+      const upstream = await discoverUpstream("node", [mockServer, "--stderr-noise"]);
+      expect(upstream.tools).toHaveLength(3);
+      expect(chunks.join("")).toContain("upstream-noise");
+    } finally {
+      process.stderr.write = original;
+    }
+  });
+
+  it(
+    "rejects when the upstream stays silent through initialize",
+    async () => {
+      await expect(discoverUpstream("node", [mockServer, "--silent"])).rejects.toThrow(/timed out/);
+    },
+    15_000,
+  );
 });

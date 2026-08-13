@@ -113,6 +113,65 @@ describe("canTrust", () => {
     ]);
   });
 
+  it("uses the attestation message when a responsibility claim object is present", async () => {
+    mockCheckAttestation.mockResolvedValue(
+      makeAttestationResult({
+        primaryEvidenceFound: true,
+        message: "Responsibility claimed by: did:web:publisher.example",
+        responsibilityClaim: true,
+        responsibilityClaims: [
+          {
+            uid: `0x${"1".repeat(64)}`,
+            attester: "0x1111111111111111111111111111111111111111",
+            isApprovedIssuer: false,
+            schemaUid: `0x${"2".repeat(64)}`,
+            schemaLabel: "responsibility-claim",
+            time: "1700000000",
+            expirationTime: "0",
+            verificationBasis: ["proof"],
+            data: { subject: fakeConfig.plugin.artifactDid },
+          },
+        ],
+      }),
+    );
+
+    const verdict = await canTrust(fakePlugin, fakeConfig, fakeTrustContext);
+    expect(verdict.reasons[0]).toMatchObject({
+      check: "responsibility-claim",
+      passed: true,
+      message: "Responsibility claimed by: did:web:publisher.example",
+    });
+  });
+
+  it("falls back to attester when a cybersecurity assessment has no label", async () => {
+    mockCheckAttestation.mockResolvedValue(
+      makeAttestationResult({
+        primaryEvidenceFound: true,
+        cybersecurityAssessment: true,
+        attestations: [
+          {
+            uid: `0x${"1".repeat(64)}`,
+            attester: "0x3333333333333333333333333333333333333333",
+            isApprovedIssuer: true,
+            schemaUid: `0x${"2".repeat(64)}`,
+            schemaLabel: "security-assessment",
+            time: "1700000000",
+            expirationTime: "0",
+            verificationBasis: ["approved-issuer"],
+            data: { subject: fakeConfig.plugin.artifactDid },
+          },
+        ],
+      }),
+    );
+
+    const verdict = await canTrust(fakePlugin, fakeConfig, fakeTrustContext);
+    expect(verdict.reasons[1]).toMatchObject({
+      check: "cybersecurity-assessment",
+      passed: true,
+      message: "Cybersecurity assessed by: 0x3333333333333333333333333333333333333333",
+    });
+  });
+
   it("suppresses the warning when an approved-issuer cybersecurity assessment exists", async () => {
     mockCheckAttestation.mockResolvedValue(makeAttestationResult({
       primaryEvidenceFound: true,

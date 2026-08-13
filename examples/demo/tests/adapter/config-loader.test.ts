@@ -245,6 +245,124 @@ describe("loadDeploymentConfigs", () => {
       },
     });
   });
+
+  it("rejects a missing config directory", async () => {
+    const result = await loadDeploymentConfigs(join(tmpdir(), `mpas-missing-configs-${Date.now()}`), {
+      confirmPluginUse: approvePluginUse,
+    });
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "CONFIG_DIR_READ_FAILED" },
+    });
+  });
+
+  it("rejects invalid JSON deployment configs", async () => {
+    const { configDir } = await tempFixtureConfigDir();
+    await writeFile(join(configDir, "broken.json"), "{ not-json\n");
+    const result = await loadDeploymentConfigs(configDir, { confirmPluginUse: approvePluginUse });
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "CONFIG_INVALID_JSON" },
+    });
+  });
+
+  it("rejects a did:jwk signer whose publicJwk does not match the DID", async () => {
+    const { configDir } = await tempFixtureConfigDir();
+    const config = await readJson<Record<string, unknown>>(
+      join(fixturesDir, "configs", "github-mirror-adapter-config.json"),
+    );
+    const signerKeys = config.signerKeys as Array<{ publicJwk?: { x?: string } }>;
+    signerKeys[0].publicJwk = { ...signerKeys[0].publicJwk, x: "tamperedxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" };
+    await writeJson(join(configDir, "github-mirror.json"), config);
+
+    const result = await loadDeploymentConfigs(configDir, { confirmPluginUse: approvePluginUse });
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "CONFIG_SCHEMA_INVALID", message: expect.stringContaining("publicJwk does not match") },
+    });
+  });
+
+  it("rejects a non-did:jwk signer without publicJwk", async () => {
+    const { configDir } = await tempFixtureConfigDir();
+    const config = await readJson<Record<string, unknown>>(
+      join(fixturesDir, "configs", "github-mirror-adapter-config.json"),
+    );
+    const signerKeys = config.signerKeys as Array<{ did: string; publicJwk?: unknown }>;
+    signerKeys[0] = { did: "did:web:agents.example:external" };
+    await writeJson(join(configDir, "github-mirror.json"), config);
+
+    const result = await loadDeploymentConfigs(configDir, { confirmPluginUse: approvePluginUse });
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "CONFIG_SCHEMA_INVALID", message: expect.stringContaining("publicJwk is required") },
+    });
+  });
+
+  it("rejects a plugin reference that does not match the loaded plugin", async () => {
+    const { configDir } = await tempFixtureConfigDir();
+    const config = await readJson<Record<string, unknown>>(
+      join(fixturesDir, "configs", "github-mirror-adapter-config.json"),
+    );
+    config.plugin = {
+      ...(config.plugin as Record<string, unknown>),
+      pluginDid: "did:web:plugins.oma3.example:other-plugin",
+    };
+    await writeJson(join(configDir, "github-mirror.json"), config);
+
+    const result = await loadDeploymentConfigs(configDir, { confirmPluginUse: approvePluginUse });
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "PLUGIN_REFERENCE_MISMATCH" },
+    });
+  });
+
+  it("accepts anyOf defaultRequirement when one branch is satisfiable for proposers", async () => {
+    const { configDir } = await tempFixtureConfigDir();
+    const config = await readJson<Record<string, unknown>>(
+      join(fixturesDir, "configs", "github-mirror-adapter-config.json"),
+    );
+    const policy = config.policy as { defaultRequirement: unknown };
+    policy.defaultRequirement = {
+      type: "anyOf",
+      requirements: [
+        { type: "threshold", threshold: 99, eligibleSignerGroup: "maintainers", decision: "approve" },
+        { type: "proposerOnly" },
+      ],
+    };
+    await writeJson(join(configDir, "github-mirror.json"), config);
+
+    const result = await loadDeploymentConfigs(configDir, { confirmPluginUse: approvePluginUse });
+    expect(result.ok).toBe(true);
+  });
+
+  it("rejects an invalid did:jwk signer and an unsatisfiable allOf default", async () => {
+    const { configDir } = await tempFixtureConfigDir();
+    const config = await readJson<Record<string, unknown>>(
+      join(fixturesDir, "configs", "github-mirror-adapter-config.json"),
+    );
+    const signerKeys = config.signerKeys as Array<{ did: string; publicJwk?: unknown }>;
+    signerKeys[0] = { did: "did:jwk:!!!" };
+    await writeJson(join(configDir, "github-bad-jwk.json"), config);
+    expect(
+      await loadDeploymentConfigs(configDir, { confirmPluginUse: approvePluginUse }),
+    ).toMatchObject({ ok: false, error: { code: "CONFIG_SCHEMA_INVALID" } });
+
+    const { configDir: allOfDir } = await tempFixtureConfigDir();
+    const allOfConfig = await readJson<Record<string, unknown>>(
+      join(fixturesDir, "configs", "github-mirror-adapter-config.json"),
+    );
+    (allOfConfig.policy as { defaultRequirement: unknown }).defaultRequirement = {
+      type: "allOf",
+      requirements: [
+        { type: "proposerOnly" },
+        { type: "threshold", threshold: 99, eligibleSignerGroup: "maintainers", decision: "approve" },
+      ],
+    };
+    await writeJson(join(allOfDir, "github-allof.json"), allOfConfig);
+    expect(
+      await loadDeploymentConfigs(allOfDir, { confirmPluginUse: approvePluginUse }),
+    ).toMatchObject({ ok: false, error: { code: "DEFAULT_REQUIREMENT_UNSATISFIABLE" } });
+  });
 });
 
 describe("duplicate applicationDid", () => {
@@ -267,5 +385,59 @@ describe("duplicate applicationDid", () => {
       expect(result.error.code).toBe("DUPLICATE_APPLICATION_DID");
       expect(result.error.message).toContain("did:web:github-mirror.example");
     }
+  });
+});
+
+describe("loadDeploymentConfigs policy profile validation", () => {
+  it("rejects a schema-valid policy whose signerGroups.all is not unique", async () => {
+    const { configDir } = await tempFixtureConfigDir();
+    const config = await readJson<Record<string, unknown>>(
+      join(fixturesDir, "configs", "policy-fixtures", "github-auto-approve.json"),
+    );
+    config.plugin = {
+      ...(config.plugin as Record<string, unknown>),
+      path: "../plugins/github-mirror-plugin.json",
+    };
+    const policy = config.policy as { signerGroups: Record<string, string[]> };
+    const proposerDid = policy.signerGroups.proposers[0];
+    policy.signerGroups.all = [proposerDid, proposerDid];
+
+    await writeJson(join(configDir, "github-dup-all.json"), config);
+    const result = await loadDeploymentConfigs(configDir, { confirmPluginUse: approvePluginUse });
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        code: "CONFIG_SCHEMA_INVALID",
+        message: expect.stringContaining("Policy does not conform"),
+      },
+    });
+  });
+});
+
+describe("loadDeploymentConfigs OAuth session validation", () => {
+  it("rejects OAuth execution targets whose session name is not a token identifier", async () => {
+    const { configDir } = await tempFixtureConfigDir();
+    const config = await readJson<Record<string, unknown>>(
+      join(fixturesDir, "configs", "policy-fixtures", "github-auto-approve.json"),
+    );
+    config.plugin = {
+      ...(config.plugin as Record<string, unknown>),
+      path: "../plugins/github-mirror-plugin.json",
+    };
+    config.executionTarget = {
+      type: "mcp.http",
+      url: "https://mcp.example/mcp",
+      auth: { type: "oauth2", session: "has spaces" },
+    };
+    await writeJson(join(configDir, "github-oauth.json"), config);
+
+    const result = await loadDeploymentConfigs(configDir, { confirmPluginUse: approvePluginUse });
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        code: "CONFIG_SCHEMA_INVALID",
+        message: expect.stringContaining("executionTarget.auth.session"),
+      },
+    });
   });
 });

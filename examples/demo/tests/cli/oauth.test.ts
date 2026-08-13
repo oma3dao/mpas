@@ -3,7 +3,7 @@ import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { OAuthOperatorService } from "../../src/adapter/oauth-operator.js";
-import { fileOAuthOperatorService, oauthLoginCommand, resolveOAuthApplication } from "../../src/adapter/oauth-operator.js";
+import { fileOAuthOperatorService, oauthLoginCommand, resolveOAuthApplication, unavailableOAuthOperatorService } from "../../src/adapter/oauth-operator.js";
 import { runCli } from "../../src/cli/index.js";
 import { startOAuthProtectedMcpFixture } from "../fixtures/oauth-protected-mcp.js";
 
@@ -125,6 +125,29 @@ describe("OAuth operator CLI", () => {
     expect(result.exitCode).toBe(0);
     expect(oauthOperator[command]).toHaveBeenCalledWith({ applicationDid, resourceUrl, session, credentialHandle });
     expect(JSON.parse(stdout.text)).not.toHaveProperty("accessToken");
+  });
+
+  it("exits 1 when the OAuth operator service is unavailable", async () => {
+    const stdout = new MemoryWriter();
+    const stderr = new MemoryWriter();
+    const result = await runCli([
+      "oauth", "status", "--application-did", applicationDid,
+    ], { stdout, stderr }, { oauthOperator: unavailableOAuthOperatorService(), resolveOAuthDeployment });
+
+    expect(result.exitCode).toBe(1);
+    expect(JSON.parse(stdout.text)).toMatchObject({ status: "oauth_operator_service_unavailable" });
+  });
+
+  it("uses the file operator service when none is injected", async () => {
+    const stdout = new MemoryWriter();
+    const stderr = new MemoryWriter();
+    const result = await runCli([
+      "oauth", "status", "--application-did", applicationDid,
+    ], { stdout, stderr }, { resolveOAuthDeployment });
+
+    expect(result.exitCode).toBe(0);
+    expect(JSON.parse(stdout.text)).toMatchObject({ status: "oauth_login_required" });
+    expect(stderr.text).toBe("");
   });
 
   it("shell-quotes the exact operator command", () => {

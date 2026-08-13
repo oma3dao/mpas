@@ -185,6 +185,25 @@ describe("harness config and merge (spec §3.5, §5)", () => {
     expect(merged.upstream).toEqual({ command: "node", args: ["server.mjs"], env: { TOKEN: "{{credential:x}}" } });
     expect(merged.intentionalDeviations.renamedTools).toEqual({ old_name: "new_name" });
   });
+
+  it("defaults intentionalDeviations when the existing harness omits them", () => {
+    const existing = {
+      version: 1 as const,
+      upstream: { command: "node", args: ["old.mjs"] },
+    };
+    const merged = mergeHarnessConfig(existing as never, {
+      command: "node",
+      args: ["new.mjs"],
+      env: {},
+      tools: [],
+      discoveredAt: "2026-01-01T00:00:00.000Z",
+    });
+    expect(merged.intentionalDeviations).toEqual({
+      renamedTools: {},
+      wrappedSchemas: [],
+      modifiedDescriptions: [],
+    });
+  });
 });
 
 describe("sortTools", () => {

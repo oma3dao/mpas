@@ -160,6 +160,102 @@ describe("coordination HTTP endpoint", () => {
 
     expect(source).not.toContain("../adapter/");
   });
+
+  it("rejects empty and duplicate-member JSON bodies", async () => {
+    const app = createApp();
+    // Empty / incomplete payloads yield handler TypeErrors before schema validation (500).
+    const empty = await app.inject({
+      method: "POST",
+      url: "/mpas/v1/coordination/action",
+      headers: { "content-type": "application/json" },
+      payload: "",
+    });
+    expect(empty.statusCode).toBe(500);
+
+    const missingPackage = await app.inject({
+      method: "POST",
+      url: "/mpas/v1/coordination/action",
+      headers: { "content-type": "application/json" },
+      payload: "{}",
+    });
+    expect(missingPackage.statusCode).toBe(500);
+
+    const dup = await app.inject({
+      method: "POST",
+      url: "/mpas/v1/coordination/action",
+      headers: { "content-type": "application/json" },
+      payload: '{"version":"1","version":"2"}',
+    });
+    expect(dup.statusCode).toBe(400);
+
+    const truncated = await app.inject({
+      method: "POST",
+      url: "/mpas/v1/coordination/action",
+      headers: { "content-type": "application/json" },
+      payload: '{"a":1',
+    });
+    expect(truncated.statusCode).toBe(400);
+  });
+
+  it("accepts application/mpas+json action submissions", async () => {
+    const app = createApp();
+    const request = await coordinationActionRequest();
+    const response = await app.inject({
+      method: "POST",
+      url: "/mpas/v1/coordination/action",
+      headers: { "content-type": "application/mpas+json" },
+      payload: JSON.stringify(request),
+    });
+    expect(response.statusCode).toBe(201);
+    expect(response.json()).toMatchObject({ type: "CoordinationActionResponse", state: "awaitingApprovals" });
+  });
+
+  it("maps CoordinationStoreError from poll and approval handlers", async () => {
+    const { CoordinationStoreError } = await import("../../src/coordination/store.js");
+    const store = {
+      poll() {
+        throw new CoordinationStoreError(400, "POLL_FAILED", "poll failed");
+      },
+      validateSubmitApproval() {
+        // Auth-disabled path still preflights before submitApproval.
+      },
+      submitApproval() {
+        throw new CoordinationStoreError(404, "ACTION_NOT_FOUND", "missing");
+      },
+    };
+    const app = createCoordinationApiServer({ store: store as never });
+    apps.add(app);
+
+    const poll = await app.inject({
+      method: "POST",
+      url: "/mpas/v1/coordination/poll",
+      headers: { "content-type": "application/json" },
+      payload: JSON.stringify({ version: "1", type: "CoordinationPollRequest", did: "did:web:x" }),
+    });
+    expect(poll.statusCode).toBe(400);
+    expect(poll.json()).toMatchObject({ error: { code: "POLL_FAILED" } });
+
+    const approval = await app.inject({
+      method: "POST",
+      url: "/mpas/v1/coordination/approval",
+      headers: { "content-type": "application/json" },
+      payload: JSON.stringify({
+        version: "1",
+        type: "CoordinationApprovalSubmission",
+        actionEnvelopeHash: { alg: "sha-256", value: "x" },
+        approval: {
+          version: "1",
+          type: "Approval",
+          actionEnvelopeHash: { alg: "sha-256", value: "x" },
+          decision: "approve",
+          signature: { format: "jws", value: "a.b.c" },
+          createdAt: "2026-06-05T18:03:00.000Z",
+        },
+      }),
+    });
+    expect(approval.statusCode).toBe(404);
+    expect(approval.json()).toMatchObject({ error: { code: "ACTION_NOT_FOUND" } });
+  });
 });
 
 function createApp() {

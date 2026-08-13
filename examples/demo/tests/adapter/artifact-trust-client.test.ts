@@ -119,4 +119,89 @@ describe("artifact trust API client", () => {
       fetchArtifactTrust(artifactDid),
     ).rejects.toThrow("malformed");
   });
+
+  it("rejects evidence for a different artifactDid", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify(makeArtifactTrustResponse({ artifactDid: "did:artifact:other" })), {
+          status: 200,
+        }),
+      ),
+    );
+    await expect(fetchArtifactTrust(artifactDid)).rejects.toThrow(/different artifact/);
+  });
+
+  it("round-trips optional attesterLabel and rejects invalid field shapes", () => {
+    const withLabel = makeArtifactTrustResponse({
+      securityAssessments: [makeEvidence("security-assessment", { attesterLabel: "Lab A" })],
+      summary: { totalQueried: 1, totalVerified: 1, totalExcluded: 0, complete: true },
+    });
+    expect(parseArtifactTrustResponse(withLabel).securityAssessments[0].attestation.attesterLabel).toBe("Lab A");
+
+    expect(() =>
+      parseArtifactTrustResponse(
+        makeArtifactTrustResponse({
+          securityAssessments: [makeEvidence("security-assessment", { time: "not-digits" })],
+          summary: { totalQueried: 1, totalVerified: 1, totalExcluded: 0, complete: true },
+        }),
+      ),
+    ).toThrow(/invalid securityAssessments\.time/);
+
+    expect(() =>
+      parseArtifactTrustResponse({
+        ...makeArtifactTrustResponse(),
+        chain: { ...makeArtifactTrustResponse().chain, chainId: -1 },
+      }),
+    ).toThrow(/invalid chain\.chainId/);
+
+    expect(() =>
+      parseArtifactTrustResponse({
+        ...makeArtifactTrustResponse(),
+        summary: { totalQueried: 0, totalVerified: 0, totalExcluded: 0, complete: false },
+      }),
+    ).toThrow(/inconsistent summary/);
+
+    expect(() =>
+      parseArtifactTrustResponse({
+        ...makeArtifactTrustResponse(),
+        responsibilityClaims: "nope",
+      }),
+    ).toThrow(/missing responsibilityClaims/);
+  });
+
+  it("rejects non-record evidence items and invalid attestation data", () => {
+    expect(() =>
+      parseArtifactTrustResponse(
+        makeArtifactTrustResponse({
+          securityAssessments: ["not-an-object" as never],
+          summary: { totalQueried: 1, totalVerified: 1, totalExcluded: 0, complete: true },
+        }),
+      ),
+    ).toThrow(/invalid securityAssessments item/);
+
+    expect(() =>
+      parseArtifactTrustResponse(
+        makeArtifactTrustResponse({
+          securityAssessments: [
+            {
+              ...makeEvidence(),
+              attestation: { ...makeEvidence().attestation, data: "nope" as never },
+            },
+          ],
+          summary: { totalQueried: 1, totalVerified: 1, totalExcluded: 0, complete: true },
+        }),
+      ),
+    ).toThrow(/invalid securityAssessments data/);
+  });
+
+  it("omits attesterLabel when the field is undefined", () => {
+    const parsed = parseArtifactTrustResponse(
+      makeArtifactTrustResponse({
+        securityAssessments: [makeEvidence("security-assessment", { attesterLabel: undefined })],
+        summary: { totalQueried: 1, totalVerified: 1, totalExcluded: 0, complete: true },
+      }),
+    );
+    expect(parsed.securityAssessments[0].attestation).not.toHaveProperty("attesterLabel");
+  });
 });

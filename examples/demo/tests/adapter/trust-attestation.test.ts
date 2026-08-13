@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { checkAttestation } from "../../src/adapter/trust-attestation.js";
 import type { TrustContext } from "../../src/adapter/trust.js";
 import {
@@ -317,6 +317,76 @@ describe("checkAttestation responsible-party binding", () => {
     expect(result.primaryEvidenceFound).toBe(true);
     expect(result.responsibilityClaim).toBe(false);
     expect(result.cybersecurityAssessment).toBe(true);
+    expect(result.unqualifiedResponsibilityClaims).toHaveLength(1);
+  });
+
+  it("fetches artifact trust when none is preloaded", async () => {
+    const body = makeArtifactTrustResponse();
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify(body), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      const result = await checkAttestation(artifactDid, publisherDid, context);
+      expect(fetchMock).toHaveBeenCalled();
+      const [url] = fetchMock.mock.calls[0] as [URL];
+      expect(url.toString()).toContain(encodeURIComponent(artifactDid));
+      expect(result.primaryEvidenceFound).toBe(false);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("uses the raw attester when cybersecurity evidence has no attesterLabel", async () => {
+    const evidence = makeEvidence();
+    delete (evidence.attestation as { attesterLabel?: string }).attesterLabel;
+    const result = await checkAttestation(
+      artifactDid,
+      publisherDid,
+      context,
+      makeArtifactTrustResponse({
+        securityAssessments: [evidence],
+        summary: { totalQueried: 1, totalVerified: 1, totalExcluded: 0, complete: true },
+      }),
+    );
+
+    expect(result.primaryEvidenceFound).toBe(true);
+    expect(result.message).toContain(evidence.attestation.attester);
+    expect(result.message).not.toContain("OMA3 Security Lab");
+  });
+
+  it("does not treat non-approved-issuer assessments as primary cybersecurity evidence", async () => {
+    const result = await checkAttestation(
+      artifactDid,
+      publisherDid,
+      context,
+      makeArtifactTrustResponse({
+        securityAssessments: [makeEvidence("security-assessment", {}, ["proof"])],
+        summary: { totalQueried: 1, totalVerified: 1, totalExcluded: 0, complete: true },
+      }),
+    );
+
+    expect(result.primaryEvidenceFound).toBe(false);
+    expect(result.cybersecurityAssessment).toBe(false);
+    expect(result.attestations).toHaveLength(1);
+    expect(result.message).toContain("secondary or informational");
+  });
+
+  it("treats a non-string responsibleParty as unqualified", async () => {
+    const result = await checkAttestation(
+      artifactDid,
+      publisherDid,
+      context,
+      makeArtifactTrustResponse({
+        responsibilityClaims: [
+          makeEvidence("responsibility-claim", {
+            data: { subject: artifactDid, responsibleParty: 42 },
+          }, ["proof", "controller-authorization"]),
+        ],
+        summary: { totalQueried: 1, totalVerified: 1, totalExcluded: 0, complete: true },
+      }),
+    );
+
+    expect(result.responsibilityClaim).toBe(false);
     expect(result.unqualifiedResponsibilityClaims).toHaveLength(1);
   });
 });

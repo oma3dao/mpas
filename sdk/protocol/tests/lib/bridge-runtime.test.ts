@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ActionPackage, ActionResponse } from "../../src/index.js";
 import { MPAS_WAIT_TOOL_NAME, computeHash } from "../../src/index.js";
 import { ProposerBridge } from "../../src/lib/bridge-runtime.js";
@@ -262,6 +262,103 @@ describe("reserved wait tool (profile §6)", () => {
     // Stable result (profile §7.3): ask again, same answer.
     const again = await bridge.handleToolCall(MPAS_WAIT_TOOL_NAME, { actionId, timeoutSeconds: 5 });
     expect(again).toEqual(nativeResult);
+  });
+});
+
+describe("ProposerBridge lifecycle and error edges", () => {
+  it("returns BRIDGE_UNAVAILABLE when Action Package construction fails", async () => {
+    const bridge = new ProposerBridge({
+      tools: UPSTREAM_TOOLS,
+      buildActionPackage: async () => {
+        throw new Error("key material unavailable");
+      },
+      store: new MemoryWorkflowStore(),
+      adapter: fakeAdapter(),
+      coordination: idleCoordination,
+      proposerDid: "did:jwk:proposer",
+      resultRetentionSeconds: 86_400,
+    });
+
+    const result = await bridge.handleToolCall("merge_pull_request", { pullNumber: 1 });
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent).toMatchObject({
+      type: "MpasBridgeError",
+      code: "BRIDGE_UNAVAILABLE",
+    });
+  });
+
+  it("uses a non-Error throw message fallback for package construction failures", async () => {
+    const bridge = new ProposerBridge({
+      tools: UPSTREAM_TOOLS,
+      buildActionPackage: async () => {
+        throw "boom";
+      },
+      store: new MemoryWorkflowStore(),
+      adapter: fakeAdapter(),
+      coordination: idleCoordination,
+      proposerDid: "did:jwk:proposer",
+      resultRetentionSeconds: 86_400,
+    });
+
+    const result = await bridge.handleToolCall("merge_pull_request", {});
+    expect(result.structuredContent).toMatchObject({
+      code: "BRIDGE_UNAVAILABLE",
+      message: "Could not construct the Action Package.",
+    });
+  });
+
+  it("starts and stops the background ticker", async () => {
+    const bridge = makeBridge(fakeAdapter(response("pending")));
+    await bridge.start();
+    await bridge.pollOnce();
+    bridge.stop();
+    bridge.stop();
+  });
+
+  it("runs the background ticker body on the poll interval", async () => {
+    vi.useFakeTimers();
+    const adapter = fakeAdapter(response("pending"));
+    const store = new MemoryWorkflowStore();
+    const purgeSpy = vi.spyOn(store, "purgeExpiredResults");
+    const bridge = new ProposerBridge({
+      tools: UPSTREAM_TOOLS,
+      buildActionPackage: buildPackage,
+      store,
+      adapter,
+      coordination: idleCoordination,
+      proposerDid: "did:jwk:proposer",
+      resultRetentionSeconds: 86_400,
+      pollIntervalMs: 10,
+    });
+
+    try {
+      await bridge.start();
+      await vi.advanceTimersByTimeAsync(15);
+      expect(purgeSpy).toHaveBeenCalled();
+    } finally {
+      bridge.stop();
+      vi.useRealTimers();
+      purgeSpy.mockRestore();
+    }
+  });
+
+  it("sets notificationRequired false when notification is assigned elsewhere", async () => {
+    const bridge = new ProposerBridge({
+      tools: UPSTREAM_TOOLS,
+      buildActionPackage: buildPackage,
+      store: new MemoryWorkflowStore(),
+      adapter: fakeAdapter(response("additionalApprovalsRequired")),
+      coordination: idleCoordination,
+      proposerDid: "did:jwk:proposer",
+      resultRetentionSeconds: 86_400,
+      notificationAssignedElsewhere: true,
+    });
+
+    const result = await bridge.handleToolCall("merge_pull_request", { pullNumber: 1 });
+    expect(result.structuredContent).toMatchObject({
+      type: "MpasBridgeDeferredResult",
+      notificationRequired: false,
+    });
   });
 });
 

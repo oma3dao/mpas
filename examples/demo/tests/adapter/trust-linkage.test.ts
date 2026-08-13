@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { listLinkedIdentifiers } from "../../src/adapter/trust-linkage.js";
 import type { TrustContext } from "../../src/adapter/trust.js";
 import {
@@ -15,6 +15,9 @@ const context: TrustContext = {
   },
 };
 describe("listLinkedIdentifiers", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
   it("returns an empty list when no verified linked identifier exists", async () => {
     const result = await listLinkedIdentifiers(
       artifactDid,
@@ -105,5 +108,74 @@ describe("listLinkedIdentifiers", () => {
     );
 
     expect(result).toEqual([]);
+  });
+
+  it("skips wrong subject and non-string linkedId values", async () => {
+    const result = await listLinkedIdentifiers(
+      artifactDid,
+      context,
+      makeArtifactTrustResponse({
+        otherAttestations: [
+          makeEvidence("linked-identifier", {
+            data: { subject: "did:artifact:other", linkedId: "did:web:ok.example" },
+          }),
+          makeEvidence("linked-identifier", {
+            data: { subject: artifactDid, linkedId: 123 as unknown as string },
+          }),
+        ],
+      }),
+    );
+
+    expect(result).toEqual([]);
+  });
+
+  it("includes attesterLabel when present and omits it otherwise", async () => {
+    const withLabel = makeEvidence("linked-identifier", {
+      data: { subject: artifactDid, linkedId: "did:web:labeled.example" },
+      attesterLabel: "Trusted Lab",
+    });
+    const withoutLabel = makeEvidence("linked-identifier", {
+      data: { subject: artifactDid, linkedId: "did:web:plain.example" },
+      attesterLabel: undefined,
+    });
+    const result = await listLinkedIdentifiers(
+      artifactDid,
+      context,
+      makeArtifactTrustResponse({ otherAttestations: [withLabel, withoutLabel] }),
+    );
+
+    expect(result).toEqual([
+      expect.objectContaining({
+        linkedId: "did:web:labeled.example",
+        attesterLabel: "Trusted Lab",
+      }),
+      expect.objectContaining({
+        linkedId: "did:web:plain.example",
+      }),
+    ]);
+    expect(result[1]).not.toHaveProperty("attesterLabel");
+  });
+
+  it("fetches artifact trust when the response is omitted", async () => {
+    const linked = makeEvidence("linked-identifier", {
+      data: { subject: artifactDid, linkedId: "did:web:fetched.example" },
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response(
+          JSON.stringify(
+            makeArtifactTrustResponse({
+              otherAttestations: [linked],
+              summary: { totalQueried: 1, totalVerified: 1, totalExcluded: 0, complete: true },
+            }),
+          ),
+          { status: 200 },
+        ),
+      ),
+    );
+
+    const result = await listLinkedIdentifiers(artifactDid, context);
+    expect(result).toEqual([expect.objectContaining({ linkedId: "did:web:fetched.example" })]);
   });
 });

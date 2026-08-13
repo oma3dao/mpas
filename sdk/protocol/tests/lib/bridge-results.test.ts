@@ -157,6 +157,38 @@ describe("toolResultForRecord — terminal (§4.1, §5.2)", () => {
     });
     expect((result.structuredContent as Record<string, unknown>).type).not.toBe("MpasBridgeActionOutcome");
   });
+
+  it("returns BRIDGE_UNAVAILABLE when state and resolution kind disagree", () => {
+    const mismatchedUnresolvable = toolResultForRecord(
+      record({
+        state: "unresolvable",
+        resolution: {
+          kind: "resolved",
+          actionResponse: { version: "1", type: "ActionResponse", result: "executed" },
+        },
+      }),
+      { resultRetentionSeconds: 86_400 },
+    );
+    expect(mismatchedUnresolvable.structuredContent).toMatchObject({
+      code: "BRIDGE_UNAVAILABLE",
+      message: expect.stringContaining("inconsistent"),
+    });
+
+    const mismatchedResolved = toolResultForRecord(
+      record({
+        state: "resolved",
+        resolution: {
+          kind: "unresolvable",
+          errorCode: "RESULT_UNAVAILABLE",
+          errorMessage: "lost",
+        },
+      }),
+      { resultRetentionSeconds: 86_400 },
+    );
+    expect(mismatchedResolved.structuredContent).toMatchObject({
+      code: "BRIDGE_UNAVAILABLE",
+    });
+  });
 });
 
 describe("buildBridgeError (§5.3)", () => {

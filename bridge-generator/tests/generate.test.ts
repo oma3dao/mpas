@@ -240,6 +240,34 @@ describe("runGenerate", () => {
   it("rejects invalid app names", async () => {
     await expect(generate({ appName: "Bad Name!" })).rejects.toBeInstanceOf(GenerateError);
   });
+
+  it("rejects a missing or incomplete org config", async () => {
+    await expect(generate({ orgConfigPath: join(tmpdir(), "missing-org.json") })).rejects.toBeInstanceOf(GenerateError);
+
+    const outDir = await mkdtemp(join(tmpdir(), "bridge-gen-bad-org-"));
+    const orgConfigPath = join(outDir, "org.json");
+    await writeFile(orgConfigPath, JSON.stringify({ publisher: { name: "X" } }));
+    await expect(generate({ outDir, orgConfigPath })).rejects.toThrow(/must define/);
+  });
+
+  it("rejects org configs that leave registry entry fields empty", async () => {
+    const outDir = await mkdtemp(join(tmpdir(), "bridge-gen-empty-registry-"));
+    const orgConfigPath = join(outDir, "org.json");
+    await writeFile(
+      orgConfigPath,
+      JSON.stringify({
+        publisher: { name: "Wivity", githubOrg: "wivity" },
+        application: { name: "", description: "", applicationDid: "did:web:mock.example" },
+      }),
+    );
+    await expect(generate({ outDir, orgConfigPath })).rejects.toThrow(/Registry entry is missing required fields/);
+  });
+
+  it("rejects corrupt previous plugin.json on regeneration", async () => {
+    const appDir = await generate();
+    await writeFile(join(appDir, "plugin.json"), "{ not-json");
+    await expect(generate({ outDir: join(appDir, "..") })).rejects.toThrow(/Unable to parse existing/);
+  });
 });
 
 describe("regeneration plugin membership (spec §5: old snapshot − old plugin = intentional pass-through)", () => {

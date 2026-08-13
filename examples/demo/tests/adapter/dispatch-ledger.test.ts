@@ -75,4 +75,35 @@ describe("DispatchLedger", () => {
     expect(reloaded.check(actionId, "hashA")).toMatchObject({ kind: "reject", code: "REPLAY_DETECTED" });
     expect(journal.readAll().filter((e) => e.event === "resolved")).toHaveLength(1);
   });
+
+  it("scopes actionIds when a scope is present", () => {
+    const ledger = new DispatchLedger();
+    const scoped = { value: actionId.value, scope: "tenant-a" };
+    ledger.authorizeDispatch(scoped, "hashA", expiresAt);
+    expect(ledger.check(actionId, "hashA").kind).toBe("absent");
+    expect(ledger.check(scoped, "hashA").kind).toBe("pending");
+    expect(ledger.size()).toBe(1);
+  });
+});
+
+describe("FileDispatchJournal", () => {
+  it("persists executing and resolved events across reloads", async () => {
+    const { mkdtemp } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { FileDispatchJournal } = await import("../../src/adapter/dispatch-ledger.js");
+
+    const dir = await mkdtemp(join(tmpdir(), "mpas-ledger-"));
+    const path = join(dir, "dispatch-ledger.jsonl");
+    const journal = new FileDispatchJournal(path);
+    expect(journal.readAll()).toEqual([]);
+
+    const ledger = new DispatchLedger(journal);
+    ledger.authorizeDispatch(actionId, "hashA", expiresAt);
+    ledger.resolve(actionId, "executed");
+
+    const reloaded = new DispatchLedger(new FileDispatchJournal(path));
+    expect(reloaded.check(actionId, "hashA")).toMatchObject({ kind: "reject", code: "REPLAY_DETECTED" });
+    expect(reloaded.size()).toBe(1);
+  });
 });

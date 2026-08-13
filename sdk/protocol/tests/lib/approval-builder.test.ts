@@ -57,5 +57,14 @@ describe("ApprovalBuilder", () => {
         signer.publicJwk,
       ),
     ).resolves.toBe(false);
+    await expect(
+      builder.verifyApproval(
+        {
+          ...approval,
+          signature: { format: "detached" as never, value: approval.signature.value },
+        },
+        signer.publicJwk,
+      ),
+    ).resolves.toBe(false);
   });
 });

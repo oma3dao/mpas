@@ -33,6 +33,18 @@ describe("OAuth fetch policy", () => {
     expect(fetchFn).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ redirect: "manual" }));
   });
 
+  it("combines a caller abort signal with the policy timeout", async () => {
+    const fetchFn = vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 200 }));
+    const policy = createOAuthFetchPolicy({ fetch: fetchFn });
+    const signal = AbortSignal.timeout(5_000);
+
+    await expect(policy("https://oauth.example/metadata", { signal })).resolves.toMatchObject({ status: 200 });
+    expect(fetchFn).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+  });
+
   it("aborts requests that exceed the configured timeout", async () => {
     const fetchFn = vi.fn<typeof fetch>((_input, init) => new Promise((_resolve, reject) => {
       init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
@@ -67,6 +79,32 @@ describe("OAuth fetch policy", () => {
     await expect(policy("https://other.example/tenant/tools", init))
       .rejects.toThrow("Bearer authorization is restricted to the exact MCP resource URL");
     expect(fetchFn).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not enforce a size limit on non-JSON responses", async () => {
+    const fetchFn = vi.fn<typeof fetch>().mockResolvedValue(new Response("x".repeat(64), {
+      headers: { "content-type": "text/plain" },
+    }));
+    const policy = createOAuthFetchPolicy({ fetch: fetchFn, maxJsonResponseBytes: 8 });
+
+    await expect(policy("https://oauth.example/authorize")).resolves.toMatchObject({ status: 200 });
+  });
+
+  it("rejects JSON responses whose Content-Length exceeds the size limit", async () => {
+    const fetchFn = vi.fn<typeof fetch>().mockResolvedValue(new Response("{}", {
+      headers: { "content-type": "application/json", "content-length": "4096" },
+    }));
+    const policy = createOAuthFetchPolicy({ fetch: fetchFn, maxJsonResponseBytes: 8 });
+
+    await expect(policy("https://oauth.example/metadata"))
+      .rejects.toThrow("OAuth JSON response exceeds the size limit");
+  });
+
+  it("rethrows non-timeout fetch failures", async () => {
+    const fetchFn = vi.fn<typeof fetch>().mockRejectedValue(new Error("socket hang up"));
+    const policy = createOAuthFetchPolicy({ fetch: fetchFn });
+
+    await expect(policy("https://oauth.example/metadata")).rejects.toThrow("socket hang up");
   });
 
   it("does not confuse OAuth client authentication with MCP Bearer authorization", async () => {

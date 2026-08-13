@@ -1,13 +1,15 @@
-import { chmod, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { FastifyInstance } from "fastify";
 import { compactVerify, importJWK, type JWK } from "jose";
 import { loadDeploymentConfigs } from "../../src/adapter/config-loader.js";
 import { FileCredentialProvider } from "../../src/adapter/credential-provider.js";
-import { createAdapterApiServer } from "../../src/adapter/adapter-api-server.js";
+import { classifyDispatch, createAdapterApiServer } from "../../src/adapter/adapter-api-server.js";
+import * as mcpHttp from "../../src/adapter/dispatch/mcp-http.js";
+import * as mcpStdio from "../../src/adapter/dispatch/mcp-stdio.js";
 import type { Did, ExecutionReceipt, ReceiptPayload } from "../../src/core/types.js";
 
 const fixturesDir = fileURLToPath(new URL("../fixtures/", import.meta.url));
@@ -19,6 +21,13 @@ const protocolVersionFixtureServer = fileURLToPath(
 const missingFixtureServer = join(fixturesDir, "adapter", "missing-mcp-server.mjs");
 const apps: FastifyInstance[] = [];
 
+/** Avoids Windows chmod/mode flakiness for dispatch-path coverage. */
+function staticCredentialProvider(value = "ghp_test"): FileCredentialProvider {
+  return {
+    getCredential: async () => ({ ok: true as const, value }),
+  } as FileCredentialProvider;
+}
+
 interface KeyFixture {
   did: Did;
   privateJwk: JWK;
@@ -27,15 +36,6 @@ interface KeyFixture {
 
 async function readJson<T>(path: string): Promise<T> {
   return JSON.parse(await readFile(path, "utf8")) as T;
-}
-
-async function credentialDir() {
-  const dir = await mkdtemp(join(tmpdir(), "mpas-http-credentials-"));
-  await mkdir(dir, { recursive: true });
-  const path = join(dir, "github-mirror-token.json");
-  await writeFile(path, `${JSON.stringify({ value: "ghp_test" })}\n`, { mode: 0o600 });
-  await chmod(path, 0o600);
-  return dir;
 }
 
 async function makeApp(configDir?: string) {
@@ -51,7 +51,7 @@ async function makeApp(configDir?: string) {
   const adapter = await readJson<KeyFixture>(join(fixturesDir, "test-keys", "adapter.json"));
   const app = createAdapterApiServer({
     configsByApplicationDid: configs.configsByApplicationDid,
-    credentialProvider: new FileCredentialProvider(await credentialDir()),
+    credentialProvider: staticCredentialProvider(),
     adapterDid: adapter.did,
     adapterSigningKey: adapter.privateJwk,
     // Test fixtures are signed with a far-future expiresAt; widen the window so the
@@ -356,6 +356,37 @@ describe("HTTP endpoint", () => {
     });
   });
 
+  it("governs an operator-only policy entry even when the plugin omits the operation", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "mpas-http-configs-operator-"));
+    const config = await readJson<Record<string, unknown>>(
+      join(fixturesDir, "configs", "policy-fixtures", "github-auto-approve.json"),
+    );
+    config.plugin = {
+      ...(config.plugin as Record<string, unknown>),
+      path: join(fixturesDir, "plugins", "github-mirror-plugin.json"),
+    };
+    const policy = config.policy as { policies: Record<string, unknown[]> };
+    policy.policies = {
+      create_issue_mirror: [{ requirements: { type: "proposerOnly" } }],
+    };
+    config.executionTarget = {
+      type: "mcp.stdio",
+      command: "node",
+      args: [join(fixturesDir, "adapter", "echo-mcp-server.mjs")],
+      env: { GITHUB_PERSONAL_ACCESS_TOKEN: "{{credential:github-mirror-token}}" },
+      timeoutMs: 2000,
+    };
+    await writeFile(join(dir, "github-operator.json"), `${JSON.stringify(config, null, 2)}\n`);
+
+    const app = await makeApp(dir);
+    const response = await submitFixture(app, "valid-no-approval-required.json");
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      result: "executed",
+      executionReceipt: { type: "ExecutionReceipt" },
+    });
+  });
+
   it("rejects a proposer outside the allowed proposer set (proposer gating)", async () => {
     // Config identical to auto-approve, but the proposers group excludes the
     // fixture proposer (maintainers only). The package still verifies
@@ -377,6 +408,467 @@ describe("HTTP endpoint", () => {
     expect(response.json()).toMatchObject({
       result: "rejected",
       error: { code: "PROPOSER_NOT_AUTHORIZED" },
+    });
+  });
+
+  it.each([
+    ["invalid-unknown-application.json", "rejected", "UNKNOWN_APPLICATION"],
+    ["invalid-bad-signature.json", "rejected", "APPROVAL_BUNDLE_INVALID"],
+    ["invalid-payload-hash-mismatch.json", "rejected", "PAYLOAD_HASH_MISMATCH"],
+  ])("rejects %s as %s with %s and a receipt", async (fixtureFile, result, code) => {
+    const app = await makeApp();
+    const response = await submitFixture(app, fixtureFile);
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      result,
+      error: { code },
+      executionReceipt: { type: "ExecutionReceipt" },
+    });
+  });
+
+  it("marks expired envelopes as expired with a receipt", async () => {
+    const app = await makeApp();
+    const response = await submitFixture(app, "invalid-expired-envelope.json");
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      result: "expired",
+      error: { code: "EXPIRED_ACTION_ENVELOPE" },
+      executionReceipt: { type: "ExecutionReceipt" },
+    });
+  });
+
+  it("rejects envelopes whose validity window exceeds the verifier maximum", async () => {
+    const configs = await loadDeploymentConfigs(await makeAutoApproveConfigDir(), {
+      confirmPluginUse: async () => true,
+    });
+    if (!configs.ok) throw new Error(configs.error.message);
+    const adapter = await readJson<KeyFixture>(join(fixturesDir, "test-keys", "adapter.json"));
+    const app = createAdapterApiServer({
+      configsByApplicationDid: configs.configsByApplicationDid,
+      credentialProvider: staticCredentialProvider(),
+      adapterDid: adapter.did,
+      adapterSigningKey: adapter.privateJwk,
+      maxEnvelopeValidityMs: 60_000,
+    });
+    apps.push(app);
+
+    const response = await submitFixture(app, "valid-no-approval-required.json");
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      result: "rejected",
+      error: { code: "ENVELOPE_VALIDITY_TOO_LONG" },
+    });
+  });
+
+  it("rejects when the credential handle cannot be resolved", async () => {
+    const configs = await loadDeploymentConfigs(await makeAutoApproveConfigDir(), {
+      confirmPluginUse: async () => true,
+    });
+    if (!configs.ok) throw new Error(configs.error.message);
+    const adapter = await readJson<KeyFixture>(join(fixturesDir, "test-keys", "adapter.json"));
+    const app = createAdapterApiServer({
+      configsByApplicationDid: configs.configsByApplicationDid,
+      credentialProvider: {
+        getCredential: async () => ({
+          ok: false as const,
+          error: { code: "CREDENTIAL_NOT_FOUND", message: "missing" },
+        }),
+      } as FileCredentialProvider,
+      adapterDid: adapter.did,
+      adapterSigningKey: adapter.privateJwk,
+      maxEnvelopeValidityMs: Number.MAX_SAFE_INTEGER,
+    });
+    apps.push(app);
+
+    const response = await submitFixture(app, "valid-no-approval-required.json");
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      result: "rejected",
+      error: { code: "CREDENTIAL_NOT_FOUND" },
+    });
+  });
+
+  it("returns pending when the ledger already has the action in flight", async () => {
+    const configs = await loadDeploymentConfigs(await makeAutoApproveConfigDir(), {
+      confirmPluginUse: async () => true,
+    });
+    if (!configs.ok) throw new Error(configs.error.message);
+    const adapter = await readJson<KeyFixture>(join(fixturesDir, "test-keys", "adapter.json"));
+    const ledger = {
+      check: () => ({ kind: "pending" as const }),
+      authorizeDispatch: () => ({ kind: "absent" as const }),
+      resolve() {},
+    };
+    const app = createAdapterApiServer({
+      configsByApplicationDid: configs.configsByApplicationDid,
+      credentialProvider: staticCredentialProvider(),
+      adapterDid: adapter.did,
+      adapterSigningKey: adapter.privateJwk,
+      maxEnvelopeValidityMs: Number.MAX_SAFE_INTEGER,
+      ledger: ledger as never,
+    });
+    apps.push(app);
+
+    const response = await submitFixture(app, "valid-no-approval-required.json");
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ result: "pending" });
+    expect(response.json().executionReceipt).toBeUndefined();
+  });
+
+  it("returns pending when authorizeDispatch races after prepare", async () => {
+    const dir = await makeTargetConfigDir(join(fixturesDir, "adapter", "echo-mcp-server.mjs"), 2000);
+    const configs = await loadDeploymentConfigs(dir, { confirmPluginUse: async () => true });
+    if (!configs.ok) throw new Error(configs.error.message);
+    const adapter = await readJson<KeyFixture>(join(fixturesDir, "test-keys", "adapter.json"));
+    const ledger = {
+      check: () => ({ kind: "absent" as const }),
+      authorizeDispatch: () => ({ kind: "pending" as const }),
+      resolve() {},
+    };
+    const app = createAdapterApiServer({
+      configsByApplicationDid: configs.configsByApplicationDid,
+      credentialProvider: staticCredentialProvider(),
+      adapterDid: adapter.did,
+      adapterSigningKey: adapter.privateJwk,
+      maxEnvelopeValidityMs: Number.MAX_SAFE_INTEGER,
+      ledger: ledger as never,
+    });
+    apps.push(app);
+
+    const response = await submitFixture(app, "valid-delete-branch.json");
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ result: "pending" });
+  });
+
+  it("rejects when authorizeDispatch loses a race to a replay", async () => {
+    const dir = await makeTargetConfigDir(join(fixturesDir, "adapter", "echo-mcp-server.mjs"), 2000);
+    const configs = await loadDeploymentConfigs(dir, { confirmPluginUse: async () => true });
+    if (!configs.ok) throw new Error(configs.error.message);
+    const adapter = await readJson<KeyFixture>(join(fixturesDir, "test-keys", "adapter.json"));
+    const ledger = {
+      check: () => ({ kind: "absent" as const }),
+      authorizeDispatch: () => ({
+        kind: "reject" as const,
+        code: "REPLAY_DETECTED" as const,
+        message: "already dispatched",
+      }),
+      resolve() {},
+    };
+    const app = createAdapterApiServer({
+      configsByApplicationDid: configs.configsByApplicationDid,
+      credentialProvider: staticCredentialProvider(),
+      adapterDid: adapter.did,
+      adapterSigningKey: adapter.privateJwk,
+      maxEnvelopeValidityMs: Number.MAX_SAFE_INTEGER,
+      ledger: ledger as never,
+    });
+    apps.push(app);
+
+    const response = await submitFixture(app, "valid-delete-branch.json");
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      result: "rejected",
+      error: { code: "REPLAY_DETECTED" },
+      executionReceipt: { type: "ExecutionReceipt" },
+    });
+  });
+
+  it("marks an empty approval bundle as malformed without a receipt", async () => {
+    const app = await makeApp(await makeAutoApproveConfigDir());
+    const actionPackage = JSON.parse(
+      await readFile(join(fixturesDir, "core", "valid-no-approval-required.json"), "utf8"),
+    ) as { approvalBundle: { approvals: unknown[] } };
+    actionPackage.approvalBundle = { ...actionPackage.approvalBundle, approvals: [] };
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/mpas/v1/action",
+      headers: { "content-type": "application/mpas+json" },
+      payload: JSON.stringify({ version: "1", type: "ActionRequest", actionPackage }),
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      result: "malformed",
+      error: { code: "MALFORMED_APPROVAL_BUNDLE" },
+    });
+    expect(response.json().executionReceipt).toBeUndefined();
+  });
+
+  it("marks a numeric policy condition over a string title as malformed", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "mpas-http-configs-numeric-"));
+    const config = await readJson<Record<string, unknown>>(
+      join(fixturesDir, "configs", "policy-fixtures", "github-auto-approve.json"),
+    );
+    config.plugin = {
+      ...(config.plugin as Record<string, unknown>),
+      path: join(fixturesDir, "plugins", "github-mirror-plugin.json"),
+    };
+    const policy = config.policy as { policies: Record<string, unknown[]> };
+    policy.policies = {
+      create_issue_mirror: [
+        {
+          match: {
+            conditions: [{ source: "executionPayload", path: "/arguments/title", op: "gt", value: 10 }],
+          },
+          requirements: { type: "proposerOnly" },
+        },
+      ],
+    };
+    await writeFile(join(dir, "github-numeric.json"), `${JSON.stringify(config, null, 2)}\n`);
+
+    const app = await makeApp(dir);
+    const response = await submitFixture(app, "valid-no-approval-required.json");
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      result: "malformed",
+      error: { code: "NUMERIC_CONDITION_UNPARSEABLE" },
+    });
+  });
+
+  it("accepts a raw ActionPackage body without an ActionRequest wrapper", async () => {
+    const app = await makeApp(await makeAutoApproveConfigDir());
+    const actionPackage = JSON.parse(
+      await readFile(join(fixturesDir, "core", "valid-no-approval-required.json"), "utf8"),
+    ) as unknown;
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/mpas/v1/action",
+      headers: { "content-type": "application/mpas+json" },
+      payload: JSON.stringify(actionPackage),
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      result: "executed",
+      executionReceipt: { type: "ExecutionReceipt" },
+    });
+  });
+
+  it("rejects a governed plugin operation whose payload fails schema validation", async () => {
+    const { ActionPackageBuilder, KeyManager } = await import("@oma3/mpas");
+    const keyManager = await KeyManager.fromFile(join(fixturesDir, "test-keys", "proposer.json"));
+    const builder = new ActionPackageBuilder({
+      keyManager,
+      applicationDid: "did:web:github-mirror.example",
+      executionProfile: { id: "did:web:profiles.oma3.org:mcp", format: "mcp.toolsCall" },
+    });
+    const actionPackage = await builder.buildFromToolCall("delete_branch_mirror", { owner: "example-org" });
+
+    const app = await makeApp(await makeAutoApproveConfigDir());
+    const response = await app.inject({
+      method: "POST",
+      url: "/mpas/v1/action",
+      headers: { "content-type": "application/mpas+json" },
+      payload: JSON.stringify({ version: "1", type: "ActionRequest", actionPackage }),
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      result: "rejected",
+      error: { code: expect.stringMatching(/PAYLOAD|SCHEMA|INVALID|ARGUMENT/) },
+      executionReceipt: { type: "ExecutionReceipt" },
+    });
+  });
+
+  it("marks a hashable package with non-millisecond createdAt as malformed before the ledger", async () => {
+    const app = await makeApp(await makeAutoApproveConfigDir());
+    const actionPackage = JSON.parse(
+      await readFile(join(fixturesDir, "core", "valid-no-approval-required.json"), "utf8"),
+    ) as { actionEnvelope: { createdAt: string } };
+    actionPackage.actionEnvelope.createdAt = "2026-06-05T18:00:00Z";
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/mpas/v1/action",
+      headers: { "content-type": "application/mpas+json" },
+      payload: JSON.stringify({ version: "1", type: "ActionRequest", actionPackage }),
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      result: "malformed",
+      error: { code: "INVALID_ACTION_ENVELOPE" },
+    });
+    expect(response.json().executionReceipt).toBeUndefined();
+  });
+
+  it("marks a verified package missing executionPayload.arguments as malformed", async () => {
+    const { ActionPackageBuilder, KeyManager } = await import("@oma3/mpas");
+    const keyManager = await KeyManager.fromFile(join(fixturesDir, "test-keys", "proposer.json"));
+    const builder = new ActionPackageBuilder({
+      keyManager,
+      applicationDid: "did:web:github-mirror.example",
+      executionProfile: { id: "did:web:profiles.oma3.org:mcp", format: "mcp.toolsCall" },
+    });
+    const payload = { name: "create_issue_mirror" } as never;
+    const envelope = builder.buildEnvelope(payload);
+    const approval = await builder.signProposerApproval(envelope);
+    const actionPackage = builder.assemblePackage(payload, envelope, approval);
+
+    const app = await makeApp(await makeAutoApproveConfigDir());
+    const response = await app.inject({
+      method: "POST",
+      url: "/mpas/v1/action",
+      headers: { "content-type": "application/mpas+json" },
+      payload: JSON.stringify({ version: "1", type: "ActionRequest", actionPackage }),
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      result: "malformed",
+      error: { code: "PAYLOAD_STRUCTURE_INVALID" },
+    });
+  });
+
+  it.each([
+    ["PROCESS_EXITED", "The upstream MCP process exited before responding."],
+    ["TRANSPORT_ERROR", "The upstream MCP transport failed after dispatch."],
+    ["WEIRD_CODE", "The upstream MCP operation did not complete normally."],
+  ] as const)("surfaces tools/call diagnostic message for %s", async (code, message) => {
+    const prepareSpy = vi.spyOn(mcpStdio, "prepareMcpStdio").mockResolvedValue({
+      ok: true,
+      session: {
+        transmit: async () => ({
+          ok: false as const,
+          error: { kind: "McpDispatchError" as const, code, message: "boom" },
+        }),
+        close: async () => undefined,
+      },
+    });
+
+    try {
+      const app = await makeApp(await makeAutoApproveConfigDir());
+      const response = await submitFixture(app, "valid-no-approval-required.json");
+      expect(response.statusCode).toBe(200);
+      const body = response.json() as { result: string; context?: { diagnostic?: Record<string, unknown> } };
+      expect(body.result === "indeterminate" || body.result === "failed").toBe(true);
+      expect(body.context?.diagnostic).toMatchObject({
+        code,
+        phase: "tools/call",
+        transport: "stdio",
+        message,
+      });
+    } finally {
+      prepareSpy.mockRestore();
+    }
+  });
+
+  it("dispatches through mcp.http targets via prepareTarget", async () => {
+    const prepareHttpSpy = vi.spyOn(mcpHttp, "prepareMcpHttp").mockResolvedValue({
+      ok: true,
+      session: {
+        transmit: async () => ({ ok: true as const, result: { content: [{ type: "text", text: "ok" }] } }),
+        close: async () => undefined,
+      },
+    });
+
+    try {
+      const dir = await mkdtemp(join(tmpdir(), "mpas-http-configs-http-target-"));
+      const config = await readJson<Record<string, unknown>>(
+        join(fixturesDir, "configs", "policy-fixtures", "github-auto-approve.json"),
+      );
+      config.plugin = {
+        ...(config.plugin as Record<string, unknown>),
+        path: join(fixturesDir, "plugins", "github-mirror-plugin.json"),
+      };
+      config.executionTarget = {
+        type: "mcp.http",
+        url: "http://127.0.0.1:9/mcp",
+        headers: {
+          Authorization: "Bearer {{credential:github-mirror-token}}",
+        },
+        timeoutMs: 5_000,
+      };
+      await writeFile(join(dir, "github-http.json"), `${JSON.stringify(config, null, 2)}\n`);
+
+      const app = await makeApp(dir);
+      const response = await submitFixture(app, "valid-no-approval-required.json");
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({
+        result: "executed",
+        executionReceipt: { type: "ExecutionReceipt" },
+      });
+      expect(prepareHttpSpy).toHaveBeenCalled();
+    } finally {
+      prepareHttpSpy.mockRestore();
+    }
+  });
+
+  it("rejects OAuth HTTP targets that have no stored session without requiring a static credential", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "mpas-http-configs-oauth-"));
+    const config = await readJson<Record<string, unknown>>(
+      join(fixturesDir, "configs", "policy-fixtures", "github-auto-approve.json"),
+    );
+    config.plugin = {
+      ...(config.plugin as Record<string, unknown>),
+      path: join(fixturesDir, "plugins", "github-mirror-plugin.json"),
+    };
+    config.credentialBindings = [{ credentialHandle: "coverage-oauth-token-s13", provider: "file" }];
+    config.executionTarget = {
+      type: "mcp.http",
+      url: "https://mcp.example/mcp",
+      auth: { type: "oauth2", session: "coverage-oauth-session" },
+      timeoutMs: 5_000,
+    };
+    await writeFile(join(dir, "github-oauth.json"), `${JSON.stringify(config, null, 2)}\n`);
+
+    const app = await makeApp(dir);
+    const response = await submitFixture(app, "valid-no-approval-required.json");
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      result: "rejected",
+      error: {
+        code: "TARGET_UNAVAILABLE",
+        message: expect.stringContaining("mpas oauth login --application-did"),
+      },
+    });
+    expect(response.json().error.message).not.toContain("CREDENTIAL_NOT_FOUND");
+  });
+});
+
+describe("classifyDispatch", () => {
+  it("classifies successful tool results as executed", () => {
+    expect(classifyDispatch({ ok: true, result: { content: [] } })).toEqual({
+      result: "executed",
+      executionResult: { content: [] },
+    });
+  });
+
+  it("classifies tool isError as failed", () => {
+    expect(classifyDispatch({ ok: true, result: { isError: true, content: [] } })).toEqual({
+      result: "failed",
+      executionResult: { isError: true, content: [] },
+    });
+  });
+
+  it.each(["DISPATCH_TIMEOUT", "PROCESS_EXITED", "TRANSPORT_ERROR"] as const)(
+    "classifies %s as indeterminate",
+    (code) => {
+      expect(
+        classifyDispatch({
+          ok: false,
+          error: { kind: "McpDispatchError", code, message: "boom" },
+        }),
+      ).toEqual({
+        result: "indeterminate",
+        error: { code, message: "boom" },
+      });
+    },
+  );
+
+  it("classifies other dispatch errors as failed", () => {
+    expect(
+      classifyDispatch({
+        ok: false,
+        error: { kind: "McpDispatchError", code: "INVALID_RESPONSE", message: "bad" },
+      }),
+    ).toEqual({
+      result: "failed",
+      error: { code: "INVALID_RESPONSE", message: "bad" },
     });
   });
 });

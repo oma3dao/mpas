@@ -64,4 +64,9 @@ describe("strictJsonParse", () => {
       expect(() => strictJsonParse(text)).toThrow(SyntaxError);
     }
   });
+
+  it("rejects unterminated strings and mid-array junk", () => {
+    expect(() => strictJsonParse('"abc')).toThrow(/Unterminated string/);
+    expect(() => strictJsonParse("[1 2]")).toThrow(/Expected "," or "]"/);
+  });
 });

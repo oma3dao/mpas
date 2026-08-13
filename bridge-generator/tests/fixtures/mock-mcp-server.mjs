@@ -9,10 +9,24 @@
  *   --no-server-info   initialize result omits serverInfo
  *   --silent           never responds (for timeout tests)
  *   --exit-early       exits before responding to initialize
+ *   --bad-json         responds with a non-JSON line
+ *   --rpc-error        initialize returns a JSON-RPC error
+ *   --bad-tools-list   tools/list returns a non-array tools field
+ *   --dup-tools        tools/list repeats a tool name
+ *   --bad-cursor       tools/list returns a non-string nextCursor
+ *   --repeat-cursor    tools/list repeats the same nextCursor
+ *   --noise            emit notifications and orphan responses before tools/list
+ *   --tools-list-rpc-error  tools/list returns a JSON-RPC error
+ *   --tools-list-rpc-error-no-message  tools/list JSON-RPC error without message
+ *   --stderr-noise     write a line to stderr on startup
  */
 import { createInterface } from "node:readline";
 
 const flags = new Set(process.argv.slice(2));
+
+if (flags.has("--stderr-noise")) {
+  process.stderr.write("upstream-noise\n");
+}
 
 const TOOLS = [
   {
@@ -92,27 +106,64 @@ lines.on("line", (line) => {
     return;
   }
   if (request.method === "initialize") {
+    if (flags.has("--bad-json")) {
+      process.stdout.write("not-json-at-all\n");
+      return;
+    }
+    if (flags.has("--rpc-error")) {
+      send({ jsonrpc: "2.0", id: request.id, error: { code: -32000, message: "initialize boom" } });
+      return;
+    }
     const result = {
       protocolVersion: "2024-11-05",
       capabilities: { tools: {} },
       ...(flags.has("--no-server-info") ? {} : { serverInfo: { name: "mock-mcp", version: "1.2.3" } }),
     };
     send({ jsonrpc: "2.0", id: request.id, result });
+    if (flags.has("--noise")) {
+      send({ jsonrpc: "2.0", method: "notifications/message", params: { level: "info" } });
+      send({ jsonrpc: "2.0", id: "string-id", result: {} });
+      send({ jsonrpc: "2.0", id: 999, result: { tools: [] } });
+    }
     return;
   }
   if (request.method === "tools/list") {
+    if (flags.has("--tools-list-rpc-error")) {
+      send({ jsonrpc: "2.0", id: request.id, error: { code: -32000, message: "tools boom" } });
+      return;
+    }
+    if (flags.has("--tools-list-rpc-error-no-message")) {
+      send({ jsonrpc: "2.0", id: request.id, error: { code: -32000 } });
+      return;
+    }
+    if (flags.has("--bad-tools-list")) {
+      send({ jsonrpc: "2.0", id: request.id, result: { tools: "nope" } });
+      return;
+    }
     let tools = TOOLS;
     if (flags.has("--zero-tools")) {
       tools = [];
     } else if (flags.has("--malformed-tool")) {
       tools = [...TOOLS, { description: "tool with no name", inputSchema: { type: "object" } }];
+    } else if (flags.has("--dup-tools")) {
+      tools = [TOOLS[0], TOOLS[0]];
     }
-    if (flags.has("--paginated")) {
+    if (flags.has("--paginated") || flags.has("--repeat-cursor") || flags.has("--bad-cursor")) {
       const secondPage = request.params?.cursor === "page-2";
+      let nextCursor;
+      if (flags.has("--bad-cursor") && !secondPage) {
+        nextCursor = 12;
+      } else if (flags.has("--repeat-cursor")) {
+        nextCursor = "page-2";
+      } else if (!secondPage) {
+        nextCursor = "page-2";
+      }
       send({
         jsonrpc: "2.0",
         id: request.id,
-        result: secondPage ? { tools: tools.slice(1) } : { tools: tools.slice(0, 1), nextCursor: "page-2" },
+        result: secondPage && !flags.has("--repeat-cursor")
+          ? { tools: tools.slice(1) }
+          : { tools: tools.slice(0, 1), nextCursor },
       });
     } else {
       send({ jsonrpc: "2.0", id: request.id, result: { tools } });

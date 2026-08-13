@@ -148,6 +148,58 @@ describe("coordination RFC 9421 authentication", () => {
     expect(response.json().state).toBe("cancelled");
   });
 
+  it("rejects a reused nonce on approval and cancel after a successful claim", async () => {
+    const request = await coordinationActionRequest();
+    const proposer = await fixtureSigner("proposer");
+    const maintainerA = await fixtureSigner("maintainer-a");
+
+    const first = structuredClone(request);
+    first.actionPackage.actionEnvelope.actionId = { value: "urn:uuid:nonce-replay-a" };
+    first.authorizationRequirements.actionEnvelopeHash = computeJsonHash(first.actionPackage.actionEnvelope);
+
+    const second = structuredClone(request);
+    second.actionPackage.actionEnvelope.actionId = { value: "urn:uuid:nonce-replay-b" };
+    second.authorizationRequirements.actionEnvelopeHash = computeJsonHash(second.actionPackage.actionEnvelope);
+
+    const approvalApp = createApp();
+    await signedInject(approvalApp, "/mpas/v1/coordination/action", first, proposer.signer, "submit-a");
+    await signedInject(approvalApp, "/mpas/v1/coordination/action", second, proposer.signer, "submit-b");
+
+    const approve = async (envelopeHash: Hash, nonce: string) => {
+      const approvalRequest: CoordinationApprovalSubmission = {
+        version: "1",
+        type: "CoordinationApprovalSubmission",
+        actionEnvelopeHash: envelopeHash,
+        approval: await signApproval(envelopeHash, maintainerA.fixture, "approve"),
+      };
+      return signedInject(approvalApp, "/mpas/v1/coordination/approval", approvalRequest, maintainerA.signer, nonce);
+    };
+
+    expect((await approve(first.authorizationRequirements.actionEnvelopeHash, "approval-nonce")).statusCode).toBe(200);
+    expect((await approve(second.authorizationRequirements.actionEnvelopeHash, "approval-nonce")).statusCode).toBe(401);
+
+    const cancelApp = createApp();
+    await signedInject(cancelApp, "/mpas/v1/coordination/action", first, proposer.signer, "cancel-submit-a");
+    await signedInject(cancelApp, "/mpas/v1/coordination/action", second, proposer.signer, "cancel-submit-b");
+
+    const cancel = (actionId: { value: string }, nonce: string) =>
+      signedInject(
+        cancelApp,
+        "/mpas/v1/coordination/action-cancel",
+        {
+          version: "1",
+          type: "CoordinationActionCancelRequest",
+          actionId,
+          proposerDid: proposer.fixture.did,
+        },
+        proposer.signer,
+        nonce,
+      );
+
+    expect((await cancel(first.actionPackage.actionEnvelope.actionId, "cancel-nonce")).statusCode).toBe(200);
+    expect((await cancel(second.actionPackage.actionEnvelope.actionId, "cancel-nonce")).statusCode).toBe(401);
+  });
+
   it("rejects every endpoint identity mismatch and ineligible Approval signer with 403", async () => {
     const actionApp = createApp();
     const request = await coordinationActionRequest();

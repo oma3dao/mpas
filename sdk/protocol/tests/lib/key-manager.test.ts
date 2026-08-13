@@ -40,6 +40,7 @@ describe("KeyManager", () => {
     const rawSignature = await keyManager.signBytes(payload);
     await expect(keyManager.verifyBytes(payload, rawSignature)).resolves.toBe(true);
     await expect(keyManager.verifyBytes(Buffer.from("tampered"), rawSignature)).resolves.toBe(false);
+    await expect(keyManager.verifyBytes(payload, Buffer.from("short"))).resolves.toBe(false);
   });
 
   it("rejects signing when only a public JWK is available", async () => {
@@ -53,6 +54,8 @@ describe("KeyManager", () => {
 
   it("rejects unsupported JWKs and mismatched configured DIDs", async () => {
     expect(() => KeyManager.fromJwk({ kty: "EC", crv: "P-256", x: "x", y: "y" })).toThrow('kty "OKP"');
+    expect(() => KeyManager.fromJwk({ kty: "OKP", crv: "X25519", x: "x" })).toThrow('crv "Ed25519"');
+    expect(() => KeyManager.fromJwk({ kty: "OKP", crv: "Ed25519", x: "" })).toThrow("public key parameter x");
 
     const fixture = await readJson<KeyFixture>(join(fixturesDir, "keys", "proposer.json"));
     const mismatched = { did: "did:jwk:bWlzbWF0Y2g", privateJwk: fixture.privateJwk };
@@ -63,5 +66,34 @@ describe("KeyManager", () => {
         await rm(path);
       }),
     );
+  });
+
+  it("loads a bare private JWK object and fails verification for garbage input", async () => {
+    const fixture = await readJson<KeyFixture>(join(fixturesDir, "keys", "proposer.json"));
+    const keyManager = KeyManager.fromJwk(fixture.privateJwk);
+    expect(keyManager.did).toBe(fixture.did);
+    await expect(keyManager.verify("not.a.jws")).resolves.toBe(false);
+  });
+
+  it("loads public-only and bare private JWK files", async () => {
+    const fixture = await readJson<KeyFixture>(join(fixturesDir, "keys", "proposer.json"));
+    const { mkdtemp, writeFile, rm } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const dir = await mkdtemp(join(tmpdir(), "mpas-key-manager-"));
+    try {
+      const publicOnly = join(dir, "public-only.json");
+      await writeFile(publicOnly, JSON.stringify({ did: fixture.did, publicJwk: fixture.publicJwk }));
+      const publicManager = await KeyManager.fromFile(publicOnly);
+      expect(publicManager.did).toBe(fixture.did);
+      await expect(publicManager.sign(Buffer.from("x"))).rejects.toThrow("private key material");
+
+      const barePrivate = join(dir, "bare-private.json");
+      await writeFile(barePrivate, JSON.stringify(fixture.privateJwk));
+      const privateManager = await KeyManager.fromFile(barePrivate);
+      expect(privateManager.did).toBe(fixture.did);
+      await expect(privateManager.sign(Buffer.from("x"))).resolves.toMatch(/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });

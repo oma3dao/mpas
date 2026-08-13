@@ -33,12 +33,13 @@ interface BridgeModule {
 const fixturesDir = join(process.cwd(), "tests", "fixtures");
 const e2eConfigDir = join(fixturesDir, "configs", "e2e");
 const startedApps: FastifyInstance[] = [];
+const unixModesSupported = process.platform !== "win32";
 
 afterEach(async () => {
   await Promise.allSettled(startedApps.splice(0).map((app) => app.close()));
 });
 
-describe("MPAS E2E: Policy routing and dispatch", () => {
+describe.skipIf(!unixModesSupported)("MPAS E2E: Policy routing and dispatch", () => {
   // Scenario 1: Action not in plugin or policy → pass-through
   it("auto-executes create_issue_mirror (pass-through, not in reviewed plugin)", async () => {
     const { ActionPackageBuilder, KeyManager, AdapterClient } = await loadBridgeModule();

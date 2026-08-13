@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BridgeWorkflowState, WorkflowRecord } from "@oma3/mpas";
 import { SqliteWorkflowStore } from "../../src/bridge/sqlite-workflow-store.js";
 
@@ -81,6 +81,12 @@ describe("createWorkflow / getWorkflow", () => {
   it("rejects a second create for the same actionId", () => {
     createDefault(store);
     expect(() => createDefault(store)).toThrow(/exists/i);
+  });
+
+  it("throws when the inserted row cannot be read back", () => {
+    const spy = vi.spyOn(store, "getWorkflow").mockReturnValueOnce(undefined);
+    expect(() => createDefault(store)).toThrow(/Workflow not found/);
+    spy.mockRestore();
   });
 });
 
@@ -250,6 +256,34 @@ describe("durability across restart", () => {
 
     expect(() => openStore()).toThrow(/schema/i);
     store = { close() {} } as SqliteWorkflowStore; // afterEach cleanup stub
+  });
+});
+
+describe("SqliteWorkflowStore :memory: and optional columns", () => {
+  it("round-trips authorizationRequirements and lastActionResponse in memory", () => {
+    const memory = new SqliteWorkflowStore(":memory:", { now: () => clock.now });
+    try {
+      createDefault(memory);
+      memory.saveAuthorizationRequirements(ACTION_ID, { type: "AuthorizationRequirements" });
+      memory.saveLastActionResponse(ACTION_ID, { result: "additionalApprovalsRequired" });
+      memory.saveCompletedPackage(ACTION_ID, { fake: "completed" });
+
+      expect(memory.getWorkflow(ACTION_ID)).toMatchObject({
+        authorizationRequirements: { type: "AuthorizationRequirements" },
+        lastActionResponse: { result: "additionalApprovalsRequired" },
+        completedPackage: { fake: "completed" },
+      });
+      expect(memory.compareAndSetState(ACTION_ID, "created", "resolved")).toBe(false);
+      expect(memory.getWorkflow(ACTION_ID)?.state).toBe("created");
+    } finally {
+      memory.close();
+    }
+  });
+
+  it("rethrows non-unique createWorkflow failures after close", () => {
+    const memory = new SqliteWorkflowStore(":memory:", { now: () => clock.now });
+    memory.close();
+    expect(() => createDefault(memory)).toThrow();
   });
 });
 

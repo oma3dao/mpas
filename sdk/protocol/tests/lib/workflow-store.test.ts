@@ -199,3 +199,16 @@ describe("purgeExpiredResults (retention, feature spec §9.6)", () => {
     expect(store.getWorkflow(ACTION_ID)).toBeDefined();
   });
 });
+
+describe("MemoryWorkflowStore edge no-ops", () => {
+  it("close is a no-op", () => {
+    expect(() => (store as MemoryWorkflowStore).close()).not.toThrow();
+  });
+
+  it("returns false for claim/compare on unknown ids and ignores saves", () => {
+    expect(store.claimWorkflow("urn:uuid:missing", "worker", 1000)).toBe(false);
+    expect(store.compareAndSetState("urn:uuid:missing", "created", "awaitingApprovals")).toBe(false);
+    expect(() => store.saveAuthorizationRequirements("urn:uuid:missing", { fake: true })).not.toThrow();
+    expect(store.getWorkflow("urn:uuid:missing")).toBeUndefined();
+  });
+});

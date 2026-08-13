@@ -172,3 +172,26 @@ describe("official MCP SDK OAuth conformance spike", () => {
     expect(provider.savedVerifier).toBeUndefined();
   });
 });
+
+describe("assertExactAuthorizationServerIssuer", () => {
+  it("rejects missing resource metadata, missing issuer, and missing PKCE S256", () => {
+    expect(() => assertExactAuthorizationServerIssuer({
+      authorizationServerUrl: "https://auth.example",
+    } as OAuthDiscoveryState)).toThrow(OAuthIssuerMismatchError);
+
+    expect(() => assertExactAuthorizationServerIssuer({
+      authorizationServerUrl: "https://auth.example",
+      resourceMetadata: { resource: "https://mcp.example/mcp" },
+      authorizationServerMetadata: { issuer: undefined },
+    } as OAuthDiscoveryState)).toThrow(OAuthIssuerMismatchError);
+
+    expect(() => assertExactAuthorizationServerIssuer({
+      authorizationServerUrl: "https://auth.example",
+      resourceMetadata: { resource: "https://mcp.example/mcp" },
+      authorizationServerMetadata: {
+        issuer: "https://auth.example",
+        code_challenge_methods_supported: ["plain"],
+      },
+    } as OAuthDiscoveryState)).toThrow(/explicitly advertise PKCE S256/);
+  });
+});

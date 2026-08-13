@@ -176,4 +176,17 @@ describe("prepareMcpHttp", () => {
       await prepared.session.close();
     }
   });
+
+  it("returns TARGET_UNAVAILABLE when the HTTP endpoint cannot be reached", async () => {
+    const prepared = await prepareMcpHttp(
+      { type: "mcp.http", url: "http://127.0.0.1:9", timeoutMs: 500 },
+      "ghp_test",
+      "2024-11-05",
+    );
+
+    expect(prepared).toMatchObject({
+      ok: false,
+      error: { code: "TARGET_UNAVAILABLE" },
+    });
+  });
 });

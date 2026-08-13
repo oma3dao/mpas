@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { ActionResponse, CoordinationActionUpdate } from "../../src/index.js";
 import { MemoryWorkflowStore, type WorkflowStore } from "../../src/lib/workflow-store.js";
 import {
@@ -71,6 +71,7 @@ function makeEngine(opts: {
   coordination?: WorkflowCoordination;
   store?: WorkflowStore;
   now?: () => number;
+  workerId?: string;
 }) {
   const store = opts.store ?? new MemoryWorkflowStore({ now: opts.now });
   const engine = new BridgeWorkflowEngine({
@@ -78,7 +79,7 @@ function makeEngine(opts: {
     adapter: opts.adapter,
     coordination: opts.coordination ?? fakeCoordination(),
     proposerDid: PROPOSER_DID,
-    workerId: "test-worker",
+    workerId: opts.workerId ?? "test-worker",
     now: opts.now,
   });
   return { engine, store };
@@ -139,6 +140,26 @@ describe("propose", () => {
     const record = store.getWorkflow(ACTION_ID);
     expect(record?.state).toBe("created");
     expect(record?.adapterAttempts.length).toBeGreaterThan(0);
+  });
+
+  it("throws when the workflow disappears after an unreachable adapter attempt", async () => {
+    const adapter = fakeAdapter(new Error("connect ECONNREFUSED"));
+    const store = new MemoryWorkflowStore();
+    const originalGet = store.getWorkflow.bind(store);
+    const originalSave = store.saveAdapterAttempt.bind(store);
+    let hide = false;
+    vi.spyOn(store, "getWorkflow").mockImplementation((actionId) => (hide ? undefined : originalGet(actionId)));
+    vi.spyOn(store, "saveAdapterAttempt").mockImplementation((actionId, attempt) => {
+      originalSave(actionId, attempt);
+      hide = true;
+    });
+
+    const { engine } = makeEngine({ adapter, store });
+    try {
+      await expect(engine.propose(proposalInput())).rejects.toThrow(/Workflow not found/);
+    } finally {
+      vi.restoreAllMocks();
+    }
   });
 
   it("defers on a Verifier pending response", async () => {
@@ -242,6 +263,146 @@ describe("pollOnce (bridge track advancement)", () => {
     expect(record?.state).toBe("unresolvable");
     expect(record?.resolution).toMatchObject({ errorCode: "ACTION_EXPIRED_BEFORE_RESOLUTION" });
   });
+
+  it("marks a coordination-cancelled workflow unresolvable", async () => {
+    const adapter = fakeAdapter(response("additionalApprovalsRequired"));
+    const coordination = fakeCoordination(() => [
+      { version: "1", type: "CoordinationActionUpdate", actionRef: actionRef(), state: "cancelled" },
+    ]);
+    const { engine, store } = makeEngine({ adapter, coordination });
+
+    await engine.propose(proposalInput());
+    await engine.pollOnce();
+
+    expect(store.getWorkflow(ACTION_ID)?.resolution).toMatchObject({
+      kind: "unresolvable",
+      errorCode: "ACTION_CANCELLED",
+    });
+  });
+
+  it("swallows coordination poll failures and retries later", async () => {
+    const adapter = fakeAdapter(response("additionalApprovalsRequired"));
+    const coordination = {
+      submitted: [] as unknown[],
+      async submitAction(pkg: unknown) {
+        coordination.submitted.push(pkg);
+        return {
+          version: "1" as const,
+          type: "CoordinationActionResponse" as const,
+          actionRef: actionRef(),
+          state: "awaitingApprovals" as const,
+        };
+      },
+      async poll() {
+        throw new Error("coordination down");
+      },
+    };
+    const { engine, store } = makeEngine({ adapter, coordination });
+    await engine.propose(proposalInput());
+    await engine.pollOnce();
+    expect(store.getWorkflow(ACTION_ID)?.state).toBe("awaitingApprovals");
+  });
+
+  it("returns a completed package to awaitingApprovals when policy still requires more", async () => {
+    const completedPackage = { fake: "completed-package" };
+    const adapter = fakeAdapter(
+      response("additionalApprovalsRequired"),
+      response("additionalApprovalsRequired"),
+    );
+    const coordination = fakeCoordination(() => [
+      {
+        version: "1",
+        type: "CoordinationActionUpdate",
+        actionRef: actionRef(),
+        state: "readyForResubmission",
+        actionPackage: completedPackage as CoordinationActionUpdate["actionPackage"],
+      },
+    ]);
+    const { engine, store } = makeEngine({ adapter, coordination });
+
+    await engine.propose(proposalInput());
+    await engine.pollOnce();
+
+    expect(store.getWorkflow(ACTION_ID)?.state).toBe("awaitingApprovals");
+  });
+
+  it("treats ACTION_ID_HASH_MISMATCH like a lost terminal result", async () => {
+    const adapter = fakeAdapter(
+      response("additionalApprovalsRequired"),
+      response("rejected", { error: { code: "ACTION_ID_HASH_MISMATCH", message: "hash mismatch" } }),
+    );
+    const coordination = fakeCoordination();
+    const { engine, store } = makeEngine({ adapter, coordination });
+    await engine.propose(proposalInput());
+    store.saveCompletedPackage(ACTION_ID, { fake: "completed-package" });
+    store.compareAndSetState(ACTION_ID, "awaitingApprovals", "submittingToVerifier");
+
+    await engine.reconcile();
+
+    expect(store.getWorkflow(ACTION_ID)?.resolution).toMatchObject({
+      kind: "unresolvable",
+      errorCode: "RESULT_UNAVAILABLE",
+    });
+  });
+
+  it("retries when completed-package submission is unreachable", async () => {
+    const adapter = fakeAdapter(response("additionalApprovalsRequired"), new Error("adapter down"));
+    const coordination = fakeCoordination(() => [
+      {
+        version: "1",
+        type: "CoordinationActionUpdate",
+        actionRef: actionRef(),
+        state: "readyForResubmission",
+        actionPackage: { fake: "completed" } as CoordinationActionUpdate["actionPackage"],
+      },
+    ]);
+    const { engine, store } = makeEngine({ adapter, coordination });
+    await engine.propose(proposalInput());
+    await engine.pollOnce();
+
+    expect(store.getWorkflow(ACTION_ID)?.state).toBe("readyForResubmission");
+    expect(store.getWorkflow(ACTION_ID)?.adapterAttempts.at(-1)).toMatchObject({
+      stage: "completed",
+      outcome: "unreachable",
+    });
+  });
+
+  it("keeps the workflow awaitingApprovals when coordination handoff fails", async () => {
+    const adapter = fakeAdapter(response("additionalApprovalsRequired"));
+    const coordination = {
+      submitted: [] as unknown[],
+      async submitAction() {
+        throw new Error("coordination submit failed");
+      },
+      async poll() {
+        return {
+          version: "1" as const,
+          type: "CoordinationPollResponse" as const,
+          approvalRequests: [],
+          actionUpdates: [],
+        };
+      },
+    };
+    const { engine, store } = makeEngine({ adapter, coordination });
+    const outcome = await engine.propose(proposalInput());
+
+    expect(outcome.kind).toBe("deferred");
+    expect(store.getWorkflow(ACTION_ID)?.state).toBe("created");
+  });
+
+  it("ignores coordination updates for unknown or terminal workflows", async () => {
+    const adapter = fakeAdapter(response("executed"));
+    const coordination = fakeCoordination(() => [
+      { version: "1", type: "CoordinationActionUpdate", actionRef: actionRef("urn:uuid:missing"), state: "expired" },
+      { version: "1", type: "CoordinationActionUpdate", actionRef: actionRef(), state: "cancelled" },
+    ]);
+    const { engine, store } = makeEngine({ adapter, coordination });
+    await engine.propose(proposalInput());
+    expect(store.getWorkflow(ACTION_ID)?.state).toBe("resolved");
+
+    await engine.pollOnce();
+    expect(store.getWorkflow(ACTION_ID)?.state).toBe("resolved");
+  });
 });
 
 describe("reconcile (startup recovery, feature spec §9.4)", () => {
@@ -290,6 +451,179 @@ describe("reconcile (startup recovery, feature spec §9.4)", () => {
     await engine.reconcile();
 
     expect(store.getWorkflow(ACTION_ID)?.state).toBe("awaitingVerifierResult");
+  });
+
+  it("resubmits readyForResubmission and awaitingVerifierResult workflows on reconcile", async () => {
+    const adapter = fakeAdapter(
+      response("additionalApprovalsRequired"),
+      response("executed"),
+      response("additionalApprovalsRequired"),
+      response("executed"),
+    );
+    const coordination = fakeCoordination();
+    const { engine, store } = makeEngine({ adapter, coordination });
+    await engine.propose(proposalInput());
+
+    store.saveCompletedPackage(ACTION_ID, { fake: "completed-package" });
+    store.compareAndSetState(ACTION_ID, "awaitingApprovals", "readyForResubmission");
+    await engine.reconcile();
+    expect(store.getWorkflow(ACTION_ID)?.state).toBe("resolved");
+
+    const secondId = "urn:uuid:22222222-2222-4222-8222-222222222222";
+    await engine.propose({ ...proposalInput(), actionId: secondId });
+    store.saveCompletedPackage(secondId, { fake: "completed-2" });
+    store.compareAndSetState(secondId, "awaitingApprovals", "awaitingVerifierResult");
+    await engine.reconcile();
+    expect(store.getWorkflow(secondId)?.state).toBe("resolved");
+  });
+
+  it("skips workflows already claimed by another worker during reconcile", async () => {
+    const adapter = fakeAdapter(new Error("down"));
+    const store = new MemoryWorkflowStore();
+    const engine = makeEngine({ adapter, store, workerId: "worker-a" }).engine;
+    await engine.propose(proposalInput());
+    expect(store.getWorkflow(ACTION_ID)?.state).toBe("created");
+
+    expect(store.claimWorkflow(ACTION_ID, "worker-b", 60_000)).toBe(true);
+    await engine.reconcile();
+    expect(store.getWorkflow(ACTION_ID)?.state).toBe("created");
+    expect(adapter.calls).toHaveLength(1);
+  });
+
+  it("skips readyForResubmission claimed by another worker during pollOnce", async () => {
+    const adapter = fakeAdapter(response("additionalApprovalsRequired"), response("executed"));
+    const store = new MemoryWorkflowStore();
+    const { engine } = makeEngine({ adapter, store, workerId: "worker-a" });
+    await engine.propose(proposalInput());
+
+    store.saveCompletedPackage(ACTION_ID, { fake: "completed-package" });
+    store.compareAndSetState(ACTION_ID, "awaitingApprovals", "readyForResubmission");
+    expect(store.claimWorkflow(ACTION_ID, "worker-b", 60_000)).toBe(true);
+
+    await engine.pollOnce();
+
+    expect(store.getWorkflow(ACTION_ID)?.state).toBe("readyForResubmission");
+    expect(adapter.calls).toHaveLength(1);
+  });
+
+  it("treats awaitingApprovals as a no-op during reconcile", async () => {
+    const adapter = fakeAdapter(response("additionalApprovalsRequired"));
+    const { engine, store } = makeEngine({ adapter });
+    await engine.propose(proposalInput());
+    expect(store.getWorkflow(ACTION_ID)?.state).toBe("awaitingApprovals");
+
+    await engine.reconcile();
+    expect(store.getWorkflow(ACTION_ID)?.state).toBe("awaitingApprovals");
+    expect(adapter.calls).toHaveLength(1);
+  });
+
+  it("sweeps locally expired workflows without waiting for coordination", async () => {
+    const adapter = fakeAdapter(response("additionalApprovalsRequired"));
+    let now = Date.parse("2026-07-01T00:00:00.000Z");
+    const { engine, store } = makeEngine({
+      adapter,
+      now: () => now,
+    });
+    await engine.propose({ ...proposalInput(), expiresAt: "2026-07-01T00:00:01.000Z" });
+    expect(store.getWorkflow(ACTION_ID)?.state).toBe("awaitingApprovals");
+
+    now = Date.parse("2026-07-01T00:00:02.000Z");
+    await engine.pollOnce();
+
+    expect(store.getWorkflow(ACTION_ID)?.state).toBe("unresolvable");
+    expect(store.getWorkflow(ACTION_ID)?.resolution).toMatchObject({
+      kind: "unresolvable",
+      errorCode: "ACTION_EXPIRED_BEFORE_RESOLUTION",
+    });
+  });
+
+  it("defers without storing authorizationRequirements when the verifier omits them", async () => {
+    const adapter = fakeAdapter(response("additionalApprovalsRequired"));
+    const { engine, store } = makeEngine({ adapter });
+    await engine.propose(proposalInput());
+    expect(store.getWorkflow(ACTION_ID)?.state).toBe("awaitingApprovals");
+    expect(store.getWorkflow(ACTION_ID)?.authorizationRequirements).toBeUndefined();
+  });
+
+  it("ignores readyForResubmission updates that omit the completed package", async () => {
+    const adapter = fakeAdapter(response("additionalApprovalsRequired"));
+    const coordination = fakeCoordination(() => [
+      {
+        version: "1",
+        type: "CoordinationActionUpdate",
+        actionRef: actionRef(),
+        state: "readyForResubmission",
+      },
+    ]);
+    const { engine, store } = makeEngine({ adapter, coordination });
+    await engine.propose(proposalInput());
+    await engine.pollOnce();
+    expect(store.getWorkflow(ACTION_ID)?.state).toBe("awaitingApprovals");
+  });
+
+  it("treats awaitingApprovals coordination updates as a no-op", async () => {
+    const adapter = fakeAdapter(response("additionalApprovalsRequired"));
+    const coordination = fakeCoordination(() => [
+      {
+        version: "1",
+        type: "CoordinationActionUpdate",
+        actionRef: actionRef(),
+        state: "awaitingApprovals",
+      },
+    ]);
+    const { engine, store } = makeEngine({ adapter, coordination });
+    await engine.propose(proposalInput());
+    await engine.pollOnce();
+    expect(store.getWorkflow(ACTION_ID)?.state).toBe("awaitingApprovals");
+    expect(adapter.calls).toHaveLength(1);
+  });
+
+  it("records non-Error adapter failures as string messages", async () => {
+    const adapter = {
+      calls: [] as unknown[],
+      async submit(pkg: unknown) {
+        adapter.calls.push(pkg);
+        throw "string-failure";
+      },
+    };
+    const { engine, store } = makeEngine({ adapter });
+    await engine.propose(proposalInput());
+    const attempts = store.getWorkflow(ACTION_ID)?.adapterAttempts as Array<{ message?: string }> | undefined;
+    expect(attempts?.at(-1)?.message).toBe("string-failure");
+  });
+
+  it("skips submitCompleted when compareAndSetState loses the race", async () => {
+    const adapter = fakeAdapter(response("additionalApprovalsRequired"), response("executed"));
+    const store = new MemoryWorkflowStore();
+    const { engine } = makeEngine({ adapter, store });
+    await engine.propose(proposalInput());
+    store.saveCompletedPackage(ACTION_ID, { fake: "completed-package" });
+    store.compareAndSetState(ACTION_ID, "awaitingApprovals", "readyForResubmission");
+
+    const original = store.compareAndSetState.bind(store);
+    store.compareAndSetState = ((actionId, expected, next) => {
+      if (expected === "readyForResubmission" && next === "submittingToVerifier") {
+        return false;
+      }
+      return original(actionId, expected, next);
+    }) as typeof store.compareAndSetState;
+
+    await engine.pollOnce();
+    expect(store.getWorkflow(ACTION_ID)?.state).toBe("readyForResubmission");
+    expect(adapter.calls).toHaveLength(1);
+  });
+
+  it("skips sweepExpired when another worker already holds the claim", async () => {
+    const adapter = fakeAdapter(response("additionalApprovalsRequired"));
+    let now = Date.parse("2026-07-01T00:00:00.000Z");
+    const store = new MemoryWorkflowStore({ now: () => now });
+    const { engine } = makeEngine({ adapter, store, now: () => now, workerId: "worker-a" });
+    await engine.propose({ ...proposalInput(), expiresAt: "2026-07-01T00:00:01.000Z" });
+    expect(store.claimWorkflow(ACTION_ID, "worker-b", 60_000)).toBe(true);
+
+    now = Date.parse("2026-07-01T00:00:02.000Z");
+    await engine.pollOnce();
+    expect(store.getWorkflow(ACTION_ID)?.state).toBe("awaitingApprovals");
   });
 });
 

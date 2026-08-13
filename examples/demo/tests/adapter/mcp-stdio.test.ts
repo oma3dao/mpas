@@ -153,3 +153,68 @@ describe("prepareMcpStdio", () => {
     }
   });
 });
+
+describe("McpClientSession error mapping", () => {
+  it("maps SdkMcpError codes and generic failures without a live transport", async () => {
+    const { McpClientSession, errorMessage } = await import("../../src/adapter/dispatch/mcp-stdio.js");
+    const { ErrorCode, McpError } = await import("@modelcontextprotocol/sdk/types.js");
+
+    const timeoutClient = {
+      callTool: async () => {
+        throw new McpError(ErrorCode.RequestTimeout, "slow");
+      },
+      close: async () => undefined,
+    };
+    expect(await new McpClientSession(timeoutClient as never, 50, "PROCESS_EXITED").transmit("t", {})).toMatchObject({
+      ok: false,
+      error: { code: "DISPATCH_TIMEOUT" },
+    });
+
+    const invalidClient = {
+      callTool: async () => {
+        throw new McpError(ErrorCode.InternalError, "bad protocol");
+      },
+      close: async () => undefined,
+    };
+    expect(await new McpClientSession(invalidClient as never, 50, "PROCESS_EXITED").transmit("t", {})).toMatchObject({
+      ok: false,
+      error: { code: "INVALID_RESPONSE", message: "MCP error -32603: bad protocol" },
+    });
+
+    const closedClient = {
+      callTool: async () => {
+        throw new McpError(ErrorCode.ConnectionClosed, "gone");
+      },
+      close: async () => {
+        throw new Error("close failed");
+      },
+    };
+    const processSession = new McpClientSession(closedClient as never, 50, "PROCESS_EXITED");
+    expect(await processSession.transmit("t", {})).toMatchObject({
+      ok: false,
+      error: { code: "PROCESS_EXITED", message: "MCP stdio process exited before responding." },
+    });
+    await expect(processSession.close()).resolves.toBeUndefined();
+
+    const transportSession = new McpClientSession(
+      {
+        callTool: async () => {
+          throw "raw-transport";
+        },
+        close: async () => undefined,
+      } as never,
+      50,
+      "TRANSPORT_ERROR",
+    );
+    expect(await transportSession.transmit("t", {})).toMatchObject({
+      ok: false,
+      error: {
+        code: "TRANSPORT_ERROR",
+        message: "MCP transport failed after dispatch: raw-transport",
+      },
+    });
+
+    expect(errorMessage("plain")).toBe("plain");
+    expect(errorMessage(new Error("wrapped"))).toBe("wrapped");
+  });
+});
