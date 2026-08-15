@@ -52,16 +52,29 @@ function fakeAdapter(...script: (ActionResponse | Error)[]): WorkflowAdapter & {
 
 function fakeCoordination(updates: () => CoordinationActionUpdate[] = () => []): WorkflowCoordination & {
   submitted: unknown[];
+  cancelled: string[];
 } {
   const submitted: unknown[] = [];
+  const cancelled: string[] = [];
   return {
     submitted,
+    cancelled,
     async submitAction(pkg: unknown) {
       submitted.push(pkg);
       return { version: "1" as const, type: "CoordinationActionResponse" as const, actionRef: actionRef(), state: "awaitingApprovals" as const };
     },
     async poll() {
       return { version: "1" as const, type: "CoordinationPollResponse" as const, approvalRequests: [], actionUpdates: updates() };
+    },
+    async cancelAction(actionId) {
+      cancelled.push(actionId.value);
+      return {
+        version: "1" as const,
+        type: "CoordinationActionCancelResponse" as const,
+        actionRef: actionRef(actionId.value),
+        state: "cancelled" as const,
+        cancelledAt: "2026-08-14T10:00:00.000Z",
+      };
     },
   };
 }
@@ -89,7 +102,10 @@ function proposalInput() {
     actionId: ACTION_ID,
     actionEnvelopeHash: HASH,
     toolName: "merge_pull_request",
-    actionPackage: { fake: "initial-package", actionId: ACTION_ID },
+    actionPackage: {
+      fake: "initial-package",
+      actionEnvelope: { proposer: { did: PROPOSER_DID }, actionId: { value: ACTION_ID } },
+    },
     expiresAt: EXPIRES_AT,
   };
 }
@@ -153,6 +169,22 @@ describe("propose", () => {
 });
 
 describe("pollOnce (bridge track advancement)", () => {
+  it("retries created workflows even when Coordination polling is unavailable", async () => {
+    const adapter = fakeAdapter(new Error("adapter down"), response("executed"));
+    const coordination: WorkflowCoordination = {
+      ...fakeCoordination(),
+      async poll() {
+        throw new Error("coordination down");
+      },
+    };
+    const { engine, store } = makeEngine({ adapter, coordination });
+
+    await engine.propose(proposalInput());
+    expect(store.getWorkflow(ACTION_ID)?.state).toBe("created");
+    await engine.pollOnce();
+    expect(store.getWorkflow(ACTION_ID)?.state).toBe("resolved");
+  });
+
   it("submits the completed package when coordination reports readyForResubmission", async () => {
     const completedPackage = { fake: "completed-package" };
     const adapter = fakeAdapter(
@@ -241,6 +273,67 @@ describe("pollOnce (bridge track advancement)", () => {
     const record = store.getWorkflow(ACTION_ID);
     expect(record?.state).toBe("unresolvable");
     expect(record?.resolution).toMatchObject({ errorCode: "ACTION_EXPIRED_BEFORE_RESOLUTION" });
+  });
+});
+
+describe("cancel", () => {
+  it("atomically stops future work and best-effort cancels Coordination", async () => {
+    const adapter = fakeAdapter(response("additionalApprovalsRequired"));
+    const coordination = fakeCoordination();
+    const { engine, store } = makeEngine({ adapter, coordination });
+    await engine.propose(proposalInput());
+
+    const cancelled = await engine.cancel(ACTION_ID);
+    expect(cancelled?.state).toBe("cancelled");
+    expect(coordination.cancelled).toEqual([ACTION_ID]);
+    await engine.pollOnce();
+    expect(store.getWorkflow(ACTION_ID)?.state).toBe("cancelled");
+    expect(adapter.calls).toHaveLength(1);
+  });
+
+  it("forwards cancellation that races an in-flight Coordination submission", async () => {
+    let finishSubmission: (() => void) | undefined;
+    let submissionStarted: (() => void) | undefined;
+    const started = new Promise<void>((resolve) => {
+      submissionStarted = resolve;
+    });
+    const coordination = fakeCoordination();
+    coordination.submitAction = async (pkg: unknown) => {
+      coordination.submitted.push(pkg);
+      submissionStarted?.();
+      await new Promise<void>((resolve) => {
+        finishSubmission = resolve;
+      });
+      return {
+        version: "1",
+        type: "CoordinationActionResponse",
+        actionRef: actionRef(),
+        state: "awaitingApprovals",
+      };
+    };
+    const { engine, store } = makeEngine({
+      adapter: fakeAdapter(response("additionalApprovalsRequired")),
+      coordination,
+    });
+
+    const proposing = engine.propose(proposalInput());
+    await started;
+    await engine.cancel(ACTION_ID);
+    finishSubmission?.();
+    await proposing;
+
+    expect(store.getWorkflow(ACTION_ID)?.state).toBe("cancelled");
+    expect(coordination.cancelled).toEqual([ACTION_ID]);
+  });
+
+  it("does not reveal a workflow owned by another proposer DID", async () => {
+    const { engine, store } = makeEngine({ adapter: fakeAdapter() });
+    store.createWorkflow({
+      ...proposalInput(),
+      actionPackage: { actionEnvelope: { proposer: { did: "did:jwk:other" } } },
+    });
+    expect(await engine.cancel(ACTION_ID)).toBeUndefined();
+    expect(store.getWorkflow(ACTION_ID)?.state).toBe("created");
   });
 });
 

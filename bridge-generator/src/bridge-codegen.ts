@@ -1,17 +1,6 @@
 import type { McpToolDefinition, UpstreamInfo } from "./types.js";
 
-/**
- * Emits the proposer bridge (thin wiring around the SDK's ProposerBridge
- * runtime), the tools.json it loads, and the SQLite workflow store as
- * standalone repository code.
- *
- * The emitted bridge conforms to the MPAS MCP Proposer Bridge Client
- * Interface Profile v0.1: application calls return control as soon as the
- * Action is durably recorded, the workflow advances on a background loop,
- * and results are retrieved through mpas_wait_for_action_result. The
- * spec-compliance behavior itself lives in @oma3/mpas; the generated file
- * only binds tool definitions, configuration, and a store choice to it.
- */
+/** Emits a production proposer bridge using the official MCP Tasks extension. */
 export function generateBridge(info: UpstreamInfo): string {
   const upstream = [info.command, ...info.args].join(" ");
   const serverName = `${info.serverName}-mpas-bridge`;
@@ -25,35 +14,29 @@ export function generateBridge(info: UpstreamInfo): string {
  *
  * This file is generated then checked in. Edit freely.
  *
- * Conforms to the MPAS MCP Proposer Bridge Client Interface Profile v0.1:
- * application calls return control as soon as the Action is durably recorded,
- * the workflow advances on a background loop, and results are retrieved
- * through the reserved mpas_wait_for_action_result tool.
+ * Uses MCP 2026-07-28 with io.modelcontextprotocol/tasks and org.oma3/mpas.
+ * Application calls return durable Tasks while MPAS advances independently.
  */
 
 import { readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import {
-  CallToolRequestSchema,
-  ListToolsRequestSchema,
-} from "@modelcontextprotocol/sdk/types.js";
+import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
 import {
   ActionPackageBuilder,
   AdapterClient,
   CoordinationClient,
   KeyManager,
   MemoryWorkflowStore,
+  MpasTasksServer,
   ProposerBridge,
 } from "@oma3/mpas";
 import type {
   BridgeUpstreamTool,
+  CreateTaskResult,
   MpasApplicationPlugin,
   ProposerConfig,
-  ToolCallResult,
   WorkflowCoordination,
   WorkflowStore,
 } from "@oma3/mpas";
@@ -68,8 +51,8 @@ interface WorkflowConfig {
   resultRetentionSeconds?: number;
   /** Background tick interval. Default 2000ms. */
   pollIntervalMs?: number;
-  /** Deployment assigns maintainer notification to the bridge or another component. */
-  notificationAssignedElsewhere?: boolean;
+  /** Client-facing tasks/get polling hint. Default 5000ms. */
+  taskPollIntervalMs?: number;
 }
 
 interface BridgeConfig extends Omit<ProposerConfig, "approvalStrategy" | "approvalTimeoutMs"> {
@@ -101,7 +84,7 @@ interface CliConfig {
   };
   workflow?: WorkflowConfig;
   defaultExpirationMinutes?: number;
-  /** @deprecated The bridge always returns a deferred result; no synchronous approval wait exists. */
+  /** @deprecated Official MCP Tasks are always used. */
   approvalStrategy?: string;
   /** @deprecated See approvalStrategy. */
   approvalTimeoutMs?: number;
@@ -152,33 +135,20 @@ export class GeneratedBridge {
         coordination,
         proposerDid: keyManager.did,
         resultRetentionSeconds: workflow.resultRetentionSeconds ?? 86_400,
-        ...(workflow.notificationAssignedElsewhere !== undefined
-          ? { notificationAssignedElsewhere: workflow.notificationAssignedElsewhere }
-          : {}),
         ...(workflow.pollIntervalMs !== undefined ? { pollIntervalMs: workflow.pollIntervalMs } : {}),
+        ...(workflow.taskPollIntervalMs !== undefined ? { taskPollIntervalMs: workflow.taskPollIntervalMs } : {}),
       });
     });
   }
 
   getToolDefinitions(): BridgeUpstreamTool[] {
-    // Static surface: profile notices and unions are deterministic, so expose
-    // them without awaiting the key manager.
-    return new ProposerBridge({
-      tools: [...TOOLS],
-      buildActionPackage: () => Promise.reject(new Error("static surface only")),
-      store: new MemoryWorkflowStore(),
-      adapter: { submit: () => Promise.reject(new Error("static surface only")) },
-      coordination: unconfiguredCoordination(),
-      proposerDid: "did:static",
-      resultRetentionSeconds: 86_400,
-    }).getToolDefinitions();
+    return structuredClone(TOOLS);
   }
 
-  async handleToolCall(toolName: string, args: object): Promise<ToolCallResult> {
+  async handleToolCall(toolName: string, args: object): Promise<CreateTaskResult> {
     log("info", "tool_call_received", { toolName });
     const bridge = await this.bridgePromise;
-    const result = await bridge.handleToolCall(toolName, args);
-    return result as ToolCallResult;
+    return bridge.handleToolCall(toolName, args);
   }
 
   /** Startup reconciliation plus the background workflow loop. */
@@ -195,27 +165,17 @@ export class GeneratedBridge {
     });
   }
 
-  buildMcpServer(): Server {
-    const server = new Server(
-      {
+  async buildMcpServer(): Promise<MpasTasksServer> {
+    return new MpasTasksServer({
+      bridge: await this.bridgePromise,
+      serverInfo: {
         name: ${JSON.stringify(serverName)},
         version: ${JSON.stringify(serverVersion)},
       },
-      {
-        capabilities: {
-          tools: {},
-        },
+      onerror(error) {
+        log("error", "mcp_protocol_error", { message: error.message });
       },
-    );
-
-    server.setRequestHandler(ListToolsRequestSchema, () => ({
-      tools: this.getToolDefinitions(),
-    }));
-    server.setRequestHandler(CallToolRequestSchema, async (request) =>
-      this.handleToolCall(request.params.name, toArgsObject(request.params.arguments)),
-    );
-
-    return server;
+    });
   }
 }
 
@@ -237,6 +197,9 @@ function unconfiguredCoordination(): WorkflowCoordination {
         actionUpdates: [],
       });
     },
+    cancelAction() {
+      return Promise.reject(new Error("Coordination Service is not configured (coordination.url)."));
+    },
   };
 }
 
@@ -250,7 +213,7 @@ export async function createBridgeFromConfig(configPath: string): Promise<Genera
 export async function runBridge(argv = process.argv.slice(2)): Promise<void> {
   const configPath = configPathFromArgs(argv);
   const bridge = await createBridgeFromConfig(configPath);
-  const server = bridge.buildMcpServer();
+  const server = await bridge.buildMcpServer();
   const transport = new StdioServerTransport();
 
   await bridge.start();
@@ -266,7 +229,7 @@ function toBridgeConfig(config: CliConfig, configDir: string): BridgeConfig {
   }
   if (config.approvalStrategy !== undefined || config.approvalTimeoutMs !== undefined) {
     log("warn", "deprecated_config_ignored", {
-      note: "approvalStrategy/approvalTimeoutMs are ignored: the bridge always returns a deferred result and serves results via mpas_wait_for_action_result.",
+      note: "approvalStrategy/approvalTimeoutMs are ignored: the bridge uses the official MCP Tasks extension.",
     });
   }
   const pluginPath = resolve(configDir, config.plugin);
@@ -331,14 +294,6 @@ function configPathFromArgs(argv: string[]): string {
   return configPath;
 }
 
-function toArgsObject(args: unknown): object {
-  if (args && typeof args === "object" && !Array.isArray(args)) {
-    return args;
-  }
-
-  return {};
-}
-
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   await runBridge();
 }
@@ -381,7 +336,7 @@ import type {
 
 const SCHEMA_VERSION = 1;
 
-const TERMINAL_STATES: ReadonlySet<BridgeWorkflowState> = new Set(["resolved", "unresolvable"]);
+const TERMINAL_STATES: ReadonlySet<BridgeWorkflowState> = new Set(["resolved", "unresolvable", "cancelled"]);
 
 export class SqliteWorkflowStore implements WorkflowStore {
   private readonly db: DatabaseSync;
@@ -446,6 +401,7 @@ export class SqliteWorkflowStore implements WorkflowStore {
         \`UPDATE workflows
            SET claimed_by = ?, claim_expires_ms = ?, updated_at = ?
          WHERE action_id = ?
+           AND state NOT IN ('resolved', 'unresolvable', 'cancelled')
            AND (claimed_by IS NULL OR claimed_by = ? OR claim_expires_ms <= ?)\`,
       )
       .run(workerId, nowMs + leaseMs, this.timestamp(), actionId, workerId, nowMs);
@@ -479,28 +435,42 @@ export class SqliteWorkflowStore implements WorkflowStore {
   }
 
   resolveWorkflow(actionId: string, resolution: WorkflowResolution): void {
-    const state: BridgeWorkflowState = resolution.kind === "resolved" ? "resolved" : "unresolvable";
+    const state: BridgeWorkflowState = resolution.kind;
     const at = this.timestamp();
     this.db
       .prepare(
         \`UPDATE workflows
            SET state = ?, resolution = ?, resolved_at = ?, updated_at = ?
          WHERE action_id = ?
-           AND state NOT IN ('resolved', 'unresolvable')\`,
+           AND state NOT IN ('resolved', 'unresolvable', 'cancelled')\`,
       )
       .run(state, toJson(resolution), at, at, actionId);
   }
 
+  cancelWorkflow(actionId: string): boolean {
+    const at = this.timestamp();
+    const resolution: WorkflowResolution = { kind: "cancelled", cancelledAt: at };
+    const result = this.db
+      .prepare(
+        \`UPDATE workflows
+           SET state = 'cancelled', resolution = ?, resolved_at = ?, updated_at = ?
+         WHERE action_id = ?
+           AND state NOT IN ('resolved', 'unresolvable', 'cancelled')\`,
+      )
+      .run(toJson(resolution), at, at, actionId);
+    return result.changes === 1;
+  }
+
   listRecoverableWorkflows(): WorkflowRecord[] {
     const rows = this.db
-      .prepare("SELECT * FROM workflows WHERE state NOT IN ('resolved', 'unresolvable') ORDER BY created_at")
+      .prepare("SELECT * FROM workflows WHERE state NOT IN ('resolved', 'unresolvable', 'cancelled') ORDER BY created_at")
       .all() as Record<string, unknown>[];
     return rows.map(rowToRecord);
   }
 
   purgeExpiredResults(retentionMs: number = 24 * 60 * 60 * 1000): number {
     const rows = this.db
-      .prepare("SELECT action_id, expires_at, resolved_at FROM workflows WHERE state IN ('resolved', 'unresolvable')")
+      .prepare("SELECT action_id, expires_at, resolved_at FROM workflows WHERE state IN ('resolved', 'unresolvable', 'cancelled')")
       .all() as { action_id: string; expires_at: string; resolved_at: string }[];
 
     const nowMs = this.now();

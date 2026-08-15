@@ -1,6 +1,6 @@
 {
   "name": "@oma3/mpas",
-  "version": "0.1.0-alpha.4",
+  "version": "0.1.0-alpha.5",
   "description": "MPAS protocol SDK — types, verification, policy evaluation, receipts, and protocol primitives",
   "license": "Apache-2.0",
   "type": "module",
@@ -35,6 +35,11 @@
       "types": "./dist/lib/auth-requirements-builder.d.ts",
       "import": "./dist/lib/auth-requirements-builder.js",
       "default": "./dist/lib/auth-requirements-builder.js"
+    },
+    "./bridge-tasks": {
+      "types": "./dist/lib/bridge-tasks.d.ts",
+      "import": "./dist/lib/bridge-tasks.js",
+      "default": "./dist/lib/bridge-tasks.js"
     },
     "./did-jwk": {
       "types": "./dist/lib/did-jwk.d.ts",
@@ -100,12 +105,14 @@
     "registry": "https://registry.npmjs.org/"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "1.30.0",
+    "@modelcontextprotocol/core": "2.0.0",
+    "@modelcontextprotocol/server": "2.0.0",
     "ajv": "^8.17.1",
     "http-message-signatures": "1.0.6",
     "jose": "^6.0.11",
     "json-canonicalize": "^2.0.0",
-    "structured-headers": "2.0.3"
+    "structured-headers": "2.0.3",
+    "zod": "^4.2.0"
   },
   "devDependencies": {
     "@types/node": "^22.15.29",

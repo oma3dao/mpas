@@ -13,8 +13,19 @@ interface ToolCallResult {
   structuredContent?: Record<string, unknown>;
 }
 
-interface BridgeInstance {
-  handleToolCall(toolName: string, args: object): Promise<ToolCallResult>;
+interface ToolHandler {
+  handleToolCall(toolName: string, args: object): Promise<Record<string, any>>;
+}
+
+interface TaskServer {
+  handleMessage(message: unknown): Promise<{ result?: Record<string, any>; error?: Record<string, any> } | undefined>;
+}
+
+interface BridgeInstance extends ToolHandler {
+  buildMcpServer(): Promise<{
+    handleMessage(message: unknown): Promise<{ result?: Record<string, any>; error?: Record<string, any> } | undefined>;
+  }>;
+  getToolDefinitions(): Array<{ name: string; description?: string }>;
   start?(): Promise<void>;
   stop?(): void;
 }
@@ -173,10 +184,9 @@ describe("MPAS E2E: Policy routing and dispatch", () => {
     expect(response.result).toBe("failed");
   });
 
-  // Full approval flow (client profile): the application call returns a
-  // deferred result immediately; the workflow advances in the background; the
-  // client retrieves the native result through mpas_wait_for_action_result.
-  it("full approval flow: deferred delete_branch_mirror, signer approval, wait-tool retrieval", async () => {
+  // Full approval flow: the application call returns an official Task; the
+  // workflow advances in the background; tasks/get returns the native result.
+  it("full approval flow: Task creation, signer approval, tasks/get retrieval", async () => {
     const { GeneratedBridge } = await loadBridgeModule();
     const { adapter, coordination } = await startStack();
 
@@ -197,20 +207,26 @@ describe("MPAS E2E: Policy routing and dispatch", () => {
         coordinationUrl: coordination.address,
       });
 
-      // 1. The application call completes immediately with a deferred result.
-      const deferred = await proposer.handleToolCall("delete_branch_mirror", {
+      const server = await proposer.buildMcpServer();
+
+      // 1. The application call completes immediately with a working Task.
+      const task = await proposer.handleToolCall("delete_branch_mirror", {
         owner: "example-org",
         repo: "mpas-demo-repository",
         branch: "feature/e2e-coordination",
       });
-      expect(deferred.isError).toBeUndefined();
-      expect(deferred.structuredContent).toMatchObject({
-        version: "1",
-        type: "MpasBridgeDeferredResult",
-        notificationRequired: true,
-        lastActionResponse: { result: "additionalApprovalsRequired" },
+      expect(task).toMatchObject({
+        resultType: "task",
+        status: "working",
+        _meta: {
+          "org.oma3/mpas": {
+            version: "1",
+            authorizationState: "authorization_required",
+            disclosure: "transparent",
+          },
+        },
       });
-      const actionId = (deferred.structuredContent as any).actionRef.actionId.value as string;
+      const taskId = task.taskId as string;
 
       // 2. Maintainer approves out of band.
       const approvalRequest = await waitForApprovalRequest(signer);
@@ -218,28 +234,22 @@ describe("MPAS E2E: Policy routing and dispatch", () => {
         actionId: approvalRequest.actionRef.actionId.value,
       });
 
-      // 3. The client retrieves the native result through the wait tool.
-      const result = await proposer.handleToolCall("mpas_wait_for_action_result", {
-        actionId,
-        timeoutSeconds: 10,
-      });
-      expect(result.isError).toBeUndefined();
-      const parsed = JSON.parse(result.content[0].text!);
+      // 3. The client observes the native result through read-only tasks/get.
+      const completed = await waitForTask(server, taskId);
+      expect(completed).toMatchObject({ resultType: "complete", status: "completed" });
+      const parsed = JSON.parse(completed.result.content[0].text);
       expect(parsed.mode).toBe("dry_run");
       expect(parsed.simulated_result).toMatchObject({ deleted: true, ref: "feature/e2e-coordination" });
 
-      // 4. Stable result: a repeated wait returns the same native result.
-      const again = await proposer.handleToolCall("mpas_wait_for_action_result", {
-        actionId,
-        timeoutSeconds: 0,
-      });
-      expect(JSON.parse(again.content[0].text!)).toEqual(parsed);
+      // 4. Stable result: repeated tasks/get returns the same native result.
+      const again = await taskRequest(server, "tasks/get", { taskId });
+      expect(JSON.parse(again.result.content[0].text)).toEqual(parsed);
     } finally {
       proposer.stop?.();
     }
   });
 
-  it("advertises the reserved wait tool and MPAS notices on application tools", async () => {
+  it("advertises the exact upstream tool surface without a wait tool", async () => {
     const { GeneratedBridge } = await loadBridgeModule();
     const plugin = await readJson(join(fixturesDir, "plugins", "github-mirror-plugin.json"));
     const proposer = new GeneratedBridge({
@@ -250,11 +260,11 @@ describe("MPAS E2E: Policy routing and dispatch", () => {
       tools: join(process.cwd(), "bridge-tools", "github-mirror-tools.json"),
     });
 
-    const tools = (proposer as unknown as { getToolDefinitions(): Array<{ name: string; description?: string }> }).getToolDefinitions();
+    const tools = proposer.getToolDefinitions();
     const names = tools.map((tool) => tool.name);
-    expect(names).toContain("mpas_wait_for_action_result");
+    expect(names).not.toContain("mpas_wait_for_action_result");
     const merge = tools.find((tool) => tool.name === "merge_pull_request_mirror");
-    expect(merge?.description).toContain("mediated by MPAS");
+    expect(merge?.description).toBe("Merge a pull request.");
   });
 
   // Replay detection: same actionId after dispatch → rejected
@@ -303,7 +313,7 @@ async function startStack() {
   return { adapter, coordination };
 }
 
-async function waitForApprovalRequest(signer: BridgeInstance): Promise<Record<string, any>> {
+async function waitForApprovalRequest(signer: ToolHandler): Promise<Record<string, any>> {
   const deadline = Date.now() + 3_000;
 
   while (Date.now() < deadline) {
@@ -316,6 +326,42 @@ async function waitForApprovalRequest(signer: BridgeInstance): Promise<Record<st
   }
 
   throw new Error("Timed out waiting for signer approval request.");
+}
+
+async function waitForTask(server: TaskServer, taskId: string): Promise<Record<string, any>> {
+  const deadline = Date.now() + 3_000;
+  while (Date.now() < deadline) {
+    const task = await taskRequest(server, "tasks/get", { taskId });
+    if (task.status === "completed" || task.status === "cancelled" || task.status === "failed") {
+      return task;
+    }
+    await sleep(50);
+  }
+  throw new Error(`Timed out waiting for Task ${taskId}.`);
+}
+
+async function taskRequest(server: TaskServer, method: string, params: Record<string, unknown>): Promise<Record<string, any>> {
+  const response = await server.handleMessage({
+    jsonrpc: "2.0",
+    id: 1,
+    method,
+    params: {
+      ...params,
+      _meta: {
+        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+        "io.modelcontextprotocol/clientCapabilities": {
+          extensions: {
+            "io.modelcontextprotocol/tasks": {},
+            "org.oma3/mpas": { version: "1" },
+          },
+        },
+      },
+    },
+  });
+  if (!response?.result) {
+    throw new Error(`Task request ${method} failed: ${JSON.stringify(response?.error)}`);
+  }
+  return response.result;
 }
 
 async function loadBridgeModule(): Promise<BridgeModule> {

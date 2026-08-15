@@ -165,7 +165,15 @@ describe("classification draft and merge (spec §3.4, §5)", () => {
 describe("harness config and merge (spec §3.5, §5)", () => {
   it("emits empty deviations and no high-impact list (derived from classification at run time)", () => {
     const config = buildHarnessConfig(upstream);
-    expect(config.intentionalDeviations).toEqual({ renamedTools: {}, wrappedSchemas: [], modifiedDescriptions: [] });
+    expect(config.intentionalDeviations).toEqual({
+      renamedTools: {},
+      wrappedSchemas: [],
+      modifiedDescriptions: [],
+      addedTools: [],
+      outputSchemaUnions: [],
+      extensionCapabilities: ["io.modelcontextprotocol/tasks", "org.oma3/mpas"],
+      note: "The bridge uses the official MCP Tasks extension and preserves upstream tool definitions.",
+    });
     expect(config).not.toHaveProperty("highImpact");
   });
 
@@ -184,6 +192,27 @@ describe("harness config and merge (spec §3.5, §5)", () => {
 
     expect(merged.upstream).toEqual({ command: "node", args: ["server.mjs"], env: { TOKEN: "{{credential:x}}" } });
     expect(merged.intentionalDeviations.renamedTools).toEqual({ old_name: "new_name" });
+  });
+
+  it("migrates the proprietary MPAS harness declarations to official Tasks", () => {
+    const legacy = {
+      ...buildHarnessConfig(upstream),
+      intentionalDeviations: {
+        renamedTools: {},
+        wrappedSchemas: [],
+        modifiedDescriptions: ["*"],
+        addedTools: ["mpas_wait_for_action_result"],
+        outputSchemaUnions: ["*"],
+      },
+    };
+
+    const merged = mergeHarnessConfig(legacy, upstream);
+    expect(merged.intentionalDeviations).toMatchObject({
+      modifiedDescriptions: [],
+      addedTools: [],
+      outputSchemaUnions: [],
+      extensionCapabilities: ["io.modelcontextprotocol/tasks", "org.oma3/mpas"],
+    });
   });
 });
 

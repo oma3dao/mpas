@@ -36,10 +36,12 @@ describe("generateBridge", () => {
     expect(source).not.toContain('"example.test/category": "branches"');
   });
 
-  it("wires the shared client-profile runtime around the tool definitions", () => {
+  it("wires the shared official Tasks runtime around the tool definitions", () => {
     const source = generateBridge(upstream);
     // The spec-compliance surface comes from the SDK, not inline logic.
     expect(source).toContain("ProposerBridge");
+    expect(source).toContain("MpasTasksServer");
+    expect(source).toContain('from "@modelcontextprotocol/server/stdio"');
     expect(source).toContain('from "@oma3/mpas"');
     // Durable store is emitted repository code, memory store is the fallback.
     expect(source).toContain('from "./sqlite-workflow-store.js"');
@@ -47,6 +49,9 @@ describe("generateBridge", () => {
     expect(source).toContain("signer: keyManagerPromise");
     // The background workflow loop starts with the server.
     expect(source).toContain("await bridge.start();");
+    expect(source).not.toContain("mpas_wait_for_action_result");
+    expect(source).not.toContain("execution.taskSupport");
+    expect(source).not.toContain("@modelcontextprotocol/sdk");
   });
 
   it("returns control without a synchronous approval wait", () => {
@@ -72,6 +77,8 @@ describe("generateBridge", () => {
     expect(store).toContain('from "node:sqlite"');
     expect(store).toContain("implements WorkflowStore");
     expect(store).toContain("PRAGMA journal_mode = WAL");
+    expect(store).toContain("cancelWorkflow(actionId: string)");
+    expect(store).toContain("'resolved', 'unresolvable', 'cancelled'");
     expect(generateWorkflowStore()).toBe(store);
 
     const result = ts.transpileModule(store, {
