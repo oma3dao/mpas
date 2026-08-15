@@ -97,6 +97,26 @@ describe("MCP 2026 stdio transport smoke test", () => {
     await expect(client.request("tools/call", { name: "delete_branch_demo", arguments: {} })).rejects.toMatchObject({
       code: -32602,
     });
+
+    await expect(
+      client.request("tools/call", {
+        name: "delete_branch_demo",
+        arguments: {},
+        _meta: {
+          "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+          "io.modelcontextprotocol/clientCapabilities": {
+            extensions: { "io.modelcontextprotocol/tasks": {} },
+          },
+        },
+      }),
+    ).rejects.toMatchObject({
+      code: -32021,
+      data: {
+        requiredCapabilities: {
+          extensions: { "org.oma3/mpas": { version: "2" } },
+        },
+      },
+    });
   });
 });
 

@@ -138,7 +138,7 @@ describe("MpasTasksServer modern dispatcher", () => {
       },
     };
     expect(await makeServer().handleMessage({ jsonrpc: "2.0", id: 1, method: "tools/call", params })).toMatchObject({
-      error: { code: -32003, data: { requiredCapabilities: { extensions: { "io.modelcontextprotocol/tasks": {} } } } },
+      error: { code: -32021, data: { requiredCapabilities: { extensions: { "io.modelcontextprotocol/tasks": {} } } } },
     });
 
     const wrongMpasVersion = {
@@ -157,7 +157,7 @@ describe("MpasTasksServer modern dispatcher", () => {
       await makeServer().handleMessage({ jsonrpc: "2.0", id: 2, method: "tools/call", params: wrongMpasVersion }),
     ).toMatchObject({
       error: {
-        code: -32003,
+        code: -32021,
         data: { requiredCapabilities: { extensions: { "org.oma3/mpas": { version: "2" } } } },
       },
     });

@@ -18,6 +18,8 @@ export const MCP_TASKS_PROTOCOL_VERSION = "2026-07-28";
 const PROTOCOL_VERSION_META_KEY = "io.modelcontextprotocol/protocolVersion";
 const CLIENT_CAPABILITIES_META_KEY = "io.modelcontextprotocol/clientCapabilities";
 const SERVER_INFO_META_KEY = "io.modelcontextprotocol/serverInfo";
+// MCP 2026-07-28 MissingRequiredClientCapability.
+const MISSING_REQUIRED_CLIENT_CAPABILITY = -32021;
 
 export interface MpasTasksServerOptions {
   bridge: ProposerBridge;
@@ -181,7 +183,7 @@ function requireTaskExtensions(params: Record<string, unknown>): void {
     missing[MPAS_MCP_PROFILE_EXTENSION_ID] = { version: MPAS_MCP_PROFILE_VERSION };
   }
   if (Object.keys(missing).length > 0) {
-    throw rpcError(-32003, "Missing required client capability", {
+    throw rpcError(MISSING_REQUIRED_CLIENT_CAPABILITY, "Missing required client capability", {
       requiredCapabilities: { extensions: missing },
     });
   }

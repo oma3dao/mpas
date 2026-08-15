@@ -115,7 +115,7 @@ profile extension:
 ```
 
 These values appear in the request's `params._meta`. Missing capabilities
-return JSON-RPC `-32003` with the missing entries under
+return JSON-RPC `-32021` with the missing entries under
 `data.requiredCapabilities.extensions`. A missing or unsupported protocol
 envelope returns `-32602`.
 

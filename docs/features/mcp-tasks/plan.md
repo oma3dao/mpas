@@ -383,7 +383,7 @@ Add:
   ```
 
 - per-request checks for both extension declarations
-- `-32003` `MissingRequiredClientCapabilityError` responses with structured
+- `-32021` `MissingRequiredClientCapabilityError` responses with structured
   `requiredCapabilities`
 - validated dispatch for `tasks/get`, `tasks/update`, and `tasks/cancel`
 - invalid-params exceptions for unknown or cross-DID Task IDs
@@ -459,7 +459,7 @@ Update `examples/demo/tests/e2e/mcp-bridge-stdio.test.ts` or replace it with a
 
 - `server/discover`
 - both advertised extensions
-- missing per-request extensions -> `-32003`
+- missing per-request extensions -> `-32021`
 - application call without a `task` request field
 - flat `resultType: "task"` response
 - `tasks/get` terminal result inlining
@@ -671,7 +671,7 @@ not create a standalone MPAS extension specification. The profile must define:
 - Tool definitions match upstream exactly.
 - The server speaks MCP 2026-07-28 through SDK v2.
 - Discovery advertises the official Tasks extension and MPAS profile extension.
-- Missing capabilities return structured `-32003` errors.
+- Missing capabilities return structured `-32021` errors.
 - Application calls return flat official `CreateTaskResult` objects.
 - `tasks/get` inlines terminal results and errors.
 - `tasks/update` and `tasks/cancel` return empty complete acknowledgements.

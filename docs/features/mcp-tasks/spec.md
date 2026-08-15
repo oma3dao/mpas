@@ -168,7 +168,7 @@ The client MUST declare both capabilities in every application-tool request:
 The same capability requirement applies to `tasks/get`, `tasks/update`, and
 `tasks/cancel` requests served by the bridge.
 
-If either capability is missing, the bridge MUST return `-32003` (Missing
+If either capability is missing, the bridge MUST return `-32021` (Missing
 Required Client Capability) with the missing entries in
 `data.requiredCapabilities.extensions`.
 
@@ -539,7 +539,7 @@ this specification.
 
 | Condition | Code | Behavior |
 |---|---:|---|
-| Missing `io.modelcontextprotocol/tasks` or `org.oma3/mpas` | `-32003` | Include missing entries in `data.requiredCapabilities.extensions`. |
+| Missing `io.modelcontextprotocol/tasks` or `org.oma3/mpas` | `-32021` | Include missing entries in `data.requiredCapabilities.extensions`. |
 | Unknown or DID-invisible `taskId` | `-32602` | `Task not found`. |
 | Invalid Tasks request parameters | `-32602` | Descriptive invalid-params message. |
 | Bridge cannot read a consistent stored workflow | `-32603` | Internal error. |
