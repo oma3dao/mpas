@@ -172,7 +172,7 @@ Exports:
 
 ```typescript
 interface MpasTaskMeta {
-  version: "1";
+  version: "2";
   actionId: string;
   actionEnvelopeHash: HashObject;
   authorizationState:
@@ -376,7 +376,7 @@ Add:
   {
     "io.modelcontextprotocol/tasks": {},
     "org.oma3/mpas": {
-      "version": "1",
+      "version": "2",
       "disclosure": "transparent"
     }
   }
@@ -587,7 +587,7 @@ For both GitHub and Netlify, test:
 5. expiration after transient/background processing
 6. cooperative cancellation
 7. missing Tasks extension capability
-8. missing MPAS extension capability
+8. missing MPAS profile-extension capability
 9. no request `task` field required
 10. exact upstream tool definitions
 
@@ -598,20 +598,23 @@ prerequisites and are not created by this feature.
 
 ## Phase 8: Normative Documentation
 
-### 8.1 Update the proposer bridge client profile
+### 8.1 Revise the proposer bridge profile in place
 
-Update `specs/mpas-profile-mcp-proposer-bridge-client.md` to:
+Update `specs/mpas-profile-mcp-proposer-bridge-client.md` in place so its Git
+history and existing links show the transition from version 1 to version 2:
 
+- identify the contract as the MPAS MCP Proposer Bridge Profile
+- bump the draft to v0.2 and the profile/interface version to `2`
 - identify the official Tasks extension path as the replacement interface
 - deprecate the wait tool, tool-presence discovery, description notices, and
   output-schema unions
 - make clear that the old 2025-11-25 Tasks API is not the target
-- reference the standalone MPAS extension specification
+- define the `org.oma3/mpas` profile-extension capability and Task metadata
 
-### 8.2 Create `specs/mpas-extension-mcp.md`
+### 8.2 Consolidate the normative contract
 
-Create the normative `org.oma3/mpas` extension document from the finalized
-feature specification. It must define:
+Keep the normative client-facing contract in the proposer-bridge profile. Do
+not create a standalone MPAS extension specification. The profile must define:
 
 - dependency on `io.modelcontextprotocol/tasks`
 - transparent-only settings
@@ -649,8 +652,7 @@ feature specification. It must define:
 | `examples/demo/src/bridge/` | Update proposer bridge wiring/store |
 | `examples/demo/tests/e2e/mcp-bridge-stack.test.ts` | Modify |
 | `examples/demo/tests/e2e/mcp-bridge-stdio.test.ts` | Modify or replace |
-| `specs/mpas-profile-mcp-proposer-bridge-client.md` | Deprecation and replacement guidance |
-| `specs/mpas-extension-mcp.md` | Create normative extension specification |
+| `specs/mpas-profile-mcp-proposer-bridge-client.md` | Revise in place as the normative v0.2 proposer-bridge profile using official Tasks |
 
 ### `mpas-applications` initial rollout
 
@@ -668,7 +670,7 @@ feature specification. It must define:
 - The wait tool and MPAS result wrappers are absent.
 - Tool definitions match upstream exactly.
 - The server speaks MCP 2026-07-28 through SDK v2.
-- Discovery advertises both required extensions.
+- Discovery advertises the official Tasks extension and MPAS profile extension.
 - Missing capabilities return structured `-32003` errors.
 - Application calls return flat official `CreateTaskResult` objects.
 - `tasks/get` inlines terminal results and errors.

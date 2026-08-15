@@ -8,7 +8,7 @@
 
 **Depends on:** [MCP Tasks extension](https://github.com/modelcontextprotocol/ext-tasks), [MCP Extensions Framework](https://modelcontextprotocol.io/extensions/overview)
 
-**Normative output:** [MPAS MCP Extension](../../../specs/mpas-extension-mcp.md)
+**Normative output:** [MPAS MCP Proposer Bridge Profile v0.2](../../../specs/mpas-profile-mcp-proposer-bridge-client.md)
 **Companion:** [plan.md](./plan.md)
 
 ---
@@ -19,9 +19,10 @@ Replace the bridge's proprietary `mpas_wait_for_action_result` tool and the
 `MpasBridgeDeferredResult` / `MpasBridgeActionOutcome` result objects with the
 official MCP Tasks extension, `io.modelcontextprotocol/tasks`.
 
-The bridge also advertises the companion `org.oma3/mpas` extension. MCP Tasks
-provides the asynchronous lifecycle; `org.oma3/mpas` adds authorization state
-in namespaced result metadata.
+The bridge also advertises the `org.oma3/mpas` profile-extension capability.
+MCP Tasks provides the asynchronous lifecycle; `org.oma3/mpas` identifies this
+proposer-bridge profile and adds authorization state in namespaced result
+metadata.
 
 This specification targets the official Tasks extension built on MCP
 2026-07-28. It does **not** target the experimental Tasks API included in the
@@ -75,14 +76,16 @@ and cooperative cancellation without changing application tool schemas.
    output schemas, annotations, and other upstream fields pass through
    unchanged. The bridge does not add `execution.taskSupport`.
 
-7. **Transparent disclosure only.** Version 1 exposes approval requirements
-   to the proposing client. Opaque and mixed disclosure modes are out of scope.
+7. **Transparent disclosure only.** Profile version 2 exposes approval
+   requirements to the proposing client. Opaque and mixed disclosure modes are
+   out of scope.
 
 8. **MPAS data lives in `_meta`.** Authorization metadata appears at
    `_meta["org.oma3/mpas"]`, not as a top-level Task property.
 
 9. **Polling is the initial notification model.** Clients use `tasks/get`.
-   `notifications/tasks` and subscriptions are out of scope for version 1.
+   `notifications/tasks` and subscriptions are out of scope for profile
+   version 2.
 
 10. **No detailed approval progress.** The bridge reports coarse workflow
     state and approval requirements. It does not promise collected-versus-
@@ -98,19 +101,19 @@ and cooperative cancellation without changing application tool schemas.
 
 ---
 
-## 4. Extension Negotiation
+## 4. Profile-Extension Negotiation
 
-### 4.1 Extension Identifiers
+### 4.1 Capability Identifiers
 
 - Official asynchronous execution: `io.modelcontextprotocol/tasks`
-- MPAS authorization metadata: `org.oma3/mpas`
+- MPAS proposer-bridge profile extension: `org.oma3/mpas`
 
-The MPAS extension requires the Tasks extension.
+The MPAS profile extension requires the Tasks extension.
 
 ### 4.2 Server Discovery
 
-The bridge advertises both extensions in its MCP 2026-07-28
-`server/discover` result:
+The bridge advertises the Tasks extension and MPAS profile extension in its
+MCP 2026-07-28 `server/discover` result:
 
 ```json
 {
@@ -121,7 +124,7 @@ The bridge advertises both extensions in its MCP 2026-07-28
     "extensions": {
       "io.modelcontextprotocol/tasks": {},
       "org.oma3/mpas": {
-        "version": "1",
+        "version": "2",
         "disclosure": "transparent"
       }
     }
@@ -133,7 +136,7 @@ The bridge advertises both extensions in its MCP 2026-07-28
 
 ### 4.3 Per-Request Client Capabilities
 
-The client MUST declare both extensions in every application-tool request:
+The client MUST declare both capabilities in every application-tool request:
 
 ```json
 {
@@ -153,7 +156,7 @@ The client MUST declare both extensions in every application-tool request:
         "extensions": {
           "io.modelcontextprotocol/tasks": {},
           "org.oma3/mpas": {
-            "version": "1"
+            "version": "2"
           }
         }
       }
@@ -165,7 +168,7 @@ The client MUST declare both extensions in every application-tool request:
 The same capability requirement applies to `tasks/get`, `tasks/update`, and
 `tasks/cancel` requests served by the bridge.
 
-If either extension is missing, the bridge MUST return `-32003` (Missing
+If either capability is missing, the bridge MUST return `-32003` (Missing
 Required Client Capability) with the missing entries in
 `data.requiredCapabilities.extensions`.
 
@@ -221,7 +224,7 @@ The official extension uses a flat result with `resultType: "task"`:
   "pollIntervalMs": 5000,
   "_meta": {
     "org.oma3/mpas": {
-      "version": "1",
+      "version": "2",
       "actionId": "urn:uuid:786512e2-9e0d-44bd-8f29-789f320fe840",
       "actionEnvelopeHash": {
         "alg": "sha-256",
@@ -268,7 +271,7 @@ itself completed normally:
   "pollIntervalMs": 5000,
   "_meta": {
     "org.oma3/mpas": {
-      "version": "1",
+      "version": "2",
       "actionId": "urn:uuid:786512e2-9e0d-44bd-8f29-789f320fe840",
       "actionEnvelopeHash": {
         "alg": "sha-256",
@@ -361,11 +364,11 @@ There is no `tasks/result` request. The terminal result is returned by
 
 ## 6. MPAS Task Metadata
 
-The `_meta["org.oma3/mpas"]` value has this version 1 shape:
+The `_meta["org.oma3/mpas"]` value has this profile-version 2 shape:
 
 ```typescript
 interface MpasTaskMeta {
-  version: "1";
+  version: "2";
   actionId: string;
   actionEnvelopeHash: HashObject;
   authorizationState:
@@ -434,7 +437,8 @@ Unknown or invisible task IDs return `-32602` (Invalid params).
 
 ### 8.2 `tasks/update`
 
-MPAS version 1 never enters `input_required` and creates no `inputRequests`.
+Proposer-bridge profile version 2 never enters `input_required` and creates no
+`inputRequests`.
 For a known, visible Task, `tasks/update` ignores supplied unknown responses as
 required by the Tasks extension and returns:
 
@@ -558,7 +562,7 @@ this specification.
 | `MpasBridgeDeferredResult` | Flat `CreateTaskResult` with `resultType: "task"` |
 | `MpasBridgeActionOutcome` | Completed Task with `result.isError: true` |
 | `MpasBridgeError` after task creation | Completed error result or Task JSON-RPC error |
-| Action reference as client handle | `taskId` (same v1 value as Action ID) |
+| Action reference as client handle | `taskId` (same value as Action ID) |
 | Output-schema unions | Upstream schema unchanged |
 | Tool description notices | Upstream description unchanged |
 | `notificationRequired` | Human-readable `statusMessage` when needed |

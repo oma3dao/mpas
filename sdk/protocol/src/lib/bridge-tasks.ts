@@ -1,6 +1,6 @@
 import type { ActionResponse } from "../types/mpas.js";
 import {
-  MPAS_MCP_EXTENSION_ID,
+  MPAS_MCP_PROFILE_EXTENSION_ID,
   type CancelTaskResult,
   type CreateTaskResult,
   type GetTaskResult,
@@ -55,7 +55,7 @@ function taskSummary(record: WorkflowRecord, config: TaskResultConfig): Task {
     lastUpdatedAt: record.updatedAt,
     ttlMs: ttlMs(record, config.resultRetentionSeconds),
     pollIntervalMs: config.taskPollIntervalMs ?? 5_000,
-    ...(status === "working" ? { _meta: { [MPAS_MCP_EXTENSION_ID]: buildMpasTaskMeta(record) } } : {}),
+    ...(status === "working" ? { _meta: { [MPAS_MCP_PROFILE_EXTENSION_ID]: buildMpasTaskMeta(record) } } : {}),
   };
 }
 
@@ -132,4 +132,3 @@ function ttlMs(record: WorkflowRecord, retentionSeconds: number): number {
   const retentionBoundary = resolvedAt + retentionSeconds * 1_000;
   return Math.max(0, Math.trunc(Math.max(expiresAt, retentionBoundary) - createdAt));
 }
-

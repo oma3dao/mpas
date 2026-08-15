@@ -220,7 +220,7 @@ describe("MPAS E2E: Policy routing and dispatch", () => {
         status: "working",
         _meta: {
           "org.oma3/mpas": {
-            version: "1",
+            version: "2",
             authorizationState: "authorization_required",
             disclosure: "transparent",
           },
@@ -352,7 +352,7 @@ async function taskRequest(server: TaskServer, method: string, params: Record<st
         "io.modelcontextprotocol/clientCapabilities": {
           extensions: {
             "io.modelcontextprotocol/tasks": {},
-            "org.oma3/mpas": { version: "1" },
+            "org.oma3/mpas": { version: "2" },
           },
         },
       },

@@ -3,7 +3,8 @@ import {
   CancelTaskParamsSchema,
   GetTaskParamsSchema,
   MCP_TASKS_EXTENSION_ID,
-  MPAS_MCP_EXTENSION_ID,
+  MPAS_MCP_PROFILE_EXTENSION_ID,
+  MPAS_MCP_PROFILE_VERSION,
   UpdateTaskParamsSchema,
 } from "./mcp-tasks-extension.js";
 import {
@@ -109,7 +110,10 @@ export class MpasTasksServer {
             tools: {},
             extensions: {
               [MCP_TASKS_EXTENSION_ID]: {},
-              [MPAS_MCP_EXTENSION_ID]: { version: "1", disclosure: "transparent" },
+              [MPAS_MCP_PROFILE_EXTENSION_ID]: {
+                version: MPAS_MCP_PROFILE_VERSION,
+                disclosure: "transparent",
+              },
             },
           },
           ttlMs: this.discoveryTtlMs,
@@ -172,9 +176,9 @@ function requireTaskExtensions(params: Record<string, unknown>): void {
   const extensions = isObject(capabilities.extensions) ? capabilities.extensions : {};
   const missing: Record<string, unknown> = {};
   if (!isObject(extensions[MCP_TASKS_EXTENSION_ID])) missing[MCP_TASKS_EXTENSION_ID] = {};
-  const mpasExtension = extensions[MPAS_MCP_EXTENSION_ID];
-  if (!isObject(mpasExtension) || mpasExtension.version !== "1") {
-    missing[MPAS_MCP_EXTENSION_ID] = { version: "1" };
+  const mpasProfileExtension = extensions[MPAS_MCP_PROFILE_EXTENSION_ID];
+  if (!isObject(mpasProfileExtension) || mpasProfileExtension.version !== MPAS_MCP_PROFILE_VERSION) {
+    missing[MPAS_MCP_PROFILE_EXTENSION_ID] = { version: MPAS_MCP_PROFILE_VERSION };
   }
   if (Object.keys(missing).length > 0) {
     throw rpcError(-32003, "Missing required client capability", {

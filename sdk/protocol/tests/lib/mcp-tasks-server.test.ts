@@ -14,7 +14,7 @@ const META = {
   "io.modelcontextprotocol/clientCapabilities": {
     extensions: {
       "io.modelcontextprotocol/tasks": {},
-      "org.oma3/mpas": { version: "1" },
+      "org.oma3/mpas": { version: "2" },
     },
   },
 };
@@ -99,7 +99,7 @@ describe("MpasTasksServer modern dispatcher", () => {
     });
   });
 
-  it("advertises the official Tasks and MPAS extensions", async () => {
+  it("advertises the official Tasks extension and MPAS profile extension", async () => {
     const response = await makeServer().handleMessage(request(1, "server/discover"));
     expect(response).toMatchObject({
       result: {
@@ -108,7 +108,7 @@ describe("MpasTasksServer modern dispatcher", () => {
         capabilities: {
           extensions: {
             "io.modelcontextprotocol/tasks": {},
-            "org.oma3/mpas": { version: "1", disclosure: "transparent" },
+            "org.oma3/mpas": { version: "2", disclosure: "transparent" },
           },
         },
       },
@@ -148,7 +148,7 @@ describe("MpasTasksServer modern dispatcher", () => {
         "io.modelcontextprotocol/clientCapabilities": {
           extensions: {
             "io.modelcontextprotocol/tasks": {},
-            "org.oma3/mpas": { version: "2" },
+            "org.oma3/mpas": { version: "1" },
           },
         },
       },
@@ -158,7 +158,7 @@ describe("MpasTasksServer modern dispatcher", () => {
     ).toMatchObject({
       error: {
         code: -32003,
-        data: { requiredCapabilities: { extensions: { "org.oma3/mpas": { version: "1" } } } },
+        data: { requiredCapabilities: { extensions: { "org.oma3/mpas": { version: "2" } } } },
       },
     });
   });

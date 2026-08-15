@@ -2,7 +2,7 @@ import type { ActionPackage, ApprovalRequirements, HashObject } from "../types/m
 import type { WorkflowRecord } from "./workflow-store.js";
 
 export interface MpasTaskMeta {
-  version: "1";
+  version: "2";
   actionId: string;
   actionEnvelopeHash: HashObject;
   authorizationState: "submitted" | "authorization_required" | "pending" | "approvals_collected";
@@ -25,7 +25,7 @@ export function buildMpasTaskMeta(record: WorkflowRecord): MpasTaskMeta {
   const authorizationState = authorizationStateOf(record);
   const requirements = approvalRequirementsOf(record);
   return {
-    version: "1",
+    version: "2",
     actionId: record.actionId,
     actionEnvelopeHash: structuredClone(actionEnvelopeHash),
     authorizationState,
@@ -81,4 +81,3 @@ function actionPackageOf(record: WorkflowRecord): ActionPackage {
   }
   return pkg as ActionPackage;
 }
-

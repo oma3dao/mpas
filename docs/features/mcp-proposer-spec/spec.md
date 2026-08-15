@@ -4,7 +4,7 @@
 **Created:** 2026-07-26
 **Implementation scope:** OMA3 GitHub MCP Bridge Server and the OMA3 generator/runtime used to build it
 **Companion:** [plan.md](./plan.md)
-**Normative interface:** [MPAS MCP Proposer Bridge Client Interface Profile v0.1](../../../specs/mpas-profile-mcp-proposer-bridge-client.md)
+**Current normative interface:** [MPAS MCP Proposer Bridge Profile v0.2](../../../specs/mpas-profile-mcp-proposer-bridge-client.md)
 **Related:** [MCP Execution Profile](../../../specs/mpas-profile-mcp.md), [HTTP Profile](../../../specs/mpas-profile-http.md), [MPAS Core](../../../specs/mpas-specification.md)
 
 ---
@@ -518,7 +518,8 @@ after the client can receive a durable deferred Action reference.
 
 ### 13.1 New normative profile
 
-Add `specs/mpas-profile-mcp-proposer-bridge-client.md`, defining:
+This feature originally introduced version 1 of the profile now maintained at
+`specs/mpas-profile-mcp-proposer-bridge-client.md`, defining:
 
 - upstream-compatible tool exposure;
 - reserved bridge operation names;

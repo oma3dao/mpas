@@ -32,7 +32,7 @@ describe("official MCP Task result builders", () => {
       pollIntervalMs: 2_500,
       _meta: {
         "org.oma3/mpas": {
-          version: "1",
+          version: "2",
           actionId: ACTION_ID,
           actionEnvelopeHash: { alg: "sha-256", value: "signed-envelope-digest" },
           authorizationState: "submitted",
