@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
-import { chmod, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { auth, type OAuthClientProvider, type OAuthDiscoveryState } from "@modelcontextprotocol/sdk/client/auth.js";
@@ -373,8 +373,15 @@ async function readSession(path: string): Promise<StoredOAuthSession | undefined
 
 async function writeSession(path: string, session: StoredOAuthSession): Promise<void> {
   await mkdir(join(path, ".."), { recursive: true, mode: 0o700 });
-  await writeFile(path, `${JSON.stringify(session)}\n`, { mode: 0o600 });
-  await chmod(path, 0o600);
+  const temporaryPath = `${path}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`;
+  try {
+    await writeFile(temporaryPath, `${JSON.stringify(session)}\n`, { mode: 0o600, flag: "wx" });
+    await chmod(temporaryPath, 0o600);
+    await rename(temporaryPath, path);
+  } catch (error) {
+    await rm(temporaryPath, { force: true }).catch(() => {});
+    throw error;
+  }
 }
 
 async function openUrl(url: URL): Promise<void> {
