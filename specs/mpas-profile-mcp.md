@@ -4,7 +4,7 @@
 **Profile Identifier:** `did:web:profiles.oma3.org:mcp`
 **Payload Format:** `mcp.toolsCall`
 **Depends on:** [MPAS Core Specification v0.2](./mpas-specification.md), [MPAS Application Plugin Profile v0.2](./mpas-profile-application-plugin.md)
-**Related:** [MPAS JSON Verifier Policy Profile](./mpas-profile-policy-json.md), [MPAS HTTP Profile](./mpas-profile-http.md)
+**Related:** [MPAS MCP Proposer Bridge Profile](./mpas-profile-mcp-proposer-bridge-client.md), [MPAS JSON Verifier Policy Profile](./mpas-profile-policy-json.md), [MPAS HTTP Profile](./mpas-profile-http.md)
 
 ---
 
@@ -18,7 +18,9 @@ An action under this profile represents a single MCP tool invocation: "call tool
 
 This profile does not define any client-facing bridge or application interface.
 Deferred results, notification responsibility, background workflow processing,
-and later result retrieval are outside its scope.
+and later result retrieval are outside its scope. The companion
+[MPAS MCP Proposer Bridge Profile](./mpas-profile-mcp-proposer-bridge-client.md)
+defines the client-facing contract for an MPAS proposer bridge.
 
 ### 1.1 Conformance Language
 

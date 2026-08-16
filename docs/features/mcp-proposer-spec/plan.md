@@ -4,7 +4,7 @@
 **Created:** 2026-07-26
 **Implementation scope:** OMA3 GitHub MCP Bridge Server and the OMA3 generator/runtime used to build it
 **Feature specification:** [spec.md](./spec.md)
-**Normative interface:** [MPAS MCP Proposer Bridge Client Interface Profile v0.1](../../../specs/mpas-profile-mcp-proposer-bridge-client.md)
+**Current normative interface:** [MPAS MCP Proposer Bridge Profile v0.2](../../../specs/mpas-profile-mcp-proposer-bridge-client.md)
 
 ---
 
@@ -50,7 +50,7 @@ is verified.
 
 - `docs/features/mcp-proposer-spec/spec.md`
 - `docs/features/mcp-proposer-spec/plan.md`
-- `specs/mpas-profile-mcp-proposer-bridge-client.md`
+- `specs/mpas-profile-mcp-proposer-bridge-client.md` (originally introduced here as version 1)
 
 ### Review decisions
 

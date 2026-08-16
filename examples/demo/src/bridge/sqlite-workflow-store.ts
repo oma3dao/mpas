@@ -13,7 +13,7 @@ import type {
  * SQLite reference implementation of the SDK's WorkflowStore contract
  * (implementation plan §5.3). This is OMA3's durable store for the GitHub
  * bridge deployment; it lives in the repository rather than the SDK because
- * the client profile does not require any particular persistence mechanism.
+ * the MCP Tasks integration does not require any particular persistence mechanism.
  *
  * - one configured database path per bridge deployment;
  * - transactional workflow transitions (single-statement check-and-write);
@@ -24,7 +24,7 @@ import type {
 
 const SCHEMA_VERSION = 1;
 
-const TERMINAL_STATES: ReadonlySet<BridgeWorkflowState> = new Set(["resolved", "unresolvable"]);
+const TERMINAL_STATES: ReadonlySet<BridgeWorkflowState> = new Set(["resolved", "unresolvable", "cancelled"]);
 
 export class SqliteWorkflowStore implements WorkflowStore {
   private readonly db: DatabaseSync;
@@ -89,6 +89,7 @@ export class SqliteWorkflowStore implements WorkflowStore {
         `UPDATE workflows
            SET claimed_by = ?, claim_expires_ms = ?, updated_at = ?
          WHERE action_id = ?
+           AND state NOT IN ('resolved', 'unresolvable', 'cancelled')
            AND (claimed_by IS NULL OR claimed_by = ? OR claim_expires_ms <= ?)`,
       )
       .run(workerId, nowMs + leaseMs, this.timestamp(), actionId, workerId, nowMs);
@@ -122,28 +123,42 @@ export class SqliteWorkflowStore implements WorkflowStore {
   }
 
   resolveWorkflow(actionId: string, resolution: WorkflowResolution): void {
-    const state: BridgeWorkflowState = resolution.kind === "resolved" ? "resolved" : "unresolvable";
+    const state: BridgeWorkflowState = resolution.kind;
     const at = this.timestamp();
     this.db
       .prepare(
         `UPDATE workflows
            SET state = ?, resolution = ?, resolved_at = ?, updated_at = ?
          WHERE action_id = ?
-           AND state NOT IN ('resolved', 'unresolvable')`,
+           AND state NOT IN ('resolved', 'unresolvable', 'cancelled')`,
       )
       .run(state, toJson(resolution), at, at, actionId);
   }
 
+  cancelWorkflow(actionId: string): boolean {
+    const at = this.timestamp();
+    const resolution: WorkflowResolution = { kind: "cancelled", cancelledAt: at };
+    const result = this.db
+      .prepare(
+        `UPDATE workflows
+           SET state = 'cancelled', resolution = ?, resolved_at = ?, updated_at = ?
+         WHERE action_id = ?
+           AND state NOT IN ('resolved', 'unresolvable', 'cancelled')`,
+      )
+      .run(toJson(resolution), at, at, actionId);
+    return result.changes === 1;
+  }
+
   listRecoverableWorkflows(): WorkflowRecord[] {
     const rows = this.db
-      .prepare("SELECT * FROM workflows WHERE state NOT IN ('resolved', 'unresolvable') ORDER BY created_at")
+      .prepare("SELECT * FROM workflows WHERE state NOT IN ('resolved', 'unresolvable', 'cancelled') ORDER BY created_at")
       .all() as Record<string, unknown>[];
     return rows.map(rowToRecord);
   }
 
   purgeExpiredResults(retentionMs: number = 24 * 60 * 60 * 1000): number {
     const rows = this.db
-      .prepare("SELECT action_id, expires_at, resolved_at FROM workflows WHERE state IN ('resolved', 'unresolvable')")
+      .prepare("SELECT action_id, expires_at, resolved_at FROM workflows WHERE state IN ('resolved', 'unresolvable', 'cancelled')")
       .all() as { action_id: string; expires_at: string; resolved_at: string }[];
 
     const nowMs = this.now();

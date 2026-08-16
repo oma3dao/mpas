@@ -166,6 +166,26 @@ describe("resolveWorkflow (terminal, immutable)", () => {
   });
 });
 
+describe("cancelWorkflow (terminal, immutable)", () => {
+  it("atomically cancels an active workflow and records its terminal time", () => {
+    createDefault(store);
+    expect(store.cancelWorkflow(ACTION_ID)).toBe(true);
+    expect(store.getWorkflow(ACTION_ID)).toMatchObject({
+      state: "cancelled",
+      resolvedAt: "2026-07-26T18:00:00.000Z",
+      resolution: { kind: "cancelled", cancelledAt: "2026-07-26T18:00:00.000Z" },
+    });
+  });
+
+  it("preserves the first terminal write", () => {
+    createDefault(store);
+    expect(store.cancelWorkflow(ACTION_ID)).toBe(true);
+    expect(store.cancelWorkflow(ACTION_ID)).toBe(false);
+    store.resolveWorkflow(ACTION_ID, { kind: "resolved", actionResponse: { result: "executed" } });
+    expect(store.getWorkflow(ACTION_ID)?.state).toBe("cancelled");
+  });
+});
+
 describe("listRecoverableWorkflows", () => {
   it("lists only non-terminal workflows", () => {
     createDefault(store);

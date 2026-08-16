@@ -301,25 +301,33 @@ self-approval. A deliberate single-party default is explicitly authored as
 
 ### Bridge Config
 
-The bridge config lives on the agent side and tells the MCP Bridge how to connect to the adapter. The adapter never reads bridge configs.
+The bridge config lives on the agent side and tells the MCP Bridge how to connect to the adapter. The adapter never reads bridge configs. One bridge serves exactly one MCP client or agent identity and holds one private key for the proposer DID derived from that key. Do not share a bridge or key across independent clients; run a separate bridge instance and key for each agent.
 
 | Field                    | Purpose                                                                        |
 | ------------------------ | ------------------------------------------------------------------------------ |
 | `mode`                   | `"proposer"` (can call operations) or `"maintainer"` (can approve/reject)      |
 | `plugin`                 | Path to the plugin file (bridge uses it for application identity/profile)      |
 | `adapter.url`            | Where to submit action packages                                                |
-| `agent.did`              | This agent's DID — must be in the deployment config's `signerKeys`         |
-| `agent.keyFile`          | Path to the Ed25519 key file for signing                                       |
+| `agent.did`              | Legacy informational field; bridge identity is always derived from `agent.keyFile` |
+| `agent.keyFile`          | Path to the bridge's single Ed25519 proposer key                               |
 | `target.applicationDid`  | Which application DID to target                                                |
 | `coordination.url`       | The coordination service endpoint                                              |
 | `workflow.dbPath`        | SQLite path for the durable workflow store. Relative paths resolve against the config file's directory. Omit only for ephemeral use — without it, active Actions do not survive a bridge restart |
 | `workflow.resultRetentionSeconds` | Minimum seconds a resolved result stays retrievable (default `86400`) |
 | `workflow.pollIntervalMs` | Background workflow tick interval (default `2000`)                            |
-| `workflow.maxTimeoutSeconds` | Advertised maximum for `mpas_wait_for_action_result` (default `300`)       |
+| `workflow.taskPollIntervalMs` | Client-facing `tasks/get` polling hint (default `5000`)                   |
 
-> **Removed in `@oma3/mpas@0.1.0-alpha.2`:** `approvalStrategy` and `approvalTimeoutMs`. Approval-gated calls no longer block — the bridge returns a deferred Action reference immediately and the client retrieves the result with `mpas_wait_for_action_result`. Both fields are still accepted and ignored, with a warning, so existing configs keep working.
+The bridge speaks MCP `2026-07-28` and advertises
+`io.modelcontextprotocol/tasks` plus `org.oma3/mpas` through
+`server/discover`. Every accepted application `tools/call` returns a flat
+official Task whose `taskId` is the MPAS Action ID. Clients observe progress
+and retrieve the terminal native result with read-only `tasks/get`; Task
+polling does not drive the background MPAS workflow.
 
-**Host request timeout:** whatever agent harness launches the bridge must allow a request to run at least as long as `workflow.maxTimeoutSeconds`, since the wait tool blocks by design. With the default 300 s ceiling, a host timeout of 360 000 ms is a reasonable margin. Lower both together or neither.
+`approvalStrategy` and `approvalTimeoutMs` are deprecated and ignored. There
+is no synchronous approval wait and no MPAS result tool. Hosts should honor
+the Task's `pollIntervalMs` hint instead of extending individual request
+timeouts.
 
 ### Key Files
 

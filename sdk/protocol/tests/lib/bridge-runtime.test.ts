@@ -1,16 +1,16 @@
 import { describe, expect, it } from "vitest";
-import type { ActionPackage, ActionResponse } from "../../src/index.js";
-import { MPAS_WAIT_TOOL_NAME, computeHash } from "../../src/index.js";
-import { ProposerBridge } from "../../src/lib/bridge-runtime.js";
+import type { ActionPackage, ActionResponse, Did } from "../../src/index.js";
+import { computeHash } from "../../src/index.js";
+import {
+  ProposerBridge,
+  TaskNotFoundError,
+  UnknownBridgeToolError,
+} from "../../src/lib/bridge-runtime.js";
 import { MemoryWorkflowStore } from "../../src/lib/workflow-store.js";
 import type { WorkflowAdapter, WorkflowCoordination } from "../../src/lib/workflow-engine.js";
 
-/**
- * Shared proposer-bridge runtime: the MCP-facing surface generated bridges
- * wire their tool definitions and configuration around (plan §5.1, client
- * profile §3–§6).
- */
-
+const PROPOSER_DID = "did:jwk:proposer" as Did;
+const OTHER_DID = "did:jwk:other" as Did;
 const UPSTREAM_TOOLS = [
   {
     name: "merge_pull_request",
@@ -18,27 +18,34 @@ const UPSTREAM_TOOLS = [
     inputSchema: { type: "object", properties: { pullNumber: { type: "integer" } } },
     outputSchema: { type: "object", properties: { merged: { type: "boolean" } } },
   },
-  {
-    name: "create_issue",
-    description: "Create a new issue.",
-    inputSchema: { type: "object", properties: { title: { type: "string" } } },
-  },
 ];
 
-let nextActionSerial = 0;
+let serial = 0;
 
-/** Stub package builder: mints a fresh actionId per call, like the real one. */
-async function buildPackage(toolName: string, args: object): Promise<ActionPackage> {
-  nextActionSerial += 1;
+async function buildPackage(toolName: string, args: object, proposerDid: Did = PROPOSER_DID): Promise<ActionPackage> {
+  serial += 1;
+  const actionEnvelope = {
+    version: "1" as const,
+    type: "ActionEnvelope" as const,
+    proposer: { did: proposerDid },
+    target: { applicationDid: "did:web:example.com" as Did },
+    executionProfile: { id: "did:web:example.com:profiles:mcp" as Did, format: "mcp.toolsCall" },
+    executionPayloadHash: { alg: "sha-256" as const, value: "payload-hash" },
+    actionId: { value: `urn:uuid:0000000${serial}-0000-4000-8000-000000000000` },
+    createdAt: "2026-08-14T10:00:00.000Z",
+    expiresAt: "2030-01-01T00:00:00.000Z",
+  };
   return {
     version: "1",
     type: "ActionPackage",
     executionPayload: { name: toolName, arguments: args } as unknown as ActionPackage["executionPayload"],
-    actionEnvelope: {
-      actionId: { value: `urn:uuid:0000000${nextActionSerial}-0000-4000-8000-000000000000` },
-      expiresAt: "2030-01-01T00:00:00.000Z",
-    } as unknown as ActionPackage["actionEnvelope"],
-    approvalBundle: { approvals: [] } as unknown as ActionPackage["approvalBundle"],
+    actionEnvelope,
+    approvalBundle: {
+      version: "1",
+      type: "ApprovalBundle",
+      actionEnvelopeHash: computeHash(actionEnvelope),
+      approvals: [],
+    },
   };
 }
 
@@ -46,12 +53,9 @@ function response(result: ActionResponse["result"], extra: Partial<ActionRespons
   return { version: "1", type: "ActionResponse", result, ...extra };
 }
 
-function fakeAdapter(...script: (ActionResponse | Error)[]): WorkflowAdapter & { calls: unknown[] } {
-  const calls: unknown[] = [];
+function fakeAdapter(...script: (ActionResponse | Error)[]): WorkflowAdapter {
   return {
-    calls,
-    async submit(pkg: unknown): Promise<ActionResponse> {
-      calls.push(pkg);
+    async submit(): Promise<ActionResponse> {
       const next = script.shift();
       if (!next) throw new Error("fakeAdapter script exhausted");
       if (next instanceof Error) throw next;
@@ -60,214 +64,157 @@ function fakeAdapter(...script: (ActionResponse | Error)[]): WorkflowAdapter & {
   };
 }
 
-const idleCoordination: WorkflowCoordination = {
-  async submitAction() {
-    return {
-      version: "1",
-      type: "CoordinationActionResponse",
-      actionRef: {
+function coordination(): WorkflowCoordination & { cancelled: string[] } {
+  const cancelled: string[] = [];
+  return {
+    cancelled,
+    async submitAction(pkg: unknown) {
+      const actionPackage = pkg as ActionPackage;
+      return {
         version: "1",
-        type: "ActionRef",
-        actionId: { value: "urn:uuid:coordination" },
-        actionEnvelopeHash: { alg: "sha-256", value: "hash" },
-      },
-      state: "awaitingApprovals",
-    } as Awaited<ReturnType<WorkflowCoordination["submitAction"]>>;
-  },
-  async poll() {
-    return { version: "1", type: "CoordinationPollResponse", approvalRequests: [], actionUpdates: [] } as Awaited<
-      ReturnType<WorkflowCoordination["poll"]>
-    >;
-  },
-};
+        type: "CoordinationActionResponse",
+        actionRef: {
+          version: "1",
+          type: "ActionRef",
+          actionId: actionPackage.actionEnvelope.actionId,
+          actionEnvelopeHash: actionPackage.approvalBundle.actionEnvelopeHash,
+        },
+        state: "awaitingApprovals",
+      };
+    },
+    async poll() {
+      return { version: "1", type: "CoordinationPollResponse", approvalRequests: [], actionUpdates: [] };
+    },
+    async cancelAction(actionId) {
+      cancelled.push(actionId.value);
+      return {
+        version: "1",
+        type: "CoordinationActionCancelResponse",
+        actionRef: {
+          version: "1",
+          type: "ActionRef",
+          actionId,
+          actionEnvelopeHash: { alg: "sha-256", value: "hash" },
+        },
+        state: "cancelled",
+        cancelledAt: "2026-08-14T10:01:00.000Z",
+      };
+    },
+  };
+}
 
-function makeBridge(adapter: WorkflowAdapter) {
+function makeBridge(adapter: WorkflowAdapter, options: { store?: MemoryWorkflowStore; proposerDid?: Did } = {}) {
   return new ProposerBridge({
     tools: UPSTREAM_TOOLS,
-    buildActionPackage: buildPackage,
-    store: new MemoryWorkflowStore(),
+    buildActionPackage: (name, args) => buildPackage(name, args, options.proposerDid ?? PROPOSER_DID),
+    store: options.store ?? new MemoryWorkflowStore({ now: () => Date.parse("2026-08-14T10:00:00.000Z") }),
     adapter,
-    coordination: idleCoordination,
-    proposerDid: "did:jwk:proposer",
+    coordination: coordination(),
+    proposerDid: options.proposerDid ?? PROPOSER_DID,
     resultRetentionSeconds: 86_400,
   });
 }
 
-describe("tool surface (profile §3)", () => {
-  it("exposes upstream tools with the MPAS notice, output unions, and the reserved wait tool", () => {
-    const bridge = makeBridge(fakeAdapter());
-    const tools = bridge.getToolDefinitions();
-
-    const names = tools.map((tool) => tool.name);
-    expect(names).toEqual(["merge_pull_request", "create_issue", MPAS_WAIT_TOOL_NAME]);
-
-    const merge = tools[0];
-    expect(merge.description).toContain("Merge a pull request.");
-    expect(merge.description).toContain("mediated by MPAS");
-    // Upstream schema preserved as the first union branch.
-    expect((merge.outputSchema as { anyOf: unknown[] }).anyOf[0]).toEqual(UPSTREAM_TOOLS[0].outputSchema);
-
-    // No upstream outputSchema → none advertised (profile §3.2).
-    expect(tools[1].outputSchema).toBeUndefined();
-
-    // Input schemas are untouched.
-    expect(merge.inputSchema).toEqual(UPSTREAM_TOOLS[0].inputSchema);
-  });
-});
-
-describe("application tool calls (profile §4)", () => {
-  it("relays a native result verbatim on immediate execution", async () => {
-    const nativeResult = { content: [{ type: "text", text: "merged" }] };
-    const bridge = makeBridge(fakeAdapter(response("executed", { executionResult: nativeResult })));
-
-    const result = await bridge.handleToolCall("merge_pull_request", { pullNumber: 42 });
-    expect(result).toEqual(nativeResult);
+describe("official MCP Tasks bridge runtime", () => {
+  it("preserves the upstream tool surface exactly and exposes no wait tool", () => {
+    expect(makeBridge(fakeAdapter()).getToolDefinitions()).toEqual(UPSTREAM_TOOLS);
   });
 
-  it("returns a profile deferred result when approvals are required", async () => {
+  it("returns a flat completed Task and exposes the native result through tasks/get", async () => {
+    const native = { content: [{ type: "text", text: "merged" }], isError: false };
+    const bridge = makeBridge(fakeAdapter(response("executed", { executionResult: native })));
+    const created = await bridge.handleToolCall("merge_pull_request", { pullNumber: 42 });
+
+    expect(created).toMatchObject({ resultType: "task", status: "completed" });
+    expect(created.taskId).toMatch(/^urn:uuid:/);
+    expect(bridge.handleTasksGet(created.taskId)).toMatchObject({
+      resultType: "complete",
+      status: "completed",
+      result: native,
+    });
+  });
+
+  it("returns transparent MPAS metadata from the signed Action Package while working", async () => {
+    const requirements = {
+      anyOf: [{ type: "threshold" as const, threshold: 2, eligibleSigners: [PROPOSER_DID] }],
+    };
     const bridge = makeBridge(
       fakeAdapter(
         response("additionalApprovalsRequired", {
-          authorizationRequirements: { version: "1", type: "AuthorizationRequirements" } as ActionResponse["authorizationRequirements"],
+          authorizationRequirements: {
+            version: "1",
+            type: "AuthorizationRequirements",
+            result: "additionalApprovalsRequired",
+            actionEnvelopeHash: { alg: "sha-256", value: "response-hash" },
+            verifier: { did: "did:jwk:verifier" as Did },
+            approvalRequirements: requirements,
+          },
         }),
       ),
     );
 
-    const result = await bridge.handleToolCall("merge_pull_request", { pullNumber: 42 });
+    const task = await bridge.handleToolCall("merge_pull_request", { pullNumber: 42 });
+    expect(task).toMatchObject({
+      resultType: "task",
+      status: "working",
+      _meta: {
+        "org.oma3/mpas": {
+          version: "2",
+          actionId: task.taskId,
+          authorizationState: "authorization_required",
+          disclosure: "transparent",
+          requirements,
+        },
+      },
+    });
+    const meta = task._meta?.["org.oma3/mpas"] as { actionEnvelopeHash: { value: string } };
+    expect(meta.actionEnvelopeHash.value).not.toBe("response-hash");
+  });
 
-    expect(result.isError).toBeUndefined();
-    expect(result.structuredContent).toMatchObject({
-      version: "1",
-      type: "MpasBridgeDeferredResult",
-      notificationRequired: true,
-      lastActionResponse: { result: "additionalApprovalsRequired" },
+  it("completes terminal MPAS outcomes as tool-level error results", async () => {
+    const bridge = makeBridge(fakeAdapter(response("rejected", { error: { code: "DENIED", message: "denied" } })));
+    const created = await bridge.handleToolCall("merge_pull_request", {});
+    expect(bridge.handleTasksGet(created.taskId)).toMatchObject({
+      status: "completed",
+      result: { isError: true, structuredContent: { type: "ActionResponse", result: "rejected" } },
     });
   });
 
-  it("proposes a new Action for every call, even with identical arguments", async () => {
-    const adapter = fakeAdapter(
-      response("additionalApprovalsRequired"),
-      response("additionalApprovalsRequired"),
-    );
-    const bridge = makeBridge(adapter);
-
-    const first = await bridge.handleToolCall("merge_pull_request", { pullNumber: 42 });
-    const second = await bridge.handleToolCall("merge_pull_request", { pullNumber: 42 });
-
-    const firstId = actionIdOf(first);
-    const secondId = actionIdOf(second);
-    expect(firstId).not.toEqual(secondId);
-    expect(adapter.calls).toHaveLength(2);
+  it("rejects unknown tools before creating a Task", async () => {
+    const bridge = makeBridge(fakeAdapter());
+    await expect(bridge.handleToolCall("unknown", {})).rejects.toBeInstanceOf(UnknownBridgeToolError);
   });
 
-  it("rejects an unknown tool with a bridge error", async () => {
-    const bridge = makeBridge(fakeAdapter());
-    const result = await bridge.handleToolCall("nonexistent_tool", {});
-    expect(result.isError).toBe(true);
-    expect(result.structuredContent).toMatchObject({ type: "MpasBridgeError" });
+  it("acknowledges tasks/update for a visible Task", async () => {
+    const bridge = makeBridge(fakeAdapter(response("pending")));
+    const created = await bridge.handleToolCall("merge_pull_request", {});
+    expect(bridge.handleTasksUpdate(created.taskId, { ignored: {} })).toEqual({ resultType: "complete" });
+  });
+
+  it("cooperatively cancels a working Task and keeps cancellation terminal", async () => {
+    const store = new MemoryWorkflowStore({ now: () => Date.parse("2026-08-14T10:00:00.000Z") });
+    const bridge = makeBridge(fakeAdapter(response("additionalApprovalsRequired")), { store });
+    const created = await bridge.handleToolCall("merge_pull_request", {});
+
+    await expect(bridge.handleTasksCancel(created.taskId)).resolves.toEqual({ resultType: "complete" });
+    expect(bridge.handleTasksGet(created.taskId)).toMatchObject({ status: "cancelled" });
+    store.resolveWorkflow(created.taskId, { kind: "resolved", actionResponse: response("executed") });
+    expect(bridge.handleTasksGet(created.taskId)).toMatchObject({ status: "cancelled" });
+  });
+
+  it("treats unknown and cross-DID Tasks as not found", async () => {
+    const store = new MemoryWorkflowStore();
+    const foreign = await buildPackage("merge_pull_request", {}, OTHER_DID);
+    store.createWorkflow({
+      actionId: foreign.actionEnvelope.actionId.value,
+      actionEnvelopeHash: foreign.approvalBundle.actionEnvelopeHash.value,
+      toolName: "merge_pull_request",
+      actionPackage: foreign,
+      expiresAt: foreign.actionEnvelope.expiresAt,
+    });
+    const bridge = makeBridge(fakeAdapter(), { store, proposerDid: PROPOSER_DID });
+
+    expect(() => bridge.handleTasksGet("urn:uuid:missing")).toThrow(TaskNotFoundError);
+    expect(() => bridge.handleTasksGet(foreign.actionEnvelope.actionId.value)).toThrow(TaskNotFoundError);
   });
 });
-
-describe("reserved wait tool (profile §6)", () => {
-  it("performs a nonblocking check that returns the deferred result again", async () => {
-    const bridge = makeBridge(fakeAdapter(response("additionalApprovalsRequired")));
-    const deferred = await bridge.handleToolCall("merge_pull_request", { pullNumber: 42 });
-    const actionId = actionIdOf(deferred);
-
-    const checked = await bridge.handleToolCall(MPAS_WAIT_TOOL_NAME, { actionId, timeoutSeconds: 0 });
-    expect(checked.structuredContent).toMatchObject({ type: "MpasBridgeDeferredResult" });
-    expect(actionIdOf(checked)).toEqual(actionId);
-  });
-
-  it("returns ACTION_NOT_FOUND for an unknown Action ID", async () => {
-    const bridge = makeBridge(fakeAdapter());
-    const result = await bridge.handleToolCall(MPAS_WAIT_TOOL_NAME, {
-      actionId: "urn:uuid:99999999-9999-4999-8999-999999999999",
-      timeoutSeconds: 0,
-    });
-    expect(result.isError).toBe(true);
-    expect(result.structuredContent).toMatchObject({ type: "MpasBridgeError", code: "ACTION_NOT_FOUND" });
-  });
-
-  it("rejects an out-of-range timeout with INVALID_WAIT_TIMEOUT", async () => {
-    const bridge = makeBridge(fakeAdapter());
-    const result = await bridge.handleToolCall(MPAS_WAIT_TOOL_NAME, { actionId: "urn:uuid:x", timeoutSeconds: 301 });
-    expect(result.isError).toBe(true);
-    expect(result.structuredContent).toMatchObject({ type: "MpasBridgeError", code: "INVALID_WAIT_TIMEOUT" });
-  });
-
-  it("returns the stored native result after background resolution", async () => {
-    const nativeResult = { content: [{ type: "text", text: "merged later" }] };
-    const completedPackage = { fake: "completed" };
-    const adapter = fakeAdapter(
-      response("additionalApprovalsRequired"),
-      response("executed", { executionResult: nativeResult }),
-    );
-    let ready = false;
-    let capturedRef: unknown;
-    const coordination: WorkflowCoordination = {
-      async submitAction(pkg: unknown) {
-        const typed = pkg as ActionPackage;
-        capturedRef = {
-          version: "1",
-          type: "ActionRef",
-          actionId: typed.actionEnvelope.actionId,
-          actionEnvelopeHash: computeHash(typed.actionEnvelope),
-        };
-        return {
-          version: "1",
-          type: "CoordinationActionResponse",
-          actionRef: capturedRef,
-          state: "awaitingApprovals",
-        } as Awaited<ReturnType<WorkflowCoordination["submitAction"]>>;
-      },
-      async poll() {
-        return {
-          version: "1",
-          type: "CoordinationPollResponse",
-          approvalRequests: [],
-          actionUpdates: ready
-            ? [{
-                version: "1",
-                type: "CoordinationActionUpdate",
-                actionRef: capturedRef,
-                state: "readyForResubmission",
-                expiresAt: "2030-01-01T00:00:00.000Z",
-                actionPackage: completedPackage,
-              }]
-            : [],
-        } as Awaited<ReturnType<WorkflowCoordination["poll"]>>;
-      },
-    };
-
-    const bridge = new ProposerBridge({
-      tools: UPSTREAM_TOOLS,
-      buildActionPackage: buildPackage,
-      store: new MemoryWorkflowStore(),
-      adapter,
-      coordination,
-      proposerDid: "did:jwk:proposer",
-      resultRetentionSeconds: 86_400,
-    });
-
-    const deferred = await bridge.handleToolCall("merge_pull_request", { pullNumber: 42 });
-    const actionId = actionIdOf(deferred);
-
-    ready = true;
-    await bridge.pollOnce();
-
-    const result = await bridge.handleToolCall(MPAS_WAIT_TOOL_NAME, { actionId, timeoutSeconds: 0 });
-    expect(result).toEqual(nativeResult);
-
-    // Stable result (profile §7.3): ask again, same answer.
-    const again = await bridge.handleToolCall(MPAS_WAIT_TOOL_NAME, { actionId, timeoutSeconds: 5 });
-    expect(again).toEqual(nativeResult);
-  });
-});
-
-function actionIdOf(result: { structuredContent?: unknown }): string {
-  const structured = result.structuredContent as { actionRef?: { actionId?: { value?: string } } } | undefined;
-  const value = structured?.actionRef?.actionId?.value;
-  if (!value) throw new Error("result carries no actionRef.actionId.value");
-  return value;
-}

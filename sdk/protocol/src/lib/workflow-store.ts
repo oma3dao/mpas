@@ -19,13 +19,19 @@ export type BridgeWorkflowState =
   | "submittingToVerifier"
   | "awaitingVerifierResult"
   | "resolved"
-  | "unresolvable";
+  | "unresolvable"
+  | "cancelled";
 
-export const TERMINAL_WORKFLOW_STATES: ReadonlySet<BridgeWorkflowState> = new Set(["resolved", "unresolvable"]);
+export const TERMINAL_WORKFLOW_STATES: ReadonlySet<BridgeWorkflowState> = new Set([
+  "resolved",
+  "unresolvable",
+  "cancelled",
+]);
 
 export type WorkflowResolution =
   | { kind: "resolved"; actionResponse: unknown; executionReceipt?: unknown }
-  | { kind: "unresolvable"; errorCode: string; errorMessage: string };
+  | { kind: "unresolvable"; errorCode: string; errorMessage: string }
+  | { kind: "cancelled"; cancelledAt: string };
 
 export interface CreateWorkflowInput {
   actionId: string;
@@ -100,6 +106,13 @@ export interface WorkflowStore {
    * (client profile §7.3).
    */
   resolveWorkflow(actionId: string, resolution: WorkflowResolution): void;
+
+  /**
+   * Atomically cancel an active workflow. Returns true only when this call
+   * wins the first-terminal-write race. Unknown and terminal workflows return
+   * false and are left unchanged.
+   */
+  cancelWorkflow(actionId: string): boolean;
 
   /** Non-terminal workflows, for startup reconciliation (feature spec §9.4). */
   listRecoverableWorkflows(): WorkflowRecord[];
@@ -178,7 +191,7 @@ export class MemoryWorkflowStore implements WorkflowStore {
 
   claimWorkflow(actionId: string, workerId: string, leaseMs: number): boolean {
     const entry = this.entries.get(actionId);
-    if (!entry) {
+    if (!entry || TERMINAL_WORKFLOW_STATES.has(entry.record.state)) {
       return false;
     }
     const nowMs = this.now();
@@ -230,10 +243,23 @@ export class MemoryWorkflowStore implements WorkflowStore {
       return;
     }
     const at = this.timestamp();
-    entry.record.state = resolution.kind === "resolved" ? "resolved" : "unresolvable";
+    entry.record.state = resolution.kind;
     entry.record.resolution = clone(resolution);
     entry.record.resolvedAt = at;
     entry.record.updatedAt = at;
+  }
+
+  cancelWorkflow(actionId: string): boolean {
+    const entry = this.entries.get(actionId);
+    if (!entry || TERMINAL_WORKFLOW_STATES.has(entry.record.state)) {
+      return false;
+    }
+    const at = this.timestamp();
+    entry.record.state = "cancelled";
+    entry.record.resolution = { kind: "cancelled", cancelledAt: at };
+    entry.record.resolvedAt = at;
+    entry.record.updatedAt = at;
+    return true;
   }
 
   listRecoverableWorkflows(): WorkflowRecord[] {

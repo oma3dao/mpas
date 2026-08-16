@@ -1,10 +1,18 @@
 import type {
+  ActionId,
   ActionResponse,
   CoordinationActionResponse,
   CoordinationActionUpdate,
+  CoordinationCancelResponse,
   CoordinationPollResponse,
+  Did,
 } from "../types/mpas.js";
-import type { CreateWorkflowInput, WorkflowRecord, WorkflowStore } from "./workflow-store.js";
+import {
+  TERMINAL_WORKFLOW_STATES,
+  type CreateWorkflowInput,
+  type WorkflowRecord,
+  type WorkflowStore,
+} from "./workflow-store.js";
 
 /**
  * Proposer-bridge workflow engine (feature spec §6 bridge track).
@@ -29,13 +37,14 @@ export interface WorkflowAdapter {
 export interface WorkflowCoordination {
   submitAction(pkg: unknown, authorizationRequirements: unknown): Promise<CoordinationActionResponse>;
   poll(did: string): Promise<CoordinationPollResponse>;
+  cancelAction(actionId: ActionId, did: Did): Promise<CoordinationCancelResponse>;
 }
 
 export interface BridgeWorkflowEngineOptions {
   store: WorkflowStore;
   adapter: WorkflowAdapter;
   coordination: WorkflowCoordination;
-  proposerDid: string;
+  proposerDid: Did;
   /** Distinguishes workers contending for the same store. */
   workerId?: string;
   /** Worker claim lease. Default 60s. */
@@ -56,7 +65,7 @@ export class BridgeWorkflowEngine {
   private readonly store: WorkflowStore;
   private readonly adapter: WorkflowAdapter;
   private readonly coordination: WorkflowCoordination;
-  private readonly proposerDid: string;
+  private readonly proposerDid: Did;
   private readonly workerId: string;
   private readonly claimLeaseMs: number;
   private readonly now: () => number;
@@ -89,18 +98,45 @@ export class BridgeWorkflowEngine {
   async pollOnce(): Promise<void> {
     this.sweepExpired();
 
-    let poll: CoordinationPollResponse;
     try {
-      poll = await this.coordination.poll(this.proposerDid);
+      const poll = await this.coordination.poll(this.proposerDid);
+      for (const update of poll.actionUpdates) {
+        await this.applyUpdate(update);
+      }
     } catch {
-      return; // Coordination unavailable: try again next tick.
-    }
-
-    for (const update of poll.actionUpdates) {
-      await this.applyUpdate(update);
+      // Coordination updates are one input to the engine. Independent
+      // adapter retries must still run when this input is unavailable.
     }
 
     await this.advanceClaimable();
+  }
+
+  /** Cooperatively cancel a visible workflow without advancing it. */
+  async cancel(actionId: string): Promise<WorkflowRecord | undefined> {
+    const record = this.store.getWorkflow(actionId);
+    if (!record || proposerDidOf(record) !== this.proposerDid) {
+      return undefined;
+    }
+    if (isTerminal(record)) {
+      return record;
+    }
+
+    const coordinationStarted = record.coordinationRef !== undefined;
+    if (!this.store.cancelWorkflow(actionId)) {
+      return this.store.getWorkflow(actionId);
+    }
+
+    const cancelled = this.mustGet(actionId);
+    this.notify(cancelled);
+    if (coordinationStarted) {
+      try {
+        await this.coordination.cancelAction({ value: actionId }, this.proposerDid);
+      } catch {
+        // Cancellation is cooperative. The durable local terminal write is
+        // authoritative for future bridge work; Coordination is best effort.
+      }
+    }
+    return cancelled;
   }
 
   /** Startup reconciliation (feature spec §9.4). Idempotent. */
@@ -163,11 +199,20 @@ export class BridgeWorkflowEngine {
   }
 
   private async submitInitial(record: WorkflowRecord): Promise<ProposeResult> {
+    const current = this.store.getWorkflow(record.actionId);
+    if (!current || isTerminal(current)) {
+      return { kind: "deferred", record: current ?? record };
+    }
+
     let response: ActionResponse;
     try {
       response = await this.adapter.submit(record.actionPackage);
     } catch (error) {
       this.store.saveAdapterAttempt(record.actionId, attempt("initial", "unreachable", error));
+      return { kind: "deferred", record: this.mustGet(record.actionId) };
+    }
+
+    if (isTerminal(this.mustGet(record.actionId))) {
       return { kind: "deferred", record: this.mustGet(record.actionId) };
     }
 
@@ -183,6 +228,15 @@ export class BridgeWorkflowEngine {
             response.authorizationRequirements,
           );
           this.store.saveCoordinationReference(record.actionId, coordination.actionRef);
+          if (this.mustGet(record.actionId).state === "cancelled") {
+            try {
+              await this.coordination.cancelAction({ value: record.actionId }, this.proposerDid);
+            } catch {
+              // Cancellation won while Coordination submission was in flight.
+              // The local terminal state still prevents any later execution.
+            }
+            return { kind: "deferred", record: this.mustGet(record.actionId) };
+          }
           this.store.compareAndSetState(record.actionId, "created", "awaitingApprovals");
         } catch (error) {
           // Coordination unavailable: stay `created`; reconcile retries the
@@ -232,7 +286,9 @@ export class BridgeWorkflowEngine {
         );
         break;
       case "cancelled":
-        this.resolveUnresolvable(actionId, "ACTION_CANCELLED", "The coordination workflow was cancelled before completion.");
+        if (this.store.cancelWorkflow(actionId)) {
+          this.notify(this.mustGet(actionId));
+        }
         break;
       case "awaitingApprovals":
         break;
@@ -241,13 +297,21 @@ export class BridgeWorkflowEngine {
 
   private async advanceClaimable(): Promise<void> {
     for (const record of this.store.listRecoverableWorkflows()) {
-      if (record.state !== "readyForResubmission" && record.state !== "awaitingVerifierResult") {
+      if (
+        record.state !== "created" &&
+        record.state !== "readyForResubmission" &&
+        record.state !== "awaitingVerifierResult"
+      ) {
         continue;
       }
       if (!this.store.claimWorkflow(record.actionId, this.workerId, this.claimLeaseMs)) {
         continue;
       }
-      await this.submitCompleted(record);
+      if (record.state === "created") {
+        await this.submitInitial(record);
+      } else {
+        await this.submitCompleted(record);
+      }
     }
   }
 
@@ -271,6 +335,10 @@ export class BridgeWorkflowEngine {
     } catch (error) {
       this.store.saveAdapterAttempt(record.actionId, attempt("completed", "unreachable", error));
       this.store.compareAndSetState(record.actionId, "submittingToVerifier", "readyForResubmission");
+      return;
+    }
+
+    if (isTerminal(this.mustGet(record.actionId))) {
       return;
     }
 
@@ -356,7 +424,18 @@ export class BridgeWorkflowEngine {
 }
 
 function isTerminal(record: WorkflowRecord): boolean {
-  return record.state === "resolved" || record.state === "unresolvable";
+  return TERMINAL_WORKFLOW_STATES.has(record.state);
+}
+
+function proposerDidOf(record: WorkflowRecord): string | undefined {
+  const pkg = record.actionPackage;
+  if (typeof pkg !== "object" || pkg === null || Array.isArray(pkg)) return undefined;
+  const envelope = (pkg as Record<string, unknown>).actionEnvelope;
+  if (typeof envelope !== "object" || envelope === null || Array.isArray(envelope)) return undefined;
+  const proposer = (envelope as Record<string, unknown>).proposer;
+  if (typeof proposer !== "object" || proposer === null || Array.isArray(proposer)) return undefined;
+  const did = (proposer as Record<string, unknown>).did;
+  return typeof did === "string" ? did : undefined;
 }
 
 function attempt(stage: string, outcome: string, error: unknown): unknown {

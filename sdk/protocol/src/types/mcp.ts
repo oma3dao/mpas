@@ -1,4 +1,3 @@
-import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import type { JsonSchema } from "./mpas.js";
 
 export interface McpToolDefinition {
@@ -7,4 +6,10 @@ export interface McpToolDefinition {
   inputSchema: JsonSchema;
 }
 
-export type ToolCallResult = CallToolResult;
+export interface ToolCallResult {
+  content: Array<Record<string, unknown>>;
+  structuredContent?: unknown;
+  isError?: boolean;
+  _meta?: Record<string, unknown>;
+  [key: string]: unknown;
+}

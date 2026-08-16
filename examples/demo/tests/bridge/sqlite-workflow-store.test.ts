@@ -200,6 +200,25 @@ describe("resolveWorkflow (terminal, immutable)", () => {
   });
 });
 
+describe("cancelWorkflow (terminal, immutable)", () => {
+  it("atomically cancels an active workflow and refuses later terminal writes", () => {
+    createDefault(store);
+
+    expect(store.cancelWorkflow(ACTION_ID)).toBe(true);
+    expect(store.cancelWorkflow(ACTION_ID)).toBe(false);
+    expect(store.claimWorkflow(ACTION_ID, "worker-a", HOUR)).toBe(false);
+    store.resolveWorkflow(ACTION_ID, {
+      kind: "resolved",
+      actionResponse: { result: "executed" },
+    });
+
+    expect(store.getWorkflow(ACTION_ID)).toMatchObject({
+      state: "cancelled",
+      resolution: { kind: "cancelled" },
+    });
+  });
+});
+
 describe("listRecoverableWorkflows (startup reconciliation)", () => {
   it("lists only non-terminal workflows", () => {
     createDefault(store);

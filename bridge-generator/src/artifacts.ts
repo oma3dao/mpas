@@ -52,6 +52,10 @@ export interface HarnessConfig {
     renamedTools: Record<string, string>;
     wrappedSchemas: string[];
     modifiedDescriptions: string[];
+    addedTools?: string[];
+    outputSchemaUnions?: string[];
+    extensionCapabilities?: string[];
+    note?: string;
   };
 }
 
@@ -167,15 +171,20 @@ export function buildHarnessConfig(upstream: UpstreamInfo): HarnessConfig {
       renamedTools: {},
       wrappedSchemas: [],
       modifiedDescriptions: [],
+      addedTools: [],
+      outputSchemaUnions: [],
+      extensionCapabilities: ["io.modelcontextprotocol/tasks", "org.oma3/mpas"],
+      note: "The bridge uses the official MCP Tasks extension and preserves upstream tool definitions.",
     },
   };
 }
 
 /**
- * Merge semantics (spec.md §5): generated fields refreshed, manual edits
- * (intentionalDeviations, env) preserved.
+ * Merge semantics (spec.md §5): generated Tasks-contract fields are refreshed;
+ * unrelated manual tool deviations and environment mappings are preserved.
  */
 export function mergeHarnessConfig(existing: HarnessConfig, upstream: UpstreamInfo): HarnessConfig {
+  const legacyMpasProfile = existing.intentionalDeviations?.addedTools?.includes("mpas_wait_for_action_result") ?? false;
   return {
     version: "1",
     type: "HarnessConfig",
@@ -184,10 +193,14 @@ export function mergeHarnessConfig(existing: HarnessConfig, upstream: UpstreamIn
       args: upstream.args,
       ...(existing.upstream?.env ? { env: existing.upstream.env } : {}),
     },
-    intentionalDeviations: existing.intentionalDeviations ?? {
-      renamedTools: {},
-      wrappedSchemas: [],
-      modifiedDescriptions: [],
+    intentionalDeviations: {
+      renamedTools: existing.intentionalDeviations?.renamedTools ?? {},
+      wrappedSchemas: existing.intentionalDeviations?.wrappedSchemas ?? [],
+      modifiedDescriptions: legacyMpasProfile ? [] : (existing.intentionalDeviations?.modifiedDescriptions ?? []),
+      addedTools: [],
+      outputSchemaUnions: [],
+      extensionCapabilities: ["io.modelcontextprotocol/tasks", "org.oma3/mpas"],
+      note: "The bridge uses the official MCP Tasks extension and preserves upstream tool definitions.",
     },
   };
 }

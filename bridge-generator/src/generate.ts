@@ -341,8 +341,8 @@ function bridgePackageJson(appName: string): object {
       start: "node dist/index.js",
     },
     dependencies: {
-      "@modelcontextprotocol/sdk": "^1.13.0",
-      "@oma3/mpas": "^0.1.0-alpha.2",
+      "@modelcontextprotocol/server": "2.0.0",
+      "@oma3/mpas": "^0.1.0-alpha.5",
     },
     devDependencies: {
       "@types/node": "^22.15.29",
@@ -387,7 +387,9 @@ npm run build
 node dist/index.js --config <path-to-bridge-config.json>
 \`\`\`
 
-The bridge config format matches the MPAS demo proposer bridge (plugin path, adapter URL, agent key, coordination URL, approval strategy). All tool calls are routed through the MPAS protocol: the bridge signs an Action Package and submits it to the configured Credential Adapter; nothing is proxied directly to the upstream server.
+The bridge config format matches the MPAS demo proposer bridge (plugin path, adapter URL, agent key, coordination URL, and workflow storage). The server uses MCP 2026-07-28 with the official Tasks extension. All tool calls are routed through MPAS: the bridge signs an Action Package and submits it to the configured Credential Adapter; nothing is proxied directly to the upstream server.
+
+One bridge serves exactly one MCP client or agent identity and holds one private key for one proposer DID. Do not share a bridge process or key across independent clients; deploy a separate bridge instance and key for each agent.
 
 This file is generated then checked in. Edit freely; regeneration preserves files listed in \`.generator-keep\`.
 `;
