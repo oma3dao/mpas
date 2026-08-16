@@ -23,6 +23,7 @@ export async function startOAuthProtectedMcpFixture(
   const tokenRequests: URLSearchParams[] = [];
   let origin = "";
   const accessToken = "fixture-access-token";
+  const refreshedAccessToken = "fixture-refreshed-access-token";
 
   const server = http.createServer((request, response) => {
     const path = new URL(request.url ?? "/", origin).pathname;
@@ -70,6 +71,21 @@ export async function startOAuthProtectedMcpFixture(
       return readBody(request, (body) => {
         const params = new URLSearchParams(body);
         tokenRequests.push(params);
+        if (params.get("grant_type") === "refresh_token") {
+          if (
+            params.get("refresh_token") !== "fixture-refresh-token" ||
+            params.get("resource") !== `${origin}/mcp`
+          ) {
+            return json(response, 400, { error: "invalid_grant" });
+          }
+          return json(response, 200, {
+            access_token: refreshedAccessToken,
+            token_type: "Bearer",
+            expires_in: 3600,
+            refresh_token: "fixture-rotated-refresh-token",
+            scope: "mcp:tools",
+          });
+        }
         if (
           params.get("grant_type") !== "authorization_code" ||
           params.get("code") !== "fixture-code" ||
@@ -88,7 +104,11 @@ export async function startOAuthProtectedMcpFixture(
       });
     }
 
-    if (path === "/mcp" && request.headers.authorization !== `Bearer ${accessToken}`) {
+    if (
+      path === "/mcp" &&
+      request.headers.authorization !== `Bearer ${accessToken}` &&
+      request.headers.authorization !== `Bearer ${refreshedAccessToken}`
+    ) {
       response.statusCode = 401;
       response.setHeader(
         "WWW-Authenticate",
