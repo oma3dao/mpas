@@ -1,4 +1,7 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   auth,
   type OAuthClientProvider,
@@ -16,6 +19,7 @@ import {
   OAuthIssuerMismatchError,
 } from "../../src/adapter/oauth-discovery.js";
 import { createOAuthFetchPolicy } from "../../src/adapter/oauth-fetch-policy.js";
+import { loadFileOAuthClientProvider } from "../../src/adapter/oauth-operator.js";
 import {
   pkceS256,
   startOAuthProtectedMcpFixture,
@@ -23,10 +27,13 @@ import {
 } from "../fixtures/oauth-protected-mcp.js";
 
 let fixture: OAuthProtectedMcpFixture | undefined;
+let credentialDir: string | undefined;
 
 afterEach(async () => {
   await fixture?.close();
   fixture = undefined;
+  if (credentialDir) await rm(credentialDir, { recursive: true, force: true });
+  credentialDir = undefined;
 });
 
 class FixtureOAuthProvider implements OAuthClientProvider {
@@ -137,6 +144,86 @@ describe("official MCP SDK OAuth conformance spike", () => {
       )).toBe(true);
     } finally {
       await authenticatedClient.close().catch(() => {});
+    }
+  });
+
+  it("refreshes after an upstream 401 and persists rotated access and refresh tokens", async () => {
+    fixture = await startOAuthProtectedMcpFixture();
+    const provider = new FixtureOAuthProvider(new URL("http://127.0.0.1:49152/oauth/callback"));
+    provider.savedTokens = {
+      access_token: "expired-access-token",
+      refresh_token: "fixture-refresh-token",
+      token_type: "Bearer",
+      expires_in: 0,
+    };
+
+    const transport = new StreamableHTTPClientTransport(new URL(fixture.resourceUrl), {
+      authProvider: provider,
+    });
+    const client = new Client({ name: "oauth-refresh-spike", version: "1.0.0" });
+    try {
+      await client.connect(transport);
+      const result = await client.callTool({ name: "fixture_tool", arguments: {} });
+      expect(result.content).toEqual([{ type: "text", text: "authorized" }]);
+      expect(provider.savedTokens).toMatchObject({
+        access_token: "fixture-refreshed-access-token",
+        refresh_token: "fixture-rotated-refresh-token",
+      });
+      expect(fixture.tokenRequests).toHaveLength(1);
+      expect(fixture.tokenRequests[0].get("grant_type")).toBe("refresh_token");
+      expect(fixture.tokenRequests[0].get("refresh_token")).toBe("fixture-refresh-token");
+      expect(fixture.tokenRequests[0].get("resource")).toBe(fixture.resourceUrl);
+    } finally {
+      await client.close().catch(() => {});
+    }
+  });
+
+  it("atomically retains rotated tokens in the file-backed CA provider", async () => {
+    fixture = await startOAuthProtectedMcpFixture();
+    credentialDir = await mkdtemp(join(tmpdir(), "mpas-oauth-refresh-"));
+    const credentialHandle = "fixture-oauth";
+    const credentialPath = join(credentialDir, `${credentialHandle}.json`);
+    await writeFile(credentialPath, `${JSON.stringify({
+      version: 1,
+      session: "fixture-session",
+      credentialHandle,
+      applicationDid: "did:web:fixture.example",
+      resourceUrl: fixture.resourceUrl,
+      state: "fixture-state-with-at-least-256-bits-of-test-entropy-000000000000",
+      redirectUrl: "http://127.0.0.1:49152/oauth/callback",
+      clientInformation: { client_id: "fixture-public-client" },
+      tokens: {
+        access_token: "expired-access-token",
+        refresh_token: "fixture-refresh-token",
+        token_type: "Bearer",
+        expires_in: 0,
+      },
+      tokensSavedAt: "2020-01-01T00:00:00.000Z",
+    })}\n`, { mode: 0o600 });
+
+    const provider = await loadFileOAuthClientProvider(
+      "fixture-session",
+      credentialHandle,
+      "did:web:fixture.example",
+      fixture.resourceUrl,
+      credentialDir,
+    );
+    expect(provider).toBeDefined();
+
+    const transport = new StreamableHTTPClientTransport(new URL(fixture.resourceUrl), {
+      authProvider: provider,
+    });
+    const client = new Client({ name: "file-oauth-refresh-spike", version: "1.0.0" });
+    try {
+      await client.connect(transport);
+      const stored = JSON.parse(await readFile(credentialPath, "utf8"));
+      expect(stored.tokens).toMatchObject({
+        access_token: "fixture-refreshed-access-token",
+        refresh_token: "fixture-rotated-refresh-token",
+      });
+      expect(Date.parse(stored.tokensSavedAt)).toBeGreaterThan(Date.parse("2020-01-01T00:00:00.000Z"));
+    } finally {
+      await client.close().catch(() => {});
     }
   });
 
