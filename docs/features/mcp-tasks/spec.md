@@ -185,8 +185,11 @@ Required Client Capability) with the missing entries in
 | `cancelled` | `cancelled` | The bridge accepted cancellation and stopped future work where possible. |
 | `failed` | Reserved for a stored JSON-RPC execution error | `tasks/get.error` contains the JSON-RPC error. |
 
-`input_required` is not used. MPAS approvals come from signers through the
-Coordination Service, not from the proposing MCP client.
+`input_required` is not used. The proposer bridge, acting for the Proposer (a
+Signer), creates the initial `propose` Approval. If policy requires additional
+Approvals, the bridge collects them from eligible Signers acting as Maintainers
+through the Coordination Service rather than requesting them as MCP Task input
+from the proposing client.
 
 The official Tasks extension reserves `failed` for JSON-RPC execution errors.
 MPAS outcomes such as `rejected`, `expired`, `malformed`, or
@@ -242,7 +245,7 @@ The official extension uses a flat result with `resultType: "task"`:
               "did:key:z6Mkw1KSvGWNR7dyB3caY8jQh4RgfbS2QddShiCCfxUbLq7V"
             ],
             "decision": "approve",
-            "description": "Requires 2 maintainer approvals."
+            "description": "Requires 2 approvals from eligible Signers acting as Maintainers."
           }
         ]
       },
