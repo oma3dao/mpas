@@ -45,6 +45,27 @@ separate MPAS extension specification. The official
 `io.modelcontextprotocol/tasks` extension supplies the asynchronous Task
 lifecycle on which this profile depends.
 
+The `version` member of `org.oma3/mpas` identifies the version of this MPAS
+proposer-bridge profile. It does not version the official
+`io.modelcontextprotocol/tasks` extension, whose capability value remains `{}`.
+
+### 1.2 Signer terminology
+
+This profile uses the MPAS Core definition of **Signer**: any entity that signs
+an Action Envelope. Within this profile, a Signer may act in either or both of
+these roles:
+
+- A **Proposer** initiates a specific Action and produces its initial
+  `propose` Approval.
+- A **Maintainer** reviews Actions proposed by others and may produce an
+  additional Approval when eligible under policy.
+
+Maintainer is not a synonym for Signer; it is one role a Signer may perform. A
+participant may be a Proposer for one Action and a Maintainer for another. The
+[MPAS JSON Verifier Policy Profile](./mpas-profile-policy-json.md) reserves the
+`proposers` and `maintainers` signer-group names for these roles. Eligibility
+and Approval-counting rules come from the applicable Verifier policy.
+
 ## 2. Bridge Identity and Client Cardinality
 
 An MPAS proposer bridge is a dedicated MCP server for exactly one proposing
@@ -187,9 +208,11 @@ MUST NOT expose collected-versus-required approval counts.
 - A terminal MPAS outcome without a native application result is a completed
   Task whose `result` is a valid `CallToolResult` with `isError: true`.
 - `failed` is reserved for a stored JSON-RPC execution error.
-- `input_required` is not used by profile version 2; MPAS Approvals are
-  collected from Signers through Coordination, not from the proposing MCP
-  client.
+- `input_required` is not used by profile version 2. The proposer bridge,
+  acting for the Proposer (a Signer), creates the initial `propose` Approval.
+  If policy requires additional Approvals, the bridge collects them from
+  eligible Signers acting as Maintainers through Coordination rather than
+  requesting them as MCP Task input from the proposing client.
 
 There is no `tasks/result` or `tasks/list` operation in this profile.
 
@@ -244,9 +267,10 @@ background interval.
 ## 10. Versioning and Compatibility
 
 Profile version 2 replaces the incompatible version 1 client interface, which
-used the proprietary `mpas_wait_for_action_result` tool, tool-presence
-discovery, description notices, output-schema unions, and MPAS-specific result
-wrappers. New and regenerated bridges MUST NOT implement those mechanisms.
+did not advertise `org.oma3/mpas` and used the proprietary
+`mpas_wait_for_action_result` tool, tool-presence discovery, description
+notices, output-schema unions, and MPAS-specific result wrappers. New and
+regenerated bridges MUST NOT implement those mechanisms.
 
 This profile targets the official `io.modelcontextprotocol/tasks` extension on
 MCP `2026-07-28`. It MUST NOT be implemented with the removed 2025-11-25 core
