@@ -53,6 +53,16 @@ describe("OAuth fetch policy", () => {
       .rejects.toThrow("OAuth JSON response exceeds the size limit");
   });
 
+  it("rejects JSON responses whose Content-Length exceeds the size limit", async () => {
+    const fetchFn = vi.fn<typeof fetch>().mockResolvedValue(new Response("{}", {
+      headers: { "content-type": "application/json", "content-length": "4096" },
+    }));
+    const policy = createOAuthFetchPolicy({ fetch: fetchFn, maxJsonResponseBytes: 8 });
+
+    await expect(policy("https://oauth.example/metadata"))
+      .rejects.toThrow("OAuth JSON response exceeds the size limit");
+  });
+
   it("allows Bearer authorization only on the exact configured MCP resource", async () => {
     const fetchFn = vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 200 }));
     const policy = createOAuthFetchPolicy({
