@@ -87,6 +87,25 @@ describe("AdapterClient", () => {
     const client = new AdapterClient({ url, timeoutMs: 100 });
     await expect(client.healthCheck()).rejects.toBeInstanceOf(AdapterUnavailableError);
   });
+
+  it("rejects a non-JSON success body", async () => {
+    const actionPackage = await readJson<ActionPackage>(
+      join(fixturesDir, "action-packages", "valid-create-issue-package.json"),
+    );
+    const server = await startMockAdapter((_request, response) => {
+      response.statusCode = 200;
+      response.end("not-json");
+    });
+
+    try {
+      const client = new AdapterClient({ url: server.url });
+      await expect(client.submit(actionPackage)).rejects.toMatchObject({
+        name: "AdapterResponseInvalid",
+      });
+    } finally {
+      await server.close();
+    }
+  });
 });
 
 async function startMockAdapter(
