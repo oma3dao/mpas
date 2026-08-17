@@ -53,7 +53,21 @@ describe("discoverUpstream", () => {
     await expect(discoverUpstream("node", [mockServer, "--exit-early"])).rejects.toBeInstanceOf(HandshakeError);
   });
 
+  it("rejects invalid JSON, initialize errors, and malformed tools/list payloads", async () => {
+    await expect(discoverUpstream("node", [mockServer, "--bad-json"])).rejects.toThrow(/Invalid JSON from upstream/);
+    await expect(discoverUpstream("node", [mockServer, "--rpc-error"])).rejects.toThrow(/initialize failed/);
+    await expect(discoverUpstream("node", [mockServer, "--bad-tools-list"])).rejects.toBeInstanceOf(ToolsListError);
+    await expect(discoverUpstream("node", [mockServer, "--dup-tools"])).rejects.toThrow(/duplicate tool name/);
+    await expect(discoverUpstream("node", [mockServer, "--bad-cursor"])).rejects.toThrow(/Malformed nextCursor/);
+    await expect(discoverUpstream("node", [mockServer, "--repeat-cursor"])).rejects.toThrow(/Repeated tools\/list cursor/);
+    await expect(discoverUpstream("node", [mockServer, "--tools-list-rpc-error"])).rejects.toThrow(/tools\/list failed/);
+  });
+
   it("rejects when the upstream command cannot be spawned", async () => {
     await expect(discoverUpstream("definitely-not-a-real-command-xyz", [])).rejects.toBeInstanceOf(UpstreamSpawnError);
   });
+
+  it("rejects when the upstream stays silent through initialize", async () => {
+    await expect(discoverUpstream("node", [mockServer, "--silent"])).rejects.toThrow(/timed out/);
+  }, 15_000);
 });
