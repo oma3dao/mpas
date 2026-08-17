@@ -242,6 +242,14 @@ describe("runGenerate", () => {
   it("rejects invalid app names", async () => {
     await expect(generate({ appName: "Bad Name!" })).rejects.toBeInstanceOf(GenerateError);
   });
+
+  it("rejects a missing org config and corrupt previous plugin.json", async () => {
+    await expect(generate({ orgConfigPath: join(tmpdir(), "missing-org.json") })).rejects.toBeInstanceOf(GenerateError);
+
+    const appDir = await generate();
+    await writeFile(join(appDir, "plugin.json"), "{ not-json");
+    await expect(generate({ outDir: join(appDir, "..") })).rejects.toThrow(/Unable to parse existing/);
+  });
 });
 
 describe("regeneration plugin membership (spec §5: old snapshot − old plugin = intentional pass-through)", () => {
