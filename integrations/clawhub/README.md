@@ -27,7 +27,7 @@ harness-agnostic skills live in `../skills/`.
 
 | Frontmatter field | Where it appears on clawhub.ai |
 |---|---|
-| `name` | Skill card title and listing header |
+| `name` | Slug used for install and routing (lowercase, hyphens only). Pass `--name` at publish time for the display title. |
 | `description` | Card subtitle / summary text (keep short — long descriptions get truncated on cards) |
 | `version` | Version badge on the detail page |
 | `homepage` | May appear as a source link on the detail page (not always visible) |
