@@ -1,0 +1,60 @@
+# Publish MPAS agent skills to ClawHub registry.
+# Source: https://github.com/oma3dao/mpas/issues/35
+#
+# - On pull_request touching skills: dry-run only (no token required).
+# - On workflow_dispatch: authenticated publish under the oma3 publisher.
+
+name: ClawHub Skill Publish
+
+on:
+  pull_request:
+    paths:
+      - "integrations/skills/**"
+      - "integrations/clawhub/**"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Run in dry-run mode (no publish)"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+      changelog:
+        description: "Changelog for this publish (Markdown)"
+        required: false
+        default: ""
+        type: string
+
+jobs:
+  dry-run:
+    if: github.event_name == 'pull_request'
+    uses: openclaw/clawhub/.github/workflows/skill-publish.yml@main
+    with:
+      root: integrations/clawhub
+      owner: oma3
+      dry_run: true
+
+  publish:
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.dry_run == 'false'
+    uses: openclaw/clawhub/.github/workflows/skill-publish.yml@main
+    with:
+      root: integrations/clawhub
+      owner: oma3
+      dry_run: false
+      changelog: ${{ github.event.inputs.changelog }}
+      categories: "security,governance,mcp,compliance"
+      topics: "multi-party-authorization,credential-separation,soc2,hipaa"
+    secrets:
+      clawhub_token: ${{ secrets.CLAWHUB_TOKEN }}
+
+  publish-dry-run:
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.dry_run == 'true'
+    uses: openclaw/clawhub/.github/workflows/skill-publish.yml@main
+    with:
+      root: integrations/clawhub
+      owner: oma3
+      dry_run: true
+      categories: "security,governance,mcp,compliance"
+      topics: "multi-party-authorization,credential-separation,soc2,hipaa"

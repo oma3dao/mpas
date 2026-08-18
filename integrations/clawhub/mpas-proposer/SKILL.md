@@ -1,8 +1,11 @@
 ---
 name: mpas-proposer
-description: Propose governed actions through MPAS-protected MCP bridges and track their authorization lifecycle with MCP Tasks.
+description: Cryptographic multi-party authorization for governed agent operations. Propose actions through MPAS-protected MCP bridges — the agent never holds write credentials. Fills the approval gap with credential separation, signed action binding, and deterministic compliance signers for regulated environments.
 version: 1.0.0
 homepage: https://github.com/oma3dao/mpas
+metadata:
+  openclaw:
+    emoji: "🔐"
 ---
 
 # MPAS Proposer
