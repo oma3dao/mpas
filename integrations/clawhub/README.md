@@ -70,14 +70,29 @@ republish.
 
 ### Manual (CLI)
 
+From the `integrations/clawhub` directory:
+
 ```sh
+cd integrations/clawhub
+
 clawhub skill publish ./mpas-proposer \
+  --slug mpas-proposer \
+  --name "MPAS Proposer for multi-party approvals" \
   --owner oma3 \
   --changelog "Initial release" \
   --dry-run
 ```
 
-Remove `--dry-run` to publish for real.
+Remove `--dry-run` to publish for real. Repeat for the maintainer:
+
+```sh
+clawhub skill publish ./mpas-maintainer \
+  --slug mpas-maintainer \
+  --name "MPAS Maintainer for multi-party approvals" \
+  --owner oma3 \
+  --changelog "Initial release" \
+  --dry-run
+```
 
 ### Automated (GitHub Actions)
 

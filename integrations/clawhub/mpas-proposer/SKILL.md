@@ -1,5 +1,5 @@
 ---
-name: MPAS Proposer for multi-party approvals
+name: mpas-proposer
 description: Allow any combination of agents, humans, or software to approve MCP tool calls that you flag.  Prevent your agent from deleting your production database or violating compliance.  Use this skill for agents that PROPOSE calls, not agents that approve calls.
 version: 1.0.0
 homepage: https://github.com/oma3dao/mpas
