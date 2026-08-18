@@ -1,89 +1,125 @@
-# MPAS Skills for ClawHub
+# ClawHub Publishing Guide
 
-Cryptographic multi-party authorization for OpenClaw agent operations.
+This directory contains the ClawHub-specific versions of the MPAS skills,
+packaged for publishing to [clawhub.ai](https://clawhub.ai). The canonical
+harness-agnostic skills live in `../skills/`.
 
-## The gap
+## Setup: Get a token and log in
 
-OpenClaw agents performing write operations against real systems (GitHub,
-databases, cloud infrastructure, payment APIs) currently have no approval
-mechanism. No credential separation. No audit trail. A prompt injection,
-hallucination, or misunderstood instruction executes immediately against
-production with whatever credentials the agent holds.
+1. Install the ClawHub CLI:
 
-MPAS fills that gap.
+   ```sh
+   npm i -g clawhub
+   ```
 
-## What these skills provide
+2. Log in with GitHub OAuth:
 
-| Capability | What it means for your agent |
+   ```sh
+   clawhub login
+   clawhub whoami   # confirms your publisher handle (e.g. alftom)
+   ```
+
+3. For CI publishing (optional), generate an API token from the ClawHub web UI
+   (account settings → API tokens). Store it as `CLAWHUB_TOKEN` in your
+   GitHub repo's Actions secrets (Settings → Secrets → Actions).
+
+## How SKILL.md maps to the ClawHub UI
+
+| Frontmatter field | Where it appears on clawhub.ai |
 |---|---|
-| **Credential separation** | Your agent never holds the write token. An MCP bridge mediates; a Credential Adapter holds the real credential and executes only after authorization. |
-| **Cryptographic action binding** | Every Approval is a JWS over the hash of the exact operation, target, arguments, and conditions. An approval for "delete branch X" cannot authorize "delete branch Y." |
-| **Independent authorization** | A separate signer identity (human, agent, or policy service) reviews and approves. Profile specifications and policy can enforce that a proposer cannot approve their own actions. |
-| **Flexible signer types** | A Maintainer can be a human reviewer, another AI agent, or a deterministic policy service that enforces SOC 2 change-control, HIPAA access constraints, PCI audit rules, or KYC verification. |
-| **Auditable dispatch ledger** | Every action lifecycle (propose → approve/reject → execute/fail) is journaled with signed receipts. |
+| `name` | Skill card title and listing header |
+| `description` | Card subtitle / summary text (keep short — long descriptions get truncated on cards) |
+| `version` | Version badge on the detail page |
+| `homepage` | May appear as a source link on the detail page (not always visible) |
+| `metadata.openclaw.emoji` | Icon on the skill card |
 
-## Install
+The `--owner` flag during publish sets the **publisher** shown as `@oma3` (or
+whatever handle you use). This comes from the workflow, not from frontmatter.
+
+## Categories and topics
+
+Categories and topics are set at publish time via the workflow (not in
+SKILL.md frontmatter). They control how skills appear in ClawHub's browse and
+search:
+
+```yaml
+categories: "security,governance,mcp,compliance"
+topics: "multi-party-authorization,credential-separation,soc2,hipaa"
+```
+
+These are passed as inputs to the reusable `skill-publish.yml` workflow. To
+change them, edit `.github/workflows/clawhub-skill-publish.yml`.
+
+## Skill cards (auto-generated)
+
+ClawHub automatically generates a **skill card** after publish. You do not
+write `skill-card.md` yourself. The card is produced server-side by ClawHub's
+Skill Card Worker (uses Codex + NVIDIA Trustworthy AI scanner) from your
+SKILL.md content.
+
+What influences the generated card:
+
+- Clear, structured SKILL.md content (headings, bullet points)
+- The `name` and `description` frontmatter
+- Declared `requires.env` and `requires.bins` (if any)
+
+If the generated card looks wrong, improve the SKILL.md structure and
+republish.
+
+## Publishing
+
+### Manual (CLI)
 
 ```sh
-openclaw skills install @oma3/mpas-proposer
-openclaw skills install @oma3/mpas-maintainer
+clawhub skill publish ./mpas-proposer \
+  --owner oma3 \
+  --changelog "Initial release" \
+  --dry-run
 ```
 
-Install one or both depending on your agent's role. An agent that both proposes
-and approves others' actions (symmetric signer) installs both — MPAS enforces
-that one identity cannot approve its own proposals.
+Remove `--dry-run` to publish for real.
 
-## Skills
+### Automated (GitHub Actions)
 
-| Skill | Role |
-|---|---|
-| `mpas-proposer` | Proposes governed actions through MPAS MCP bridges. Tracks authorization lifecycle via MCP Tasks. |
-| `mpas-maintainer` | Reviews and approves/rejects proposed actions. Last gate before execution. |
+The workflow at `.github/workflows/clawhub-skill-publish.yml` handles
+publishing:
 
-## How it works
+- **On PR** touching `integrations/skills/**` or `integrations/clawhub/**` →
+  dry-run only (validates the publish would succeed, no token needed).
+- **On workflow_dispatch** → manual trigger for real publish. Set `dry_run` to
+  `false` and optionally provide a changelog.
+
+To trigger: Actions → "ClawHub Skill Publish" → Run workflow.
+
+## Updating skills
+
+1. Edit the canonical skill in `../skills/mpas-proposer/SKILL.md` or
+   `../skills/mpas-maintainer/SKILL.md`.
+2. Copy the updated content into the corresponding file in this directory
+   (`integrations/clawhub/mpas-proposer/SKILL.md`). Keep the ClawHub-specific
+   frontmatter (emoji, description tuned for the card UI).
+3. Bump the `version` field.
+4. Commit and push. The PR will dry-run automatically.
+5. Dispatch the publish workflow when ready.
+
+## Versioning
+
+- New skills start at `1.0.0`.
+- The publish workflow auto-increments the patch version if you don't specify
+  one. Use `--version` to set an explicit version for breaking changes.
+- ClawHub keeps all published versions; `latest` tag points to the newest.
+
+## Files in this directory
 
 ```
-┌─────────────────┐        ┌──────────────┐        ┌────────────────────┐
-│  Proposer Agent │──MCP──▶│  MPAS Bridge │──HTTP──▶│ Credential Adapter │
-│  (no credential)│        │  (mediator)  │        │ (holds the token)  │
-└─────────────────┘        └──────────────┘        └────────────────────┘
-                                  │                          │
-                                  ▼                          ▼
-                           ┌──────────────┐          ┌──────────────┐
-                           │ Coordination │◀─────────│ Target System│
-                           │   Service    │          │ (GitHub, DB) │
-                           └──────────────┘          └──────────────┘
-                                  ▲
-                                  │
-                           ┌──────────────┐
-                           │  Maintainer  │
-                           │  (approver)  │
-                           └──────────────┘
+integrations/clawhub/
+├── README.md                        ← this file (not published)
+├── mpas-proposer/
+│   └── SKILL.md                     ← ClawHub-packaged proposer skill
+└── mpas-maintainer/
+    └── SKILL.md                     ← ClawHub-packaged maintainer skill
 ```
 
-1. Proposer calls an application tool through the MPAS MCP bridge.
-2. Bridge constructs an Action Envelope (signed by proposer), submits to adapter.
-3. Adapter evaluates policy → requires additional approval.
-4. Proposer notifies Maintainer with Action ID and context.
-5. Maintainer reviews the exact action, approves (signs) or rejects.
-6. Adapter receives the approval, dispatches with the real credential.
-7. Result flows back to the proposer.
-
-## Compliance and regulated environments
-
-For environments where "an LLM thought it looked safe" is not sufficient:
-
-- **SOC 2 Type II** — signed approval + dispatch ledger satisfies change-control.
-- **HIPAA** — deterministic signer enforces minimum-necessary before PHI access.
-- **PCI DSS** — dual authorization and segregation of duties via separate signer identities.
-- **KYC/AML** — identity verification gate before financial operations execute.
-
-The Maintainer is a DID with a signing key. It can be a human, another agent,
-or a deterministic policy service that signs only when compliance conditions
-are met.
-
-## Links
-
-- [MPAS Protocol](https://github.com/oma3dao/mpas)
-- [OMA3 DAO](https://www.oma3.org/)
-- [Full Setup Guide](https://github.com/oma3dao/mpas/blob/main/examples/demo/guides/setup-macos.md)
+The README is not published to ClawHub (it's outside the skill folders).
+Only the contents of each skill folder (`mpas-proposer/`, `mpas-maintainer/`)
+are uploaded.

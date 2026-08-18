@@ -1,6 +1,6 @@
 ---
-name: mpas-maintainer
-description: Cryptographic multi-party authorization gate for governed agent operations. Review, approve, or reject actions with independent verification — you may be the last gate before an irreversible operation executes. Deterministic policy signers can enforce SOC 2, HIPAA, PCI, and KYC requirements.
+name: MPAS Maintainer for multi-party approvals
+description: Allow any combination of agents, humans, or software to approve MCP tool calls that you flag.  Prevent your agent from deleting your production database or violating compliance.  Use this skill for agents that APPROVE calls, not agents that propose calls.
 version: 1.0.0
 homepage: https://github.com/oma3dao/mpas
 metadata:
@@ -8,7 +8,25 @@ metadata:
     emoji: "🛡️"
 ---
 
-# MPAS Maintainer
+# MPAS Maintainer for multi-party approvals
+
+**This skill is for the MAINTAINER role** — the agent (or human, or policy
+service) that reviews and approves proposed actions. For the agent that
+proposes governed tool calls, install `mpas-proposer` instead.
+
+MPAS adds multi-party approval to any MCP tool call. Any combination of
+humans, AI agents, or deterministic policy services can serve as approvers —
+you choose. Credentials are separated: the proposing agent never holds the
+write token, so even a goal-driven agent that would otherwise grab a credential
+and act unilaterally cannot bypass the approval gate. As a Maintainer, you
+operate independently with your own prime directive — whether that's "nothing
+destructive without human sign-off" or "enforce HIPAA/SOC 2/SEC FD compliance
+before execution." MPAS is policy-mechanism independent: it doesn't care how
+the policy is described, only that the required signatures are present.
+
+Source: https://github.com/oma3dao/mpas
+
+---
 
 Assist an authorized MPAS Signer acting as a Maintainer with decisions about
 specific Actions proposed by others. A Maintainer may be a person,

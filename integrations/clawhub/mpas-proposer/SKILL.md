@@ -1,6 +1,6 @@
 ---
-name: mpas-proposer
-description: Cryptographic multi-party authorization for governed agent operations. Propose actions through MPAS-protected MCP bridges — the agent never holds write credentials. Fills the approval gap with credential separation, signed action binding, and deterministic compliance signers for regulated environments.
+name: MPAS Proposer for multi-party approvals
+description: Allow any combination of agents, humans, or software to approve MCP tool calls that you flag.  Prevent your agent from deleting your production database or violating compliance.  Use this skill for agents that PROPOSE calls, not agents that approve calls.
 version: 1.0.0
 homepage: https://github.com/oma3dao/mpas
 metadata:
@@ -8,9 +8,27 @@ metadata:
     emoji: "🔐"
 ---
 
-# MPAS Proposer
+# MPAS Proposer for multi-party approvals
 
-Use the configured MPAS MCP bridge as the only path for a protected operation.
+**This skill is for the PROPOSER role** — the agent that calls governed tools
+and waits for approval. For the agent that reviews and approves, install
+`mpas-maintainer` instead.
+
+MPAS adds multi-party approval to any MCP tool call. Any combination of
+humans, AI agents, or deterministic policy services can serve as approvers —
+you choose. Credentials are separated: the proposing agent never holds the
+write token, so even a goal-driven agent that would otherwise grab a credential
+and act unilaterally cannot bypass the approval gate. Approvers operate
+independently with their own prime directive — whether that's "nothing
+destructive without human sign-off" or "enforce HIPAA/SOC 2/SEC FD compliance
+before execution." MPAS is policy-mechanism independent: it doesn't care how
+the policy is described, only that the required signatures are present.
+
+Source: https://github.com/oma3dao/mpas
+
+---
+
+Use a configured MPAS MCP bridge as the only path for a protected operation.
 Call the application's normal MCP tool. Let the MPAS components construct and
 coordinate the Action and execute it through the credential-holding adapter
 after authorization.
