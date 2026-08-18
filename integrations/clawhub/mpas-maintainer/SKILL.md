@@ -1,8 +1,11 @@
 ---
 name: mpas-maintainer
-description: Review, approve, or reject MPAS authorization requests as an independent Signer or Maintainer.
+description: Cryptographic multi-party authorization gate for governed agent operations. Review, approve, or reject actions with independent verification — you may be the last gate before an irreversible operation executes. Deterministic policy signers can enforce SOC 2, HIPAA, PCI, and KYC requirements.
 version: 1.0.0
 homepage: https://github.com/oma3dao/mpas
+metadata:
+  openclaw:
+    emoji: "🛡️"
 ---
 
 # MPAS Maintainer
