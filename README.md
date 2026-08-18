@@ -87,6 +87,7 @@ This repository is the OMA3-owned home of the MPAS standard:
 - **Application registry** — per-application descriptors referencing known implementations
 - **Conformance model** — the conformance roles and test model (official test tools planned; see `conformance/`)
 - **Documentation** — developer guides, architecture docs, and website content
+- **Agent skills** — reusable proposer and maintainer skill packages (`integrations/skills/`)
 
 ## What This Repository Does Not Contain
 
@@ -147,6 +148,8 @@ conformance/
 docs/
   README.md                     Describes the docs subfolders
   features/                     Per-feature specs and implementation notes
+integrations/
+  skills/                       Agent skill packages (proposer, maintainer)
 ```
 
 Each example in `examples/` is self-contained with its own build tooling. The demo depends on the SDK via `"@oma3/mpas": "file:../../sdk/protocol"`.
@@ -157,6 +160,7 @@ Each example in `examples/` is self-contained with its own build tooling. The de
 - Specifications: `specs/`
 - Feature documentation: `docs/features/`
 - Demo setup guide: `examples/demo/guides/`
+- Agent skills: `integrations/skills/`
 - Credential Adapter operator guide: [`examples/demo/guides/credential-adapter.md`](examples/demo/guides/credential-adapter.md)
 - Application registry: `application-registry/`
 - Application plugins and bridges: [oma3dao/mpas-applications](https://github.com/oma3dao/mpas-applications)

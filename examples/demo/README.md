@@ -59,7 +59,7 @@ For the full protocol design, start with the base specification:
 
 ### How it works
 
-**The agent sees a normal MCP server.** The MCP Bridge abstracts the entire MPAS protocol — signing, envelope construction, coordination polling, resubmission — away from the agent. From the agent's perspective, it just calls tools like `create_issue_mirror` or `delete_branch_mirror` and gets results back.
+**The agent sees a normal MCP server.** The MCP Bridge abstracts the entire MPAS protocol — signing, envelope construction, coordination polling, resubmission — away from the agent. From the agent's perspective, it calls tools like `create_issue_mirror` or `delete_branch_mirror` and receives an MCP Task; it observes that Task with `tasks/get`.
 
 **Proposer flow:**
 
@@ -71,7 +71,7 @@ For the full protocol design, start with the base specification:
 4. Bridge submits the pending action to the Coordination Service and polls for resolution
 5. Once a maintainer approves, the bridge resubmits the completed Action Package to the adapter
 6. Adapter verifies the full policy is met (correct signatures, threshold reached, no self-approval), then dispatches
-7. Bridge returns the execution result to the agent as a normal MCP tool response
+7. The agent's `tasks/get` on that Task returns the execution result
 
 **Maintainer flow:**
 
@@ -102,26 +102,19 @@ MPAS guarantees that no single agent can both propose and approve the same actio
 │  • No agent runs here                                       │
 └─────────────────────────────────────────────────────────────┘
 
-┌───────────────────────────────┐  ┌─────────────────────────────--──┐
-│  Agent A Workspace            │  │  Agent B Workspace              │
-│  (separate account/machine)   │  │  (separate account/machine)     │
-│  • Proposer/Maintainer bridges│  │  • Proposer + Maintainer bridges│
-│  • Own signing key only       │  │  • Own signing key only         │
-│  • Can propose actions        │  │  • Can propose actions          │
-│  • Can approve other agents'  │  │  • Can approve other agents'    │
-│    actions (not its own)      │  │    actions (not its own)        │
-└───────────────────────────────┘  └─────────────────────────────--──┘
+┌───────────────────────────────┐  ┌───────────────────────────────┐
+│  Agent A Workspace            │  │  Agent B Workspace            │
+│  (separate account/machine)   │  │  (separate account/machine)   │
+│  • Proposer bridge            │  │  • Maintainer signer server   │
+│  • Own signing key only       │  │  • Own signing key only       │
+│  • Proposes actions           │  │  • Reviews and approves       │
+│                               │  │    others' actions            │
+└───────────────────────────────┘  └───────────────────────────────┘
 ```
 
-In production, every participant typically acts as both proposer and maintainer — they can propose their own actions and approve other agents' actions. Self-approval is prevented at the protocol level. Each agent has a single DID for auditability.
+Give each agent exactly one role. A proposer’s prime directive is to submit governed writes through the bridge and notify maintainers. A maintainer’s prime directive is to review the exact Action and approve or reject it. Combining both roles in one agent blurs that boundary. The protocol still prevents self-approval if a DID appears in both signer groups, but LLM agents work better with one job.
 
-### Dual-role agents
-
-Some deployments assign agents a single role — a large foundation model might only propose actions, while a smaller specialized model trained for security review might only approve. Other deployments allow agents to act as both proposer and maintainer — they can propose their own actions and approve other agents' actions, but never their own.
-
-For a dual-role agent, register both a proposer bridge and a signer server pointing at the same key file (one DID per agent for auditability). The harness registers two MCP servers — one proposer bridge process and one signer server process. The agent sees GitHub operation tools from the proposer bridge and approval tools from the signer server.
-
-Self-approval is enforced at two levels regardless of role assignment:
+Self-approval is enforced at two levels regardless of group membership:
 1. **Coordination service** — rejects any approval submission where `signerDid` matches the action's `proposer.did`
 2. **Policy engine (defense in depth)** — excludes the proposer's DID when counting approvals toward thresholds on resubmission
 

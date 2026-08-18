@@ -154,9 +154,11 @@ Restart Claude Desktop after saving.
 
 ## 5. Add role instructions to your agent
 
-Paste the maintainer role instructions from the
+Paste the maintainer preamble from the
 [macOS demo setup guide](setup-macos.md) §3.1 into the instruction file your
-harness loads (`AGENTS.md`, `CLAUDE.md`, or equivalent).
+harness always loads (`AGENTS.md`, `CLAUDE.md`, or equivalent). Copy
+`integrations/skills/mpas-maintainer/` into that harness’s skills directory
+(see §3.1).
 
 ---
 
