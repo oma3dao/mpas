@@ -3,7 +3,7 @@
 **Target demo machine:** Intel or Apple Silicon Mac running macOS 11 Big Sur or newer  
 **Tested target:** MacBook Pro 15-inch 2017, Intel Core i7, 16 GB RAM, macOS Ventura 13.7.x  
 **Purpose:** Run the local MPAS demo stack with autonomous agents  
-**Last updated:** 2026-07-29
+**Last updated:** 2026-08-17
 **Specifications:** ../../specs/ (local)
 
 | Document                             | Description                                                      |
@@ -437,7 +437,7 @@ configured public JWK agrees with that DID, that credentials exist, and that
 each bridge config's `agent.did` is listed in `signerKeys`. Fix any errors
 before proceeding.
 
-> **Expected warnings (safe to ignore in single-user mode):** You will see warnings that `github-mirror-mcp-bridge-config.json` and `maintainer-signer-config.json` use different DIDs. This is correct — they are two separate agents with distinct identities. The warning exists for the dual-role case where one agent runs both bridges with a shared DID (so self-approval prevention applies between them). In the single-user demo, you have two independent agents, so different DIDs are intentional.
+> **Expected warnings (safe to ignore in single-user mode):** You will see warnings that `github-mirror-mcp-bridge-config.json` and `maintainer-signer-config.json` use different DIDs. This is correct — they are two separate agents with distinct identities. The warning exists because some configs point two bridges at one DID. In this demo you have two independent agents, so different DIDs are intentional.
 
 ## 2.2 Start Adapter and Coordination
 
@@ -510,304 +510,120 @@ For detailed documentation on all configuration files (application plugin, deplo
 
 ## 3.1 Agent role instructions (any harness)
 
-MPAS proposer and maintainer behavior is **harness-agnostic**. Copy the blocks below into whatever instruction file your harness loads. Harness sections below only cover MCP registration, workspaces, and tool policy.
+Give each agent **exactly one** MPAS role. A proposer proposes; a maintainer reviews. Distinct prime directives are part of how MPAS works — do not combine both roles in one agent.
 
-| Harness                      | Where to put MPAS role instructions                                      |
-| ---------------------------- | ------------------------------------------------------------------------ |
-| OpenClaw                     | Workspace `AGENTS.md` (e.g. `~/.openclaw/workspace/AGENTS.md` for the default proposer; maintainer workspace `AGENTS.md`). Optional: put mention handles / member IDs in `TOOLS.md`. |
-| Codex CLI                    | Project or session instruction file your Codex setup loads (often `AGENTS.md` in the working directory — confirm in Codex docs for your version). |
-| Claude Code / Claude Desktop | Project or user instruction file (commonly `CLAUDE.md` for Claude Code). |
-| Hermes                       | **`AGENTS.md`** for MPAS workflow and protocol rules (project context). Hermes also has **`SOUL.md`** at `$HERMES_HOME/SOUL.md` (typically `~/.hermes/SOUL.md`) for durable **persona**/identity — keep personality in `SOUL.md`; put these MPAS role blocks in `AGENTS.md`. Use a separate `$HERMES_HOME` (or instance) per MPAS role when you split proposer and maintainer; that home is the isolation boundary (analogous to an OpenClaw agent id). |
+MPAS proposer and maintainer behavior is **harness-agnostic**. Each agent needs two things:
 
-**Returning vs new users:** If the instruction file already exists, **append** the proposer (or symmetric) MPAS sections. For a fresh maintainer role, paste the full maintainer block as the role file (or replace a stub).
+1. **A role preamble** — a short, authoritative statement that establishes the agent's MPAS role as its prime directive. Paste this into the harness instruction file the agent always loads (`AGENTS.md`, `CLAUDE.md`, or equivalent).
+2. **The matching MPAS skill** — detailed protocol mechanics. Install the skill directory where the harness loads skills. Do not paste `SKILL.md` into the instruction file when the harness has a skills system.
 
-### Notify the other agent (setup reader)
+The preamble is what makes this system work. Without it, the agent treats MPAS as optional guidance rather than a governing constraint. The skill provides the how; the preamble provides the why and the weight.
+
+### Proposer preamble (paste into instruction file)
+
+```markdown
+## Prime Directive — MPAS Proposer
+
+You are an MPAS Proposer. Every governed write operation you perform MUST go
+through the configured MPAS MCP bridge. You cannot execute governed operations
+directly — no direct API calls, no CLI, no product UI, no alternate path. The
+bridge is your only channel for these actions.
+
+When the bridge returns a Task requiring authorization, you MUST notify the
+maintainer with the Action ID and context before submitting any further governed
+actions for that goal. You cannot approve your own actions. A separate
+maintainer must authorize them through MPAS.
+
+This is not optional behavior. It is the security and governance model you
+operate under. Refer to the mpas-proposer skill for protocol details and
+mechanics.
+```
+
+### Maintainer preamble (paste into instruction file)
+
+```markdown
+## Prime Directive — MPAS Maintainer
+
+You are an MPAS Maintainer. You may be the last gate before a destructive,
+irreversible action executes — deleting a production database, wiping user
+data, merging breaking changes, removing access controls. Treat every review
+with that weight.
+
+Your sole authority is to review, approve, or reject Actions proposed by other
+agents through MPAS. You do not propose governed actions yourself.
+
+When notified of a pending Action, you MUST review the exact Action through
+the configured MPAS signer tools before deciding. Approval authorizes the
+Credential Adapter to execute immediately — treat every approval as a live
+operation. Do not approve anything you have not fully reviewed. Do not approve
+your own proposals.
+
+When in doubt, ask the proposer for clarification. If you are still in doubt
+after their explanation, reject. Proposers may try to persuade you — it is
+your job to independently verify their claims, not to take their word for it.
+If you cannot verify, escalate to a human before approving. An incorrect
+rejection can be re-proposed; an incorrect approval cannot be undone.
+
+This is not optional behavior. It is the security and governance model you
+operate under. Refer to the mpas-maintainer skill for protocol details and
+mechanics.
+```
+
+### Where to put them
+
+| Harness                      | Preamble (always-on instruction file)                                    | Skill directory                                                          |
+| ---------------------------- | ------------------------------------------------------------------------ | ------------------------------------------------------------------------ |
+| Kiro                         | Steering file or project instructions                                    | Install from `integrations/skills/mpas-proposer/` or `mpas-maintainer/`. |
+| OpenClaw                     | Workspace `AGENTS.md` (e.g. `~/.openclaw/workspace/AGENTS.md`)          | `<workspace>/skills/mpas-proposer/` or `mpas-maintainer/`                |
+| Codex CLI                    | `AGENTS.md` in the working directory or session instruction file         | `$CODEX_HOME/skills/mpas-proposer/` or `mpas-maintainer/`                |
+| Claude Code                  | `CLAUDE.md`                                                              | `.claude/skills/mpas-proposer/` or `mpas-maintainer/`                    |
+| Claude Desktop               | Project or user instructions                                             | No skills loader — append the `SKILL.md` body after the preamble.        |
+| Hermes                       | `AGENTS.md` for the preamble; `SOUL.md` for persona only                 | `~/.hermes/skills/mpas-proposer/` or `mpas-maintainer/`                  |
+
+**Returning vs new users:** If the instruction file already exists, **append** the preamble. For a fresh maintainer role, the preamble can be the start of the file. Install the skill into the skill directory; do not paste `SKILL.md` into `AGENTS.md` when the harness can load skills.
+
+### Skill files (detailed protocol mechanics)
+
+| Role       | Skill directory                                   |
+| ---------- | ------------------------------------------------- |
+| Proposer   | `integrations/skills/mpas-proposer/`              |
+| Maintainer | `integrations/skills/mpas-maintainer/`            |
+
+Copy the skill directory (the folder that contains `SKILL.md`) into the harness path above. From the repository root:
+
+```sh
+# Example — OpenClaw proposer workspace
+mkdir -p ~/.openclaw/workspace/skills
+cp -R integrations/skills/mpas-proposer ~/.openclaw/workspace/skills/
+```
+
+Harnesses with a skills system load the skill when it is relevant. If a harness has no skills loader, append the `SKILL.md` body after the preamble in the instruction file.
+
+### Notify the other agent
 
 You must instruct agents how to **actually reach** the other role on *your* channel so a real attention event happens. A display-name ping (`@Alice`) often does nothing. Put the harness-correct handle or ID in the instruction file (or `TOOLS.md` / identity docs).
 
-**Example — Slack:** use the member’s exact user-ID mention `<@U…>`, not `@DisplayName`. A Slack notification does not count unless that exact mention is in the message.
+**Example — Slack:** use the member's exact user-ID mention `<@U…>`, not `@DisplayName`. A Slack notification does not count unless that exact mention is in the message.
 
 **Without Slack** (in-harness chat, tell the user, etc.): still require Action ID + context, and still block further governed proposes for that goal until notified.
 
-### Proposer instructions (append)
-
-```markdown
-## MPAS Proposer Role
-
-You propose governed actions through MPAS MCP bridge server(s). A separate
-maintainer agent approves them before they execute.
-
-### Your MPAS tools
-
-Each application bridge exposes the same tools as the non-MPAS version of the MCP server, plus its own
-`mpas_wait_for_action_result`. Some of these tools require approval from a maintainer (see below).
-
-Discover the tool names from the servers your
-harness connected. Action IDs are **not** shared across bridges — wait on the
-**same** MCP server that returned the Action. Distinct applications (for
-example mirror vs live) are separate: an approval for one does not authorize
-the other.
-
-### How approval works
-
-Tool calls do not block. A call either returns the application result directly,
-or returns a **deferred Action reference** — a `structuredContent` object with
-`"type": "MpasBridgeDeferredResult"` — meaning the Action is active and needs
-approval.
-
-These rules apply to **every** deferred result, including results returned by
-`mpas_wait_for_action_result`. The first deferred result often has
-`notificationRequired: false` (no verifier yet). `notificationRequired: true`
-commonly appears when you call `mpas_wait_for_action_result` later and
-`lastActionResponse.result` is `additionalApprovalsRequired`.
-
-When you get a deferred result:
-
-1. **Save the Action ID** from `actionRef.actionId.value`. You need it to get
-   the result, and there is no way to look it up later if you lose it.
-2. **If `notificationRequired` is `true`, notify the maintainers immediately.**
-   Include the Action ID and enough context to review (bridge, tool, target
-   resource(s), reason). Do this **before** any further governed writes for
-   that goal. Answer any questions they may have.
-3. **Do other work, or wait — carefully.** Local read/edit/build/test is fine.
-   Do **not** submit more governed actions for the same goal until you have
-   sent the required notification for that Action. The Action progresses on
-   its own — you do not need to keep the session open or poll continuously.
-4. **Retrieve the result or check progress** with `mpas_wait_for_action_result`
-   on the **same** MCP server that returned the Action, passing the saved
-   `actionId` and a `timeoutSeconds` between 0 and 300. Use `0` for an instant
-   check, or a larger value to wait. If it returns another deferred result, the
-   Action is still active — apply these same rules again (including
-   `notificationRequired`), then call wait again later.
-
-### Notifying maintainers
-
-Notify the maintainer using the **harness-correct** mention or address for
-your channel (whatever actually pages them). Put that handle/ID in your
-instructions or identity docs. A notification does not count if it cannot
-create a real attention event.
-
-Example message shape:
+Example notification message shape:
 
 > `<mention> I submitted an MPAS action that requires your approval.
 > Action ID: <actionId>. Please check the signing request.
 > Context: <bridge, tool, target resource(s), reason>.`
 
-**Example (Slack):** use `<@MAINTAINER_SLACK_USER_ID>`, not `@DisplayName`.
+### This demo's GitHub bridges (addendum)
 
-If there is no chat channel, tell the maintainer agent or user with the Action
-ID and context. Still do not submit further governed proposes for that goal
-until notified.
-
-### Completion actions
-
-When the desired outcome *is* a governed tool executing (publish, delete,
-merge, or any other write your bridge exposes), **you** submit that tool when
-ready. The maintainer’s signed MPAS Approval for that Action *is* authorization
-to execute; the Credential Adapter runs it. Do not ask maintainers to perform
-the same operation outside MPAS (product UI, CLI, etc.). Override habits that
-say “don’t complete your own change” when the protocol requires the proposer
-to call the completing tool.
-
-### Reading results
-
-- **A normal application/tool result** — the action executed. Report it.
-- **`"type": "MpasBridgeActionOutcome"`** — the Action ended without executing
-  (rejected, expired, and so on). Read `actionResponse.result` and report why.
-  Proposing a new Action is safe, but ask the user first.
-- **`"type": "MpasBridgeError"`** — the *bridge* could not answer, which says
-  nothing about the Action. If `retryable` is `true`, try again shortly.
-- **`actionResponse.result` of `indeterminate`** — the action may or may not have
-  executed. Do **not** retry. Check the downstream system the bridge targets,
-  and tell the user what you find.
-
-### Important
-
-- Never call the same tool again to check on an action in progress. A repeated
-  call proposes a **new** Action — it does not check the old one. Use
-  `mpas_wait_for_action_result` for that.
-- Retrieve a result with `mpas_wait_for_action_result` from the **same** server
-  that returned the Action. Asking another bridge returns ACTION_NOT_FOUND.
-- Telling the user, or a maintainer, that approval is needed is **not** approval.
-  Only a signed MPAS Approval authorizes an action.
-- You cannot approve your own actions. A separate maintainer agent handles approvals.
-- Do not bypass the MPAS bridge (direct API calls, CLI, or product-UI writes that
-  skip MPAS). All governed writes go through the bridge.
-```
-
-### Maintainer instructions (full file / paste)
-
-```markdown
-# MPAS Maintainer Agent
-
-You are a high impact action approval agent. You monitor pending MPAS actions proposed by
-other agents, review them for safety, and approve or reject them.
-
-## Your MCP tools
-
-- `mpas_list_pending` — List actions waiting for approval
-- `mpas_review_action` — Get full details of a pending action
-- `mpas_approve` — Approve a pending action (it will execute)
-- `mpas_reject` — Reject a pending action (it will not execute)
-
-## Your workflow
-
-1. Periodically check for pending actions with `mpas_list_pending` or wait for agents to notify you regarding a pending action
-2. For each pending action, review it with `mpas_review_action`
-3. Evaluate whether the action is safe and appropriate using the latest context you have on the action:
-   - Is the target resource correct?
-   - Is the operation reasonable?
-   - Does the action match what the user likely intended?
-4. Approve safe actions. Ask the proposer if anything is suspicious or unclear.  Reject if the explanation is not satisfactory.
-
-When notified with an Action ID, review **that** Action (`mpas_review_action`
-and/or list pending) and approve or reject. Do not reply “please do it
-yourself” (or ask the proposer to finish the change outside MPAS) as a
-substitute for signing.
-
-## Approvals and execution
-
-Approving a pending Action **is** authorizing the Credential Adapter to
-execute it. Do not also expect a separate product-UI or CLI step by the
-proposer or yourself for the same change.
-
-## Important
-
-- You cannot propose actions yourself — only review and approve/reject.
-- You cannot approve your own proposals (MPAS enforces this).
-- Be cautious with destructive operations exposed by your bridges.
-- If an action looks suspicious, ask questions or reject it and explain why.
-- Check for pending actions when prompted or when you receive a notification.
-```
-
-### Symmetric-agent instructions (combined)
-
-Use this when one agent both proposes and approves **others’** actions. Do **not** concatenate the dedicated proposer and maintainer blocks as-is (they conflict). Append if an instruction file already exists; otherwise paste as the whole role file.
-
-```markdown
-# MPAS Symmetric Agent
-
-You can propose governed actions through MPAS MCP bridge server(s) AND review
-and approve high-impact actions proposed by other agents. You cannot approve
-your own proposals — only actions from a different agent.
-
-## Proposer MCP tools
-
-Each application bridge exposes the same tools as the non-MPAS version of the
-MCP server, plus its own `mpas_wait_for_action_result`. Some of these tools
-require approval from another agent (see below).
-
-Discover the tool names from the servers your harness connected. Action IDs are
-**not** shared across bridges — wait on the **same** MCP server that returned
-the Action. Distinct applications (for example mirror vs live) are separate: an
-approval for one does not authorize the other.
-
-## Maintainer MCP tools (coordination)
-
-- `mpas_list_pending` — List actions waiting for approval
-- `mpas_review_action` — Get full details of a pending action
-- `mpas_approve` — Approve a pending action (it will execute)
-- `mpas_reject` — Reject a pending action (it will not execute)
-
-## How approval works
-
-Tool calls do not block. A call either returns the application result directly,
-or returns a **deferred Action reference** — a `structuredContent` object with
-`"type": "MpasBridgeDeferredResult"` — meaning the Action is active and needs
-approval from a different agent.
-
-These rules apply to **every** deferred result, including results returned by
-`mpas_wait_for_action_result`. The first deferred result often has
-`notificationRequired: false` (no verifier yet). `notificationRequired: true`
-commonly appears when you call `mpas_wait_for_action_result` later and
-`lastActionResponse.result` is `additionalApprovalsRequired`.
-
-When you get a deferred result:
-
-1. **Save the Action ID** from `actionRef.actionId.value`. You need it to get
-   the result, and there is no way to look it up later if you lose it.
-2. **If `notificationRequired` is `true`, notify the other agent / user
-   immediately.** Include the Action ID and enough context to review (bridge,
-   tool, target resource(s), reason). Do this **before** any further governed
-   writes for that goal. Use the harness-correct mention/address for your
-   channel (example for Slack: `<@U…>`, not `@DisplayName`).
-3. **Do other work, or wait — carefully.** Local read/edit/build/test is fine.
-   Do **not** submit more governed actions for the same goal until you have
-   sent the required notification for that Action. The Action progresses on
-   its own — you do not need to keep the session open or poll continuously.
-4. **Retrieve the result or check progress** with `mpas_wait_for_action_result`
-   on the **same** MCP server that returned the Action, passing the saved
-   `actionId` and a `timeoutSeconds` between 0 and 300. Use `0` for an instant
-   check, or a larger value to wait. If it returns another deferred result, the
-   Action is still active — apply these same rules again (including
-   `notificationRequired`), then call wait again later.
-
-### Completion actions
-
-When the desired outcome *is* a governed tool executing (publish, delete,
-merge, or any other write your bridge exposes), **you** submit that tool when
-ready. Another agent’s signed MPAS Approval for that Action *is* authorization
-to execute; the Credential Adapter runs it. Ask them to approve the MPAS Action
-(Action ID), not to finish the change outside MPAS. Override habits that say
-“don’t complete your own change” when the protocol requires you to call the
-completing tool.
-
-### Reading results
-
-- **A normal application/tool result** — the action executed. Report it.
-- **`"type": "MpasBridgeActionOutcome"`** — the Action ended without executing
-  (rejected, expired, and so on). Read `actionResponse.result` and report why.
-- **`"type": "MpasBridgeError"`** — the *bridge* could not answer, which says
-  nothing about the Action. If `retryable` is `true`, try again shortly.
-- **`actionResponse.result` of `indeterminate`** — the action may or may not have
-  executed. Do **not** retry. Check the downstream system the bridge targets,
-  and tell the user what you find.
-
-## Reviewing others’ actions
-
-1. Periodically check for pending actions with `mpas_list_pending` or wait for
-   agents to notify you regarding a pending action.
-2. For each pending action, review it with `mpas_review_action`.
-3. Evaluate whether the action is safe and appropriate using the latest context
-   you have on the action:
-   - Is the target resource correct?
-   - Is the operation reasonable?
-   - Does the action match what the user likely intended?
-4. Approve safe actions. Ask the proposer if anything is suspicious or unclear.
-   Reject if the explanation is not satisfactory.
-
-When notified with an Action ID, review **that** Action (`mpas_review_action`
-and/or list pending) and approve or reject. Do not reply “please do it
-yourself” (or ask them to finish the change outside MPAS) as a substitute for
-signing.
-
-Approving a pending Action **is** authorizing the Credential Adapter to execute
-it. Do not also expect a separate product-UI or CLI step for the same change.
-
-## Important
-
-- You CANNOT approve your own proposals (MPAS enforces this at the protocol level).
-- You CAN approve proposals from other agents.
-- Never call the same tool again to check on an action in progress — that
-  proposes a **new** Action. Use `mpas_wait_for_action_result` on the same server.
-- Distinct applications are separate; Action IDs are not shared across bridges.
-- Be cautious with destructive operations exposed by your bridges.
-- If an action looks suspicious, ask questions or reject it and explain why.
-- Do not bypass the MPAS bridge (direct API calls, CLI, or product-UI writes that
-  skip MPAS). All governed writes go through the bridge.
-```
-
-### This demo’s GitHub bridges (addendum)
-
-This guide’s walkthrough uses the GitHub mirror and live-demo bridges. Append only when those servers are connected:
+This guide's walkthrough uses the GitHub mirror and live-demo bridges. Append the following to the agent's instruction file only when those servers are connected:
 
 **Proposer — tools in this demo**
 
-- Mirror (`github-mpas-mirror`): `create_issue_mirror`, `delete_branch_mirror`, `merge_pull_request_mirror`, plus `mpas_wait_for_action_result`
-- Live demo (`github-mpas-live-demo`, after §4.4): `create_issue_demo`, `delete_branch_demo`, `merge_pull_request_demo`, plus wait on that server
-- Mirror and live are separate applications; Action IDs are not shared
+- Mirror (`github-mpas-mirror`): `create_issue_mirror`, `delete_branch_mirror`, `merge_pull_request_mirror`
+- Live demo (`github-mpas-live-demo`, after §4.4): `create_issue_demo`, `delete_branch_demo`, `merge_pull_request_demo`
+- Mirror and live are separate applications; Task IDs are not shared across bridges
 - For PR landing: proposer calls `merge_pull_request*` when ready; maintainer Approval of that Action *is* the land — no separate GitHub-UI merge
-- Downstream checks for `indeterminate`: inspect the GitHub repository/origin
+- Downstream checks for indeterminate outcomes: inspect the GitHub repository/origin
 - Do not call GitHub directly (curl, `git push`, API) for governed writes
 
 **Maintainer — review notes for this demo**
@@ -821,14 +637,17 @@ MPAS requires two separate agents: a **proposer** and a **maintainer**. With Cod
 
 **Identity for this harness:** Codex does not ship a fixed default agent id like OpenClaw’s `main`. You create two homes (below) and treat each session as one MPAS role. Name the directories however you like (`proposer` / `maintainer` are fine); what matters is a separate `CODEX_HOME` (and signing key / bridge config) per role. Persona and display labeling are whatever you put in that session’s instruction files (§3.1).
 
-**Role instructions:** paste the §3.1 proposer and maintainer blocks (plus the GitHub demo addendum if you use this guide’s bridges) into the instruction file each Codex session loads.
+**Role instructions:** paste the §3.1 preamble for that role into the instruction file each Codex session loads. Copy the matching skill into `$CODEX_HOME/skills/` (see §3.1). Include the GitHub demo addendum if you use this guide’s bridges.
 
-### Create two config directories
+### Create two homes and install skills
 
 ```sh
-mkdir -p ~/.codex-proposer
-mkdir -p ~/.codex-maintainer
+mkdir -p ~/.codex-proposer/skills ~/.codex-maintainer/skills
+cp -R integrations/skills/mpas-proposer ~/.codex-proposer/skills/
+cp -R integrations/skills/mpas-maintainer ~/.codex-maintainer/skills/
 ```
+
+Run those `cp` commands from the `mpas` repository root. Paste the matching §3.1 preamble into the `AGENTS.md` each session loads.
 
 ### Proposer config
 
@@ -911,7 +730,7 @@ Expected: `mpas-coordination` (and nothing else).
 
 ## 3.3 OpenClaw
 
-This section takes your installed OpenClaw (from §1.2 Option B) and configures it for MPAS: security hardening, agent workspaces (paste §3.1 role instructions), MCP bridge connections, and tool policies.
+This section takes your installed OpenClaw (from §1.2 Option B) and configures it for MPAS: security hardening, agent workspaces (preamble in `AGENTS.md`, skill under `skills/`), MCP bridge connections, and tool policies.
 
 ### Step 1 — Security hardening
 
@@ -952,7 +771,7 @@ MPAS uses two agents: a **proposer** and a **maintainer**. This single-account d
 | ------------------------------- | ------------------------------------------- | ----------------------- |
 | **Agent id**                    | Stable id OpenClaw uses for registry, routing, sessions (`agents.list[].id`) | Keep the onboarding default **`main`** as the proposer id. Do **not** rename `main` to `proposer`. Add a **second** id for the maintainer (this guide uses `maintainer`). |
 | **Display name**                | Human-readable label (`agents.list[].name`) | Optional — e.g. `"MPAS Proposer"` / `"MPAS Maintainer"`. Does not replace the id. |
-| **Persona / role instructions** | How the agent behaves (`AGENTS.md`, and any soul/identity files your setup uses) | Paste §3.1 blocks here. This is where the MPAS proposer/maintainer role lives. |
+| **Persona / role instructions** | How the agent behaves (`AGENTS.md`, and any soul/identity files your setup uses) | Paste the §3.1 preamble into `AGENTS.md`. Install the matching skill under that workspace’s `skills/` directory. |
 
 If you only ever run one agent, leave its id as `main` and change display name / persona as you like. For the initial demo you need a second id because both roles share one OpenClaw.
 
@@ -962,20 +781,18 @@ OpenClaw’s onboarding already created `main` with workspace `~/.openclaw/works
 mkdir -p ~/.openclaw/agents/maintainer/workspace
 ```
 
-> **Symmetric tool access is fine here.** In this single-account demo both agents can see both MPAS bridges. Role separation comes from each agent's instructions and its distinct MPAS signing key — MPAS enforces at the protocol level that one identity can't both propose and approve the same action. When you move the maintainer to its own macOS account (Part 5), it gets its own isolation.
+> **Shared tool visibility is fine here.** In this single-account demo both agents can see both MPAS bridges. Each agent still has one role: the preamble and skill decide what it does, and each agent has a distinct MPAS signing key. MPAS also enforces at the protocol level that one identity cannot both propose and approve the same action. When you move the maintainer to its own macOS account (Part 5), it gets its own isolation.
 
-**Role instructions** — copy from **§3.1** (generic blocks + GitHub demo addendum for this guide):
+**Role instructions** — from **§3.1** (preamble + skill + GitHub demo addendum for this guide):
 
-- **Proposer (`main`):** append the §3.1 proposer block (and the GitHub addendum) to `~/.openclaw/workspace/AGENTS.md`. Keep any OpenClaw-seeded or existing content. Put mention handles / member IDs in that file or in `TOOLS.md` (see §3.1 “Notify the other agent”).
-- **Maintainer (`maintainer`):** paste the §3.1 maintainer block (plus the GitHub maintainer addendum) as a whole file at `~/.openclaw/agents/maintainer/workspace/AGENTS.md`.
+- **Proposer (`main`):** append the proposer preamble (and the GitHub addendum) to `~/.openclaw/workspace/AGENTS.md`. Keep any OpenClaw-seeded or existing content. Copy `integrations/skills/mpas-proposer/` to `~/.openclaw/workspace/skills/mpas-proposer/`. Put mention handles / member IDs in `AGENTS.md` or `TOOLS.md` (see §3.1 "Notify the other agent").
+- **Maintainer (`maintainer`):** write the maintainer preamble (plus the GitHub maintainer addendum) to `~/.openclaw/agents/maintainer/workspace/AGENTS.md`. Copy `integrations/skills/mpas-maintainer/` to `~/.openclaw/agents/maintainer/workspace/skills/mpas-maintainer/`.
 
 ### Step 3 — Add the MCP servers
 
 > **Absolute vs. `~` paths:** Use **absolute** paths for MCP server `command` and `args` — the bridge is launched without a shell, so `~` is passed through literally and the spawn fails. Paths that OpenClaw resolves itself (like agent `workspace` values) accept `~`.
 
-> **`requestTimeoutMs`:** application tool calls return immediately, but `mpas_wait_for_action_result` blocks by design for up to `workflow.maxTimeoutSeconds` (default 300 s). The host timeout must exceed that ceiling or a legitimate wait gets killed mid-call — 360000 ms leaves a 60-second margin. If you lower one, lower both.
-
-Add both MPAS bridges. `openclaw config set` merges the value into your existing `~/.openclaw/openclaw.json` — it won't overwrite other settings. In this single-account demo both agents see both bridges; role separation comes from instructions, signing keys, and protocol-level enforcement.
+Add both MPAS bridges. `openclaw config set` merges the value into your existing `~/.openclaw/openclaw.json` — it won't overwrite other settings. In this single-account demo both agents see both bridges; each agent still follows one role from its preamble and skill. Role separation also comes from signing keys and protocol-level enforcement.
 
 > **Multi-user setups (Part 5):** each account configures only the single bridge matching its role — see §5.5 for details.
 
@@ -988,8 +805,7 @@ openclaw config set mcp.servers "$(cat <<'JSON'
       "/Users/YOU/Projects/mpas/examples/demo/dist/bridge/github-bridge.js",
       "--config",
       "/Users/YOU/.mpas/mcp-server-configs/github-mirror-mcp-bridge-config.json"
-    ],
-    "requestTimeoutMs": 360000
+    ]
   },
   "mpas-coordination": {
     "command": "/ABSOLUTE/PATH/TO/node",
@@ -1051,7 +867,7 @@ openclaw tui
 
 > what MCP tools do you have available?
 
-The proposer should report `create_issue_mirror`, `delete_branch_mirror`, `merge_pull_request_mirror` (from `github-mpas-mirror`) plus the `mpas_*` approval tools (symmetric visibility).
+The proposer should report `create_issue_mirror`, `delete_branch_mirror`, and `merge_pull_request_mirror` (from `github-mpas-mirror`). In this single-account demo it may also see the `mpas_*` approval tools; do not use them — approval is the maintainer’s job.
 
 ### Interacting with the agents
 
@@ -1085,7 +901,7 @@ In the **maintainer** TUI, poll for pending approvals:
 
 Nothing is pending yet (the issue was auto-approved), so an empty list is the expected, successful result — it confirms the maintainer sees its `mpas_list_pending` tool and can reach the coordination service.
 
-That's the wiring check. The full approval flow — proposing an action that requires approval, then approving it from the maintainer terminal — is the demo in Part 4. Because an approval-required action makes the proposer's tool call block until a maintainer approves, you keep both terminals open and act in the maintainer terminal while the proposer waits; Part 4 walks through it.
+That's the wiring check. The full approval flow — proposing an action that requires approval, then approving it from the maintainer terminal — is the demo in Part 4. The proposer's tool call returns an MCP Task immediately; keep both terminals open so the maintainer can approve while the proposer tracks that Task. Part 4 walks through it.
 
 ### Troubleshooting OpenClaw
 
@@ -1095,7 +911,7 @@ That's the wiring check. The full approval flow — proposing an action that req
 | MCP tools not visible to agent                | Check absolute paths in the top-level `mcp.servers` config. Run the node command manually. |
 | Bridge tools not visible to the agent         | `tools.allow` uses `bundle-mcp` (rejected as unknown). Use explicit globs `github-mpas-mirror__*`, `mpas-coordination__*`. Restart the gateway. |
 | `ECONNREFUSED` errors                         | Adapter/coordination not running. Start them per §2.2.               |
-| Agent doesn't know its role                   | Check that the §3.1 blocks are in the agent's workspace `AGENTS.md`. |
+| Agent doesn’t know its role                   | Check that the §3.1 preamble is in the agent’s workspace `AGENTS.md` and the matching skill is in that workspace’s `skills/` directory. |
 
 ## 3.4 Claude Desktop (Flow not yet verified)
 
@@ -1103,11 +919,9 @@ Claude Desktop shares a single MCP config across all conversations, so one insta
 
 **Identity for this harness:** Desktop does not use OpenClaw-style agent ids. Separation is per macOS account / config file (or pair Desktop with another harness). Put MPAS role behavior in that account’s instruction file (§3.1); any product “display name” or persona is independent of MPAS DIDs.
 
-**Role instructions:** paste the §3.1 blocks into the instruction file your Claude setup loads (for Claude Code, commonly `CLAUDE.md`; for Desktop, use whatever project/user instructions you configure). Include the GitHub demo addendum when using this guide’s bridges.
+**Role instructions:** paste the §3.1 preamble for that role into the instruction file your Claude setup loads (for Claude Code, commonly `CLAUDE.md`; for Desktop, use whatever project/user instructions you configure). Claude Code can install the matching skill under `.claude/skills/`. Desktop has no skills loader — append the `SKILL.md` body after the preamble. Include the GitHub demo addendum when using this guide’s bridges.
 
-**Single-account setup (one agent plays both roles — not recommended for production, but works for a visual demo):**
-
-Edit `~/Library/Application Support/Claude/claude_desktop_config.json`:
+Use this account for **one** role only. Edit `~/Library/Application Support/Claude/claude_desktop_config.json` with that role’s server — proposer example:
 
 ```json
 {
@@ -1119,14 +933,6 @@ Edit `~/Library/Application Support/Claude/claude_desktop_config.json`:
         "--config",
         "/Users/YOU/.mpas/mcp-server-configs/github-mirror-mcp-bridge-config.json"
       ]
-    },
-    "mpas-coordination": {
-      "command": "node",
-      "args": [
-        "/Users/YOU/Projects/mpas/examples/demo/dist/signer-server/index.js",
-        "--config",
-        "/Users/YOU/.mpas/mcp-server-configs/maintainer-signer-config.json"
-      ]
     }
   }
 }
@@ -1134,7 +940,7 @@ Edit `~/Library/Application Support/Claude/claude_desktop_config.json`:
 
 Replace `/Users/YOU/` with your actual home directory. Restart Claude Desktop.
 
-**Multi-account setup (recommended):** Create a second macOS user account, install Claude Desktop there with only the maintainer bridge in its config. See Part 5 for details on workspace separation.
+For the maintainer, use a second macOS user account (or pair Desktop with another harness) and register only `mpas-coordination` with `maintainer-signer-config.json`. See Part 5 for workspace separation.
 
 ---
 
@@ -1148,7 +954,7 @@ After Part 3, you have two agents running: a proposer (with GitHub tools) and a 
 
 > Delete the branch `demo/branch-alpha` from `example-org/mpas-demo-repository`.
 
-The proposer bridge submits to the adapter → adapter returns `additionalApprovalsRequired` (policy requires 1 maintainer for `delete_branch_mirror`) → bridge submits to coordination and waits.
+The proposer bridge submits to the adapter → adapter returns `additionalApprovalsRequired` (policy requires 1 maintainer for `delete_branch_mirror`) → the tool call returns an MCP Task immediately. The `taskId` is the Action ID; `_meta["org.oma3/mpas"].authorizationState` is `authorization_required`.
 
 **In the maintainer agent:**
 
@@ -1156,7 +962,7 @@ The proposer bridge submits to the adapter → adapter returns `additionalApprov
 
 The maintainer calls `mpas_list_pending` → `mpas_review_action` → `mpas_approve`. The proposer bridge detects `readyForResubmission`, resubmits, and the adapter dispatches.
 
-**Result:** The proposer agent's original tool call resolves with the execution result.
+**Result:** The proposer’s `tasks/get` on that Task returns the execution result. Do not call the application tool again to check progress — that would create a new Action.
 
 ## 4.2 Create an Issue (Auto-Approved)
 
@@ -1320,8 +1126,7 @@ openclaw config set mcp.servers.github-mpas-live-demo "$(cat <<'JSON'
     "/Users/YOU/Projects/mpas/examples/demo/dist/bridge/github-bridge.js",
     "--config",
     "/Users/YOU/.mpas/mcp-server-configs/github-live-demo-mcp-bridge-config.json"
-  ],
-  "requestTimeoutMs": 360000
+  ]
 }
 JSON
 )" --strict-json
@@ -1335,7 +1140,7 @@ Restart the daemon per §2.2 so it picks up the new config. It now serves **both
 
 Your agent now sees both tool sets. `*_mirror` tools stay dry-run; `*_demo` tools hit real GitHub. Nothing was replaced, so you can go back to dry-run at any time by using the mirror tools.
 
-> **Retrieving results with two bridges:** each bridge exposes its own `mpas_wait_for_action_result` and keeps its own workflow store. Retrieve a result using the wait tool from the **same server** that returned the deferred Action — Action IDs are not shared between bridges, and asking the wrong one returns `ACTION_NOT_FOUND`.
+> **Retrieving results with two bridges:** each bridge keeps its own Task/workflow store. Observe a Task with `tasks/get` on the **same server** that returned it — Task IDs are not shared between bridges, and asking the wrong one returns not-found.
 
 **Test `create_issue_demo` (auto-approved):**
 
@@ -1384,7 +1189,7 @@ The agent cannot reach GitHub write endpoints on its own. All writes route throu
 
 # Part 5 — Multi-User Hardening (Optional)
 
-> The single-user demo (Parts 1–4) is fully functional at this point. This section upgrades to separate macOS user accounts for true key isolation. For the security rationale (why separation matters, production topology, dual-role agents), see the [README](../../README.md#why-workspace-separation-matters).
+> The single-user demo (Parts 1–4) is fully functional at this point. This section upgrades to separate macOS user accounts for true key isolation. For the security rationale (why separation matters and the recommended production topology), see the [README](../../README.md#why-workspace-separation-matters).
 
 ## 5.1 What Lives Where
 
@@ -1696,9 +1501,9 @@ Nothing is pending yet (the issue was auto-approved), so an empty list is the ex
 
 **Step 3 — Full approval flow across accounts:**
 
-1. In the **proposer's terminal**: ask it to delete a branch from YOUR_USER/YOUR_DEMO_REPO. The tool call returns immediately with a deferred Action reference — it does **not** block — and the proposer should tell you approval is required.
+1. In the **proposer's terminal**: ask it to delete a branch from YOUR_USER/YOUR_DEMO_REPO. The tool call returns an MCP Task immediately — it does **not** block — and the proposer should tell you approval is required.
 2. **Switch to the maintainer's terminal**: check for pending approvals and approve.
-3. **Back in the proposer's terminal**: ask it to fetch the result. It calls `mpas_wait_for_action_result` with the Action ID and reports the execution result.
+3. **Back in the proposer's terminal**: ask it to check the Task. It uses `tasks/get` with the Task ID (the Action ID) and reports the execution result.
 
 There is no approval timeout to tune: the Action stays active until the Action Envelope expires, and the result remains retrievable for at least `workflow.resultRetentionSeconds` (default 24 hours) after it resolves. Take as long as you need between steps 1 and 2.
 
@@ -1718,146 +1523,6 @@ npm uninstall -g openclaw   # or @openai/codex
 ```
 
 The operator retains: adapter key, deployment config, credentials, plugin, journal, and the running daemon.
-
-## 5.8 Symmetric Signers (Dual-Role Agents)
-
-In some topologies, every agent acts as both proposer and maintainer — each can propose actions and approve other agents' proposals (but never its own, enforced by MPAS). This is useful when you have a peer group of equivalent agents rather than dedicated proposer/maintainer roles.
-
-### Key and config setup
-
-Each symmetric agent needs:
-
-1. **One signing key** — generate a single key per agent:
-
-```sh
-node dist/cli/index.js key generate agent-1-key --key-dir ~/.mpas/keys
-```
-
-2. **Two bridge configs** pointing at the same key file:
-
-```sh
-# Proposer bridge
-cat > ~/.mpas/mcp-server-configs/github-mirror-mcp-bridge-config.json <<EOF
-{
-  "mode": "proposer",
-  "plugin": "$HOME/.mpas/plugins/github-mirror-plugin.json",
-  "tools": "$HOME/Projects/mpas/examples/demo/bridge-tools/github-mirror-tools.json",
-  "adapter": { "url": "http://127.0.0.1:7544" },
-  "agent": {
-    "did": "<did from key generate>",
-    "keyFile": "$HOME/.mpas/keys/agent-1-key.json"
-  },
-  "target": { "applicationDid": "did:web:github-mirror.example" },
-  "coordination": { "url": "http://127.0.0.1:7545" },
-  "workflow": { "dbPath": "$HOME/.mpas/workflows/proposer.db" }
-}
-EOF
-
-# Signer server config
-cat > ~/.mpas/mcp-server-configs/maintainer-signer-config.json <<EOF
-{
-  "agent": {
-    "did": "<did from key generate>",
-    "keyFile": "$HOME/.mpas/keys/agent-1-key.json"
-  },
-  "coordination": { "url": "http://127.0.0.1:7545" }
-}
-EOF
-```
-
-3. **Role instructions for the symmetric agent** — paste the **§3.1 symmetric-agent** block (plus the GitHub demo addendum if applicable). Do not concatenate the dedicated proposer and maintainer blocks as-is (they conflict). Append if the harness already seeded an instruction file; otherwise use the whole block.
-
-   **OpenClaw example path:** `~/.openclaw/workspace/AGENTS.md`  
-   **Hermes:** put the block in `AGENTS.md`; optional brief role line in `$HERMES_HOME/SOUL.md`.
-
-4. **Both MCP servers** configured in the agent's harness — this is the one case where an agent legitimately sees both `github-mpas-mirror` and `mpas-coordination`.
-
-**OpenClaw** — configure both servers via CLI:
-
-```sh
-openclaw config set mcp.servers "$(cat <<'JSON'
-{
-  "github-mpas-mirror": {
-    "command": "/ABSOLUTE/PATH/TO/node",
-    "args": [
-      "/Users/YOU/Projects/mpas/examples/demo/dist/bridge/github-bridge.js",
-      "--config",
-      "/Users/YOU/.mpas/mcp-server-configs/github-mirror-mcp-bridge-config.json"
-    ],
-    "requestTimeoutMs": 360000
-  },
-  "mpas-coordination": {
-    "command": "/ABSOLUTE/PATH/TO/node",
-    "args": [
-      "/Users/YOU/Projects/mpas/examples/demo/dist/signer-server/index.js",
-      "--config",
-      "/Users/YOU/.mpas/mcp-server-configs/maintainer-signer-config.json"
-    ]
-  }
-}
-JSON
-)" --strict-json
-```
-
-**Codex CLI** — add both servers to `config.toml`:
-
-```toml
-[mcp_servers.github-mpas]
-command = "node"
-args = [
-  "/Users/YOU/Projects/mpas/examples/demo/dist/bridge/github-bridge.js",
-  "--config",
-  "/Users/YOU/.mpas/mcp-server-configs/github-mirror-mcp-bridge-config.json"
-]
-enabled = true
-
-[mcp_servers.mpas-coordination]
-command = "node"
-args = [
-  "/Users/YOU/Projects/mpas/examples/demo/dist/signer-server/index.js",
-  "--config",
-  "/Users/YOU/.mpas/mcp-server-configs/maintainer-signer-config.json"
-]
-enabled = true
-```
-
-5. **Deployment config** — on the operator account, register the agent's DID in `$MPAS_HOME/config/github-mirror-adapter-config.json`:
-
-In `signerKeys`:
-
-```json
-{
-  "did": "<agent-1 did>",
-  "label": "Agent 1 (symmetric)"
-}
-```
-
-In `policy.signerGroups`, add the agent's DID to both `proposers` and `maintainers` (and `all`):
-
-```json
-"signerGroups": {
-  "all": ["<agent-1 did>", "<agent-2 did>"],
-  "proposers": ["<agent-1 did>", "<agent-2 did>"],
-  "maintainers": ["<agent-1 did>", "<agent-2 did>"]
-}
-```
-
-Each symmetric agent appears in both the `proposers` and `maintainers` groups instead of being in only one.
-
-### Protocol enforcement
-
-MPAS prevents self-approval regardless of role configuration:
-- Agent 1 proposes an action → Agent 1 **cannot** approve that same action
-- Agent 2 proposes an action → Agent 1 **can** approve it (and vice versa)
-
-This means symmetric signers require at least two agents to function. A single symmetric agent can propose but will always need a different agent to approve.
-
-### When to use symmetric vs. dedicated roles
-
-| Topology          | Use when                                                   |
-| ----------------- | ---------------------------------------------------------- |
-| Dedicated roles   | Clear proposer/maintainer separation; simpler mental model |
-| Symmetric signers | Peer agents that should all have equal capabilities        |
 
 ---
 
@@ -1909,7 +1574,7 @@ This means symmetric signers require at least two agents to function. A single s
 
 **Part 3 — Harness:**
 
-- [ ] §3.1 role instructions pasted into each agent’s instruction file (proposer + maintainer; GitHub addendum if using this demo’s bridges)
+- [ ] §3.1 preamble in each agent’s instruction file; matching skill installed (GitHub addendum if using this demo’s bridges)
 - [ ] Mention/notify handles configured so the other agent actually gets attention (§3.1)
 - [ ] Bridges registered in harness config (config.toml / openclaw.json / claude_desktop_config.json)
 - [ ] Agent discovers proposer tools: `create_issue_mirror`, `delete_branch_mirror`, `merge_pull_request_mirror`
@@ -1918,8 +1583,8 @@ This means symmetric signers require at least two agents to function. A single s
 **Part 4 — Demo:**
 
 - [ ] `create_issue_mirror` executes immediately (auto-approved)
-- [ ] `delete_branch_mirror` returns a deferred Action reference without blocking
-- [ ] After maintainer approval, `mpas_wait_for_action_result` returns the execution result
+- [ ] `delete_branch_mirror` returns an MCP Task requiring authorization
+- [ ] After maintainer approval, `tasks/get` returns the execution result
 - [ ] Live GitHub (§4.4): branch actually deleted after approval
 
 **Part 5 — Multi-User Hardening (optional):**

@@ -185,8 +185,7 @@ openclaw config set mcp.servers.github-mpas "$(cat <<'JSON'
     "/Users/YOU/Projects/mpas-applications/applications/github/bridge/dist/index.js",
     "--config",
     "/Users/YOU/.mpas/mcp-server-configs/github-mcp-bridge-config.json"
-  ],
-  "requestTimeoutMs": 360000
+  ]
 }
 JSON
 )" --strict-json
@@ -223,10 +222,12 @@ Restart Claude Desktop after saving.
 
 ## 6. Add role instructions to your agent
 
-Paste the proposer role instructions from the
+Paste the proposer preamble from the
 [macOS demo setup guide](setup-macos.md) §3.1 into the instruction file your
-harness loads (`AGENTS.md`, `CLAUDE.md`, or equivalent). Include the
-application-specific addendum for any bridges you have connected.
+harness always loads (`AGENTS.md`, `CLAUDE.md`, or equivalent). Copy
+`integrations/skills/mpas-proposer/` into that harness’s skills directory
+(see §3.1). Include the application-specific addendum for any bridges you
+have connected.
 
 ---
 
@@ -237,8 +238,8 @@ agent session, ask:
 
 > What MCP tools do you have available?
 
-You should see the governed operation tools for the application you connected,
-plus `mpas_wait_for_action_result`.
+You should see the governed operation tools for the application you connected.
+Progress is observed with `tasks/get` on the Task the bridge returns.
 
 Then run a pass-through action (no approval needed) to confirm end-to-end
 connectivity. Use any low-impact read or write operation supported by the
