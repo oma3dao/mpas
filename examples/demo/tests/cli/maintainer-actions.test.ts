@@ -1,14 +1,39 @@
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import { execFile } from "node:child_process";
 import { createServer } from "node:http";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it, vi } from "vitest";
+import { promisify } from "node:util";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { runCli } from "../../src/cli/index.js";
 import { createSignerToolClient, signerToolNames, type SignerToolClient, type SignerToolName } from "../../src/cli/signer-tools.js";
 
 const demoRoot = fileURLToPath(new URL("../../", import.meta.url));
+const execFileAsync = promisify(execFile);
+let signerBuildDir: string | undefined;
+let signerEntryPromise: Promise<string> | undefined;
+
+function compiledSignerEntry(): Promise<string> {
+  signerEntryPromise ??= (async () => {
+    signerBuildDir = await mkdtemp(join(demoRoot, ".signer-test-build-"));
+    await execFileAsync(
+      process.execPath,
+      [join(demoRoot, "node_modules", "typescript", "bin", "tsc"), "-p", "tsconfig.build.json", "--outDir", signerBuildDir],
+      { cwd: demoRoot },
+    );
+    return join(signerBuildDir, "signer-server", "index.js");
+  })();
+  return signerEntryPromise;
+}
+
+beforeAll(async () => { await compiledSignerEntry(); }, 15_000);
+
+afterAll(async () => {
+  await signerEntryPromise;
+  if (signerBuildDir) await rm(signerBuildDir, { recursive: true, force: true });
+});
 
 class MemoryWriter {
   text = "";
@@ -43,13 +68,18 @@ function result(structuredContent: Record<string, unknown>): CallToolResult {
 
 function reviewResult(actionId: string): CallToolResult {
   return result({
-    approvalRequest: { actionRef: { actionId: { value: actionId } } },
+    approvalRequest: {
+      actionRef: {
+        actionId: { value: actionId },
+        actionEnvelopeHash: { alg: "sha-256", value: `hash-${actionId}` },
+      },
+    },
     reviewSet: { actionEnvelope: { actionId: { value: actionId } }, executionPayload: { name: "delete_branch" } },
   });
 }
 
 function decisionResult(actionId: string, decision: "approve" | "reject"): CallToolResult {
-  return result({ approval: { actionId: { value: actionId }, decision } });
+  return result({ approval: { actionEnvelopeHash: { alg: "sha-256", value: `hash-${actionId}` }, decision } });
 }
 
 function io() {
@@ -220,7 +250,7 @@ describe("human Maintainer action CLI", () => {
     const client = createSignerToolClient(
       configPath,
       process.stderr,
-      join(demoRoot, "dist", "signer-server", "index.js"),
+      await compiledSignerEntry(),
     );
     try {
       const response = await runCli(["action", "pending"], io(), { signerToolClient: client });
@@ -235,7 +265,11 @@ describe("human Maintainer action CLI", () => {
     const configPath = join(dir, "signer.json");
     await writeFile(configPath, JSON.stringify({ maintainerKey: join(dir, "missing-key.json"), coordinationUrl: "http://127.0.0.1:1" }));
     const diagnostics = new MemoryWriter();
-    const client = createSignerToolClient(configPath, diagnostics, join(demoRoot, "dist", "signer-server", "index.js"));
+    const client = createSignerToolClient(
+      configPath,
+      diagnostics,
+      await compiledSignerEntry(),
+    );
     const output = io();
     const response = await runCli(["action", "pending"], output, { signerToolClient: client });
     expect(response.exitCode).toBe(1);

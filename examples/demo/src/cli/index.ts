@@ -782,7 +782,7 @@ async function runMaintainerAction(
 
     const toolName = decision === "approve" ? "mpas_approve" : "mpas_reject";
     const result = await client.callTool(toolName, { actionId });
-    io.stdout.write(formatSignerResult(decisionResultValue(result, toolName, actionId!)));
+    io.stdout.write(formatSignerResult(decisionResultValue(result, toolName, reviewValue)));
     return { exitCode: 0 };
   } finally {
     await client.close();

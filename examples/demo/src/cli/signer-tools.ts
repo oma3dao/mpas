@@ -120,18 +120,23 @@ export function reviewResultValue(result: CallToolResult, requestedActionId: str
 export function decisionResultValue(
   result: CallToolResult,
   toolName: "mpas_approve" | "mpas_reject",
-  requestedActionId: string,
+  reviewValue: Record<string, unknown>,
 ): Record<string, unknown> {
   const value = structuredToolResult(result, toolName);
   if (!isRecord(value.approval)) {
     throw new Error(`${toolName} returned malformed structured content: approval is required.`);
   }
-  const actionId = readActionId(value.approval, ["actionId", "value"]);
-  if (!actionId) {
-    throw new Error(`${toolName} returned malformed structured content: approval Action ID is required.`);
+  const expectedDecision = toolName === "mpas_approve" ? "approve" : "reject";
+  if (value.approval.decision !== expectedDecision) {
+    throw new Error(`${toolName} returned malformed structured content: approval decision must be ${expectedDecision}.`);
   }
-  if (actionId !== requestedActionId) {
-    throw new Error(`${toolName} returned an Action ID mismatch: requested ${requestedActionId}, receipt ${actionId}.`);
+  const expectedHash = readHash(reviewValue, ["approvalRequest", "actionRef", "actionEnvelopeHash"]);
+  const receiptHash = readHash(value.approval, ["actionEnvelopeHash"]);
+  if (!expectedHash || !receiptHash) {
+    throw new Error(`${toolName} returned malformed structured content: approval Action Envelope hash is required.`);
+  }
+  if (expectedHash.alg !== receiptHash.alg || expectedHash.value !== receiptHash.value) {
+    throw new Error(`${toolName} returned an Action Envelope hash mismatch.`);
   }
   return value;
 }
@@ -147,6 +152,17 @@ function readActionId(value: unknown, path: string[]): string | undefined {
     current = current[key];
   }
   return typeof current === "string" && current.length > 0 ? current : undefined;
+}
+
+function readHash(value: unknown, path: string[]): { alg: string; value: string } | undefined {
+  let current = value;
+  for (const key of path) {
+    if (!isRecord(current)) return undefined;
+    current = current[key];
+  }
+  if (!isRecord(current) || typeof current.alg !== "string" || typeof current.value !== "string") return undefined;
+  if (current.alg.length === 0 || current.value.length === 0) return undefined;
+  return { alg: current.alg, value: current.value };
 }
 
 export function formatSignerResult(value: unknown): string {
