@@ -1,7 +1,7 @@
 ---
 name: mpas-maintainer
 description: Allow any combination of agents, humans, or software to approve MCP tool calls that you flag.  Prevent your agent from deleting your production database or violating compliance.  Use this skill for agents that APPROVE calls, not agents that propose calls.
-version: 1.0.0
+version: 1.0.2
 homepage: https://github.com/oma3dao/mpas
 metadata:
   openclaw:

@@ -1,7 +1,7 @@
 ---
 name: mpas-maintainer
 description: Review, approve, or reject MPAS authorization requests as an independent Signer or Maintainer.
-version: 1.0.0
+version: 1.0.2
 homepage: https://github.com/oma3dao/mpas
 ---
 

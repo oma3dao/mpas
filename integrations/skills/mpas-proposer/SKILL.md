@@ -1,7 +1,7 @@
 ---
 name: mpas-proposer
 description: Propose governed actions through MPAS-protected MCP bridges and track their authorization lifecycle with MCP Tasks.
-version: 1.0.0
+version: 1.0.2
 homepage: https://github.com/oma3dao/mpas
 ---
 

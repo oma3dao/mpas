@@ -120,9 +120,14 @@ To trigger: Actions → "ClawHub Skill Publish" → Run workflow.
 ## Versioning
 
 - New skills start at `1.0.0`.
+- The `version` field in the ClawHub SKILL.md frontmatter must match the
+  version already published on ClawHub. Before publishing an update, bump the
+  version here — ClawHub rejects re-publishing the same version.
 - The publish workflow auto-increments the patch version if you don't specify
   one. Use `--version` to set an explicit version for breaking changes.
 - ClawHub keeps all published versions; `latest` tag points to the newest.
+- The canonical skills in `../skills/` also have a `version` field — keep
+  them in sync or the ClawHub copies become the source of confusion.
 
 ## Files in this directory
 
