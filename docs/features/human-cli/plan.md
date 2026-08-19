@@ -22,7 +22,9 @@ approval mode in this feature.
 2. Compare the localhost and hosted SignerSet Coordination contracts and
    document any missing list/get/submit SDK operations.
 3. Define typed service inputs and outputs shared by the CLI and signer server.
-4. Add contract fixtures for pending, changed, expired, terminal, ineligible,
+4. Confirm the existing `.mpas` identity/key and Coordination configuration is
+   sufficient; do not create a parallel CLI profile.
+5. Add contract fixtures for pending, changed, expired, terminal, ineligible,
    and self-proposed Action Packages.
 
 Exit criterion: the CLI can be implemented without importing demo server or
@@ -40,8 +42,8 @@ Add an SDK-backed Maintainer service that:
 - builds approve/reject Approvals with `ApprovalBuilder`;
 - submits an Approval through `CoordinationClient`.
 
-Keep fetching and signing separate. The signing method accepts the fetched
-package plus its expected digest and fails if a refreshed package differs.
+Do not persist fetched packages. Evaluation retrieves one current review set,
+displays its digest, and signs that same in-memory envelope after confirmation.
 
 Tests:
 
@@ -52,14 +54,14 @@ Tests:
 - approve and reject Approval wire compatibility;
 - Coordination success, duplicate, conflict, and network failures.
 
-## Phase 2: Configuration and Key Safety
+## Phase 2: Existing Configuration and Key Safety
 
-1. Define a Maintainer CLI config schema and named-config resolution under
-   `~/.mpas`.
-2. Implement precedence for flags, CLI environment variables, config, and
-   defaults.
-3. Reuse the existing key parser; add public identity derivation and DID match
+1. Reuse the existing `.mpas` Maintainer identity/key and Coordination config;
+   add no CLI-specific profile or package cache.
+2. Reuse the existing key parser; add public identity derivation and DID match
    validation if absent.
+3. Keep signing in the signer server and add an unlock abstraction for
+   password-protected keys using an operator prompt, OS keychain, or key agent.
 4. Add POSIX ownership/type/mode checks and reject group- or world-readable
    private-key files. Document platform behavior where those checks are not
    available.
@@ -73,16 +75,16 @@ handling, unsafe modes, DID mismatch, and redaction.
 Add the command group and implement:
 
 ```text
-mpas action pending [--json] [--watch] [--interval <duration>]
+mpas action pending [--json]
 mpas action inspect <action-id> [--json]
 ```
 
 Build one normalized inspection model used by table, detailed terminal, and
-JSON renderers. Keep raw private/key data out of that model. Polling uses a
-bounded interval, network timeout, and clean SIGINT handling.
+JSON renderers. Keep raw private/key data out of that model. Each invocation
+performs one on-demand Coordination query; there is no periodic polling.
 
 Tests cover empty lists, multiple applications, Unicode/large arguments,
-redaction, stable JSON, polling cadence, transient failures, and interruption.
+redaction, stable JSON, transient failures, and interruption.
 
 Exit criterion: a human can find and fully inspect a hosted pending Action
 without any Coordination mutation.
@@ -92,33 +94,34 @@ without any Coordination mutation.
 Implement:
 
 ```text
-mpas action approve <action-id>
-mpas action reject <action-id> [--reason <text>]
+mpas action evaluate <action-id>
 ```
 
-For both commands:
+The command:
 
-1. fetch and validate the current package;
+1. asks the signer server to fetch and validate the current review set;
 2. render the normalized inspection view;
 3. show decision, Action ID, application, operation, and digest in the prompt;
-4. require an attached interactive terminal and explicit confirmation;
-5. refetch and revalidate immediately before signing;
-6. invalidate confirmation if the digest or relevant state changed;
-7. build and submit the Approval;
+4. require an attached interactive terminal and an explicit Approve, Reject,
+   or Cancel decision;
+5. bind the decision to the displayed Action ID and digest;
+6. have the signer server sign that exact in-memory envelope;
+7. submit it and fail on stale or terminal Coordination state;
 8. print the Coordination receipt and resulting state.
 
 Do not add `--yes` or accept confirmation from redirected stdin. Treat EOF,
 SIGINT, and negative input as no submission.
 
 Tests use an injectable prompt/terminal interface and cover affirmative,
-negative, EOF, interruption, non-TTY, package-change race, expiration race,
-duplicate Approval, and rejected submission.
+negative, EOF, interruption, non-TTY, stale-hash response, expiration race,
+duplicate Approval, rejected submission, and key-unlock failure.
 
 ## Phase 5: Signer-server Convergence
 
-Refactor the existing MCP signer server to call the shared Maintainer service
-for validation, hashing, Approval construction, and submission. Keep MCP tool
-schemas and transport concerns in the server layer.
+Refactor the existing MCP signer server to own the shared Maintainer service,
+private-key unlock, validation, hashing, Approval construction, and submission.
+Expose an evaluation operation for the human CLI; explicit approve/reject may
+remain internal service operations for non-interactive automation.
 
 Add parity tests proving that CLI and MCP paths produce equivalent signed
 Approval payloads for the same package, signer, and decision.
@@ -152,8 +155,9 @@ No test may print or commit private keys.
 
 - All acceptance criteria in [spec.md](./spec.md) pass.
 - SDK, CLI, signer-server parity, and end-to-end tests pass in CI.
-- The CLI signs only a freshly validated package whose digest matches the one
-  explicitly confirmed by the human.
+- The signer server signs only the freshly retrieved envelope whose digest was
+  displayed and explicitly confirmed; the CLI never possesses the private key
+  or retains the package.
 - Hosted SignerSet and localhost Coordination flows are documented and tested.
 - No private key material or application credential is exposed in output,
   fixtures, logs, or repository history.
