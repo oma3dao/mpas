@@ -7,9 +7,9 @@ Action System) governance flows over MCP.
 They are harness-agnostic. Any MCP-capable client (OpenClaw, Kiro, Claude Code,
 Codex CLI, Hermes, or any conforming implementation) can use them.
 
-Give each agent exactly one role. Paste the matching prime-directive preamble
-from [`examples/demo/guides/setup-macos.md`](../../examples/demo/guides/setup-macos.md)
-§3.1 into that agent's always-on instruction file (`AGENTS.md`, `CLAUDE.md`,
+Give each agent exactly one role. Each SKILL.md includes the matching
+prime-directive preamble and setup instructions at the top — follow those to
+configure your agent's always-on instruction file (`AGENTS.md`, `CLAUDE.md`,
 or equivalent). Do not combine both roles in one agent.
 
 ## Skills
@@ -41,9 +41,11 @@ Install one depending on the agent's role.
 How you install depends on your agent harness:
 
 - **Skill systems** (Kiro, OpenClaw) — install the skill directory directly.
-- **Instruction files** (Claude Code, Codex CLI, Hermes) — paste the SKILL.md
-  content into your agent's instruction file after a role preamble (see the
-  [setup guide](../../examples/demo/guides/setup-macos.md#31-agent-role-instructions-any-harness)).
+  Then follow the "Setup: always-on preamble" section at the top of the
+  SKILL.md to configure your instruction file.
+- **Instruction files** (Claude Code, Codex CLI, Hermes) — paste the preamble
+  from the top of the SKILL.md into your always-on instruction file, then
+  paste the rest of the SKILL.md body after it.
 
 ## Links
 
