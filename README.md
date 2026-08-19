@@ -2,7 +2,7 @@
 
 > [!WARNING]
 > **Experimental alpha.** MPAS is not production-ready or independently
-> audited. Breaking changes are expected. The current reference application is
+> audited. Breaking changes are expected. The current reference integration is
 > GitHub; other integrations are planned.
 
 Canonical repository for the MPAS (Multi-Party Action Security) standard and reference implementation.
@@ -83,7 +83,7 @@ This repository is the OMA3-owned home of the MPAS standard:
 - **Specifications** — the MPAS protocol documents (core, profiles, schemas)
 - **SDK** — `@oma3/mpas` protocol library (types, verification, policy engine, receipts, proposer primitives, protocol clients)
 - **Bridge generator** — development-time tool that generates a static MCP bridge (and plugin scaffold) from a running MCP server
-- **Example implementation** — a working implementation demonstrating the full MPAS flow (propose → approve → dispatch)
+- **Reference implementation** — a runnable implementation of the full MPAS flow (propose → review/approve → dispatch), including operator services, signer tooling, and a human Maintainer CLI
 - **Application registry** — per-application descriptors referencing known implementations
 - **Conformance model** — the conformance roles and test model (official test tools planned; see `conformance/`)
 - **Documentation** — developer guides, architecture docs, and website content
@@ -91,11 +91,15 @@ This repository is the OMA3-owned home of the MPAS standard:
 
 ## What This Repository Does Not Contain
 
-- Production implementations (these belong to implementation providers)
+- A vendor-supported production distribution or hosted operations bundle
 - Production bridges or plugins
-- Anything beyond the example path demonstrating the full MPAS protocol flow
+- A guarantee that the reference implementation is production-hardened or
+  independently audited
 
-The example credential adapter uses a JSON policy format as a pragmatic choice for demonstration. Production implementations may use OPA, Cedar, or any other policy engine that satisfies the MPAS specification requirements.
+The reference credential adapter uses a JSON policy format as a pragmatic,
+fully runnable implementation choice. Production implementations may use OPA,
+Cedar, or any other policy engine that satisfies the MPAS specification
+requirements.
 
 Production implementations are maintained independently — reference implementations live in `oma3/mpas-applications`, and third-party or vendor implementations live in their publishers' repositories. The application registry in this repo is the index that points to all of them. This split is deliberate: this repository is the normative home (specifications, SDK, conformance, registry, teaching examples); implementations people deploy in production live elsewhere.
 
@@ -133,14 +137,14 @@ sdk/
                                 policy engine, receipts, proposer primitives,
                                 protocol clients)
 examples/
-  demo/                         Reference implementation of the full MPAS flow
+  demo/                         Runnable reference implementation of the full MPAS flow
     src/
       adapter/                  Credential Adapter daemon (Fastify HTTP server)
       coordination/             Coordination Service (in-memory, Fastify)
       signer-server/            MPAS Signer MCP Server (standalone, per-agent)
       core/                     Re-exports from @oma3/mpas (thin barrel files)
-      cli/                      CLI commands (daemon management, trace inspection)
-    tests/                      270+ tests (unit, integration, e2e)
+      cli/                      Operator commands and human Maintainer review CLI
+    tests/                      330+ tests (unit, integration, e2e)
 application-registry/
   *.json                        One JSON file per application
 conformance/
@@ -160,6 +164,7 @@ Each example in `examples/` is self-contained with its own build tooling. The de
 - Specifications: `specs/`
 - Feature documentation: `docs/features/`
 - Demo setup guide: `examples/demo/guides/`
+- Human Maintainer CLI: [`examples/demo/guides/maintainer.md`](examples/demo/guides/maintainer.md#human-maintainer-cli)
 - Agent skills: `integrations/skills/`
 - Credential Adapter operator guide: [`examples/demo/guides/credential-adapter.md`](examples/demo/guides/credential-adapter.md)
 - Application registry: `application-registry/`

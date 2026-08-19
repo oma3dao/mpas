@@ -7,7 +7,7 @@ propose actions itself.
 
 This guide covers everything a maintainer account needs: generating a signing
 key, sending the DID to the adapter operator, configuring the signer server,
-and connecting to an agent harness.
+and reviewing actions either from the human CLI or an agent harness.
 
 For the full single-machine demo walkthrough, see the
 [macOS demo setup guide](setup-macos.md).
@@ -81,7 +81,65 @@ directly and holds no application credentials.
 
 ---
 
-## 4. Register the signer server in your agent harness
+## 4. Human Maintainer CLI
+
+The human CLI is the simplest way to review actions without an agent harness.
+It starts the existing signer server over stdio and calls the same MCP tools an
+agent Maintainer uses. It does not read the signing key, call Coordination
+directly, cache Action Packages, or implement a second approval path.
+
+Build the reference implementation, then use the signer config created above:
+
+```sh
+cd "$HOME/Projects/mpas/examples/demo"
+npm run build
+
+node dist/cli/index.js action pending \
+  --config "$MPAS_HOME/mcp-server-configs/maintainer-signer-config.json"
+```
+
+The commands are:
+
+```text
+mpas action pending                     List pending approval requests
+mpas action inspect <action-id>         Fetch and print one review set; read-only
+mpas action review <action-id>          Print the review set and prompt Approve/Reject/Cancel
+```
+
+If the package has been linked as the `mpas` executable, use `mpas` directly.
+Otherwise substitute `node dist/cli/index.js` as shown above. The default signer
+config path is `~/.mpas/mcp-server-configs/maintainer-signer-config.json`, so
+`--config` can be omitted when that standard filename is used.
+
+Example interactive review:
+
+```sh
+mpas action review urn:uuid:REPLACE_WITH_ACTION_ID
+```
+
+The CLI first invokes `mpas_review_action` and prints the complete structured
+review result. It then warns that a decision will be signed and asks:
+
+```text
+Decision [a]pprove, [r]eject, [c]ancel:
+```
+
+- Approve invokes `mpas_approve` with the Action ID.
+- Reject invokes `mpas_reject` with the Action ID.
+- Cancel, empty input, EOF, or interruption submits nothing.
+
+`action review` requires an interactive terminal. `pending`, `inspect`, and
+decision receipts print the signer tool's structured response as readable JSON
+by default. The signer server controls which fields it returns and is
+responsible for redaction; the CLI does not apply an additional filter.
+
+Approving an action authorizes the Credential Adapter to execute it. Always
+check the target application, operation, resources, exact arguments, proposer,
+expiry, and Action Envelope digest shown by the review result.
+
+---
+
+## 5. Register the signer server in your agent harness
 
 Register the signer server as an MCP server. The maintainer account should only
 register the signer server — do not add any proposer bridge to this account.
@@ -152,7 +210,7 @@ Restart Claude Desktop after saving.
 
 ---
 
-## 5. Add role instructions to your agent
+## 6. Add role instructions to your agent
 
 Paste the maintainer preamble from the
 [macOS demo setup guide](setup-macos.md) §3.1 into the instruction file your
@@ -162,7 +220,7 @@ harness always loads (`AGENTS.md`, `CLAUDE.md`, or equivalent). Copy
 
 ---
 
-## 6. Verify
+## 7. Verify
 
 Confirm the signer server tools are visible and the coordination service is
 reachable. In your agent session, ask:
@@ -181,7 +239,7 @@ can reach the coordination service.
 
 ---
 
-## Your approval workflow
+## Agent approval workflow
 
 When a proposer submits a governed action that requires approval, you will be
 notified with an Action ID. Your workflow:
