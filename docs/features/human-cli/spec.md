@@ -13,9 +13,8 @@
 ## 1. Purpose
 
 Provide a first-class command-line workflow for a human Maintainer to discover,
-inspect, and evaluate MPAS Actions without running an agent harness. The CLI is
-a human interface to the existing signer server, which continues to own the
-Maintainer key and perform signatures.
+inspect, and review MPAS Actions without running an agent harness. The CLI is
+an interactive client for the existing signer-server MCP tools.
 
 The CLI uses the same MPAS Coordination Service, Maintainer identity, signing
 key, wire formats, and authorization rules as existing automated Maintainers.
@@ -37,10 +36,10 @@ Envelope supplied by Coordination.
 1. List pending Action Packages that the configured Maintainer is eligible to
    review.
 2. Inspect an Action Package without signing or changing remote state.
-3. Evaluate an Action and choose approve or reject after explicit confirmation.
-4. Have the signer server sign the exact canonical Action Envelope most
-   recently retrieved from Coordination.
-5. Reuse SDK protocol, canonicalization, signing, and Coordination client code.
+3. Review an Action and choose approve or reject after explicit confirmation.
+4. Reuse the same `mpas_review_action`, `mpas_approve`, and `mpas_reject` tool
+   calls used by agent Maintainers.
+5. Add no alternate signing or Coordination implementation to the CLI.
 6. Provide safe defaults, actionable errors, and scriptable read-only output.
 
 ## 4. Non-goals
@@ -60,7 +59,7 @@ The commands are exposed under the existing `mpas` executable:
 ```text
 mpas action pending
 mpas action inspect <action-id>
-mpas action evaluate <action-id>
+mpas action review <action-id>
 ```
 
 Short aliases may be added later, but documentation and stable automation use
@@ -89,52 +88,33 @@ Fetches one Action Package and displays:
 
 Inspection never creates an Approval.
 
-### 5.3 `action evaluate`
+### 5.3 `action review`
 
-Asks the signer server to fetch and validate the current review set, prints the
-complete material and envelope digest that will be signed, and prompts the
-human to choose Approve, Reject, or Cancel. The signer server signs that exact
-retrieved envelope with the selected decision and submits it to Coordination.
-A rejection reason is recorded when supported.
+Calls `mpas_review_action`, prints the complete returned review material, and
+prompts the human to choose Approve, Reject, or Cancel. Approve calls the
+existing `mpas_approve` tool; Reject calls `mpas_reject`; Cancel makes no tool
+call. A rejection reason is passed when the tool supports one.
 
 ## 6. Configuration
 
-The CLI reuses the Maintainer's existing `.mpas` files and signer-server
+The CLI uses the existing signer-server MCP registration and `.mpas`
 configuration. It introduces no second profile, per-application configuration,
-package cache, or approval database. The signer server needs only the existing
-Maintainer identity/key material and Coordination Service URL.
-
-The CLI MUST NOT read or print private key material. The signer server owns key
-loading, DID checks, file-permission checks, and unlocking. Password-protected
-keys are unlocked by the signer server through an operator prompt, OS keychain,
-or equivalent key agent; passwords are never command arguments or tool output.
+package cache, approval database, key setting, or Coordination setting.
 
 ## 7. Approval Safety Model
 
 ### 7.1 Exact package binding
 
-The CLI and signer server MUST NOT retain an Action Package between commands.
-Each invocation retrieves the latest review set. The signer server passes its
-Action Envelope directly to the SDK Approval builder and MUST NOT reconstruct
-the signed object from the human-readable rendering.
-
-Before signing, the signer server MUST:
-
-1. fetch the current package;
-2. validate its schema and signatures as required by the MPAS profile;
-3. canonicalize and hash the Action Envelope using the SDK implementation;
-4. confirm that the displayed digest equals the digest being signed;
-5. confirm that the Action has not expired;
-6. confirm Maintainer eligibility and reject self-approval;
-7. obtain explicit confirmation for that Action ID, decision, and digest.
-
-The display and decision use one freshly retrieved in-memory review set. The
-signer signs only the displayed digest. A stale hash, expiry, or non-pending
-Coordination response fails closed and requires a new evaluation.
+The CLI retains no Action Package between commands. `inspect` and `review`
+always call `mpas_review_action` and render the returned review set. After the
+human confirms the displayed Action ID and decision, the CLI calls exactly one
+existing decision tool with that Action ID. All retrieval, validation,
+eligibility, signing, freshness, and submission behavior remains the signer
+server's existing responsibility and is not reimplemented by the CLI.
 
 ### 7.2 Interactive confirmation
 
-Evaluation is interactive. The prompt states the Action ID, application,
+Review is interactive. The prompt states the Action ID, application,
 operation, and digest and offers Approve, Reject, or Cancel. Empty input, EOF,
 or an interrupted terminal means no decision is submitted.
 
@@ -154,41 +134,36 @@ and private key fields are always redacted. Read-only commands support JSON.
 Mutating commands return a concise Coordination receipt containing the Action
 ID, decision, signer DID, and resulting workflow state when available.
 
-The CLI uses nonzero exit codes for invalid configuration, unsafe key
-permissions, identity mismatch, ineligible signer, malformed or changed
-package, expiration, declined confirmation, network failure, and Coordination
-rejection. Errors distinguish retryable connectivity failures from permanent
-authorization failures.
+The CLI uses nonzero exit codes for unavailable signer tools, invalid tool
+responses, declined confirmation, tool-call failure, and signer-server errors.
+It preserves the server's retryable versus permanent failure distinction.
 
 ## 9. Architecture
 
-Protocol behavior lives in reusable SDK modules:
+The CLI is an MCP client adapter over the existing signer-server tools:
 
-- Coordination client operations for listing and retrieving pending packages
-  and submitting Approvals;
-- Action Package validation and canonical hashing;
-- key loading and DID consistency checks;
-- `ApprovalBuilder` signing for `approve` and `reject` decisions.
+- `pending` calls `mpas_list_pending`;
+- `inspect` and `review` call `mpas_review_action`;
+- a confirmed review calls `mpas_approve` or `mpas_reject`.
 
-The CLI layer owns argument parsing, terminal rendering, the interactive
-decision prompt, redaction, and exit-code mapping. It never possesses the
-private key. The signer server owns fresh retrieval, key unlocking, validation,
-signing, and submission.
+The CLI owns argument parsing, terminal rendering, the interactive prompt,
+redaction, and exit-code mapping. It does not import signer SDK internals,
+access key material, call Coordination directly, or change the signer server.
 
 ## 10. Acceptance Criteria
 
 - A configured human Maintainer can list and inspect eligible pending Actions.
 - Inspect performs no remote mutation.
-- Evaluate shows the complete fresh review view and requires an explicit
+- Review shows the complete fresh review view and requires an explicit
   approve/reject/cancel decision.
-- The signed Approval binds to the exact canonical Action Envelope and digest
-  shown to the user.
-- Changed, expired, malformed, ineligible, and self-proposed Actions fail
-  closed without submitting an Approval.
+- The CLI displays the `mpas_review_action` result before making a decision
+  tool call for the same Action ID.
+- Signer-server rejections and terminal states are reported without being
+  rewritten as CLI success.
 - Existing `.mpas` configuration is sufficient and the CLI retains no package.
-- Unsafe key permissions, unlock failures, and DID/key mismatches block signing.
-- Approval submission interoperates with both the reference Coordination
-  Service and hosted SignerSet service.
-- Unit and integration tests cover canonical integrity, confirmation,
-  redaction, expiry/change races, identity checks, and Coordination responses.
+- The CLI uses the same signer tool calls as Marvin and other agent Maintainers.
+- Tool-client integration works with the existing signer server used against
+  both reference Coordination and hosted SignerSet.
+- Unit and integration tests cover tool discovery, result rendering,
+  confirmation, redaction, cancellation, and tool-call failures.
 - Setup and command usage are documented for a human Maintainer.
