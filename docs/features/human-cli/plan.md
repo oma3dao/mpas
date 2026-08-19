@@ -157,4 +157,3 @@ No test may print or commit private keys.
 - Hosted SignerSet and localhost Coordination flows are documented and tested.
 - No private key material or application credential is exposed in output,
   fixtures, logs, or repository history.
-

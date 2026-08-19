@@ -203,4 +203,3 @@ interfaces produce equivalent Approvals.
 - Unit and integration tests cover canonical integrity, confirmation,
   redaction, expiry/change races, identity checks, and Coordination responses.
 - Setup and command usage are documented for a human Maintainer.
-
