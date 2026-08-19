@@ -22,6 +22,15 @@ import {
   fileOAuthOperatorService,
   resolveOAuthApplication,
 } from "../adapter/oauth-operator.js";
+import {
+  assertSignerTools,
+  createSignerToolClient,
+  formatSignerResult,
+  promptReviewDecision,
+  toolResultValue,
+  type ReviewDecision,
+  type SignerToolClient,
+} from "./signer-tools.js";
 
 export interface CliIo {
   stdout: Pick<typeof process.stdout, "write">;
@@ -52,11 +61,15 @@ interface ParsedOptions {
   value?: string;
   applicationDid?: string;
   noBrowser?: boolean;
+  signerConfigPath?: string;
+  json?: boolean;
 }
 
 export interface CliDependencies {
   oauthOperator?: OAuthOperatorService;
   resolveOAuthDeployment?: ResolveOAuthDeployment;
+  signerToolClient?: SignerToolClient;
+  promptReviewDecision?: () => Promise<ReviewDecision>;
 }
 
 const defaultIo: CliIo = {
@@ -158,6 +171,14 @@ export async function runCli(
       });
       io.stdout.write(`${JSON.stringify(response, null, 2)}\n`);
       return { exitCode: 0 };
+    }
+
+    if (domain === "action" && ["pending", "inspect", "review"].includes(command ?? "")) {
+      if ((command === "inspect" || command === "review") && !subject) {
+        io.stderr.write(`mpas action ${command} requires <action-id>\n`);
+        return { exitCode: 2 };
+      }
+      return await runMaintainerAction(command as "pending" | "inspect" | "review", subject, options, io, dependencies);
     }
 
     if (domain === "plugin" && command === "install" && subject) {
@@ -672,6 +693,10 @@ function parseArgs(args: string[]): { positionals: string[]; options: ParsedOpti
       options.applicationDid = args[++index];
     } else if (arg === "--no-browser") {
       options.noBrowser = true;
+    } else if (arg === "--config") {
+      options.signerConfigPath = args[++index];
+    } else if (arg === "--json") {
+      options.json = true;
     } else {
       positionals.push(arg);
     }
@@ -691,6 +716,9 @@ function usage(): string {
     "  mpas daemon status [--config-dir <dir>] [--host <host>] [--port <port>]",
     `  mpas coordination start [--host <host>] [--port <port>] [--trace <file>] ${coordinationAuthFlags}`,
     "  mpas signer-server start --config <path>",
+    "  mpas action pending [--config <signer-config>] [--json]",
+    "  mpas action inspect <action-id> [--config <signer-config>] [--json]",
+    "  mpas action review <action-id> [--config <signer-config>]",
     "  mpas key generate <name> [--key-dir <dir>]",
     "  mpas test submit <file> [--url <adapter-url>]",
     "  mpas test dry-run <file> [--config-dir <dir>]",
@@ -704,6 +732,46 @@ function usage(): string {
     "  mpas config validate <name> [--config-dir <dir>] [--credential-dir <dir>]",
     "  mpas trace inspect <file>",
   ].join("\n");
+}
+
+async function runMaintainerAction(
+  command: "pending" | "inspect" | "review",
+  actionId: string | undefined,
+  options: ParsedOptions,
+  io: CliIo,
+  dependencies: CliDependencies,
+): Promise<CliResult> {
+  const client = dependencies.signerToolClient ?? createSignerToolClient(options.signerConfigPath);
+  try {
+    await client.connect();
+    await assertSignerTools(client);
+
+    if (command === "pending") {
+      const result = await client.callTool("mpas_list_pending", {});
+      io.stdout.write(formatSignerResult(toolResultValue(result)));
+      return { exitCode: 0 };
+    }
+
+    const review = await client.callTool("mpas_review_action", { actionId });
+    const reviewValue = toolResultValue(review);
+    io.stdout.write(formatSignerResult(reviewValue));
+    if (command === "inspect") return { exitCode: 0 };
+
+    io.stdout.write(`\nReviewing Action ID: ${actionId}\n`);
+    io.stdout.write("Approving or rejecting will submit a signed MPAS decision.\n");
+    const decision = await (dependencies.promptReviewDecision ?? promptReviewDecision)();
+    if (decision === "cancel") {
+      io.stdout.write("No decision submitted.\n");
+      return { exitCode: 0 };
+    }
+
+    const toolName = decision === "approve" ? "mpas_approve" : "mpas_reject";
+    const result = await client.callTool(toolName, { actionId });
+    io.stdout.write(formatSignerResult(toolResultValue(result)));
+    return { exitCode: 0 };
+  } finally {
+    await client.close();
+  }
 }
 
 function coordinationAuthOptions(options: ParsedOptions): CoordinationAuthOptions {

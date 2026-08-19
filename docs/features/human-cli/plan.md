@@ -6,6 +6,8 @@
 
 **Created:** 2026-08-18
 
+**Status:** Implemented on `feat/human-maintainer-cli`
+
 ---
 
 ## Scope and Constraints
