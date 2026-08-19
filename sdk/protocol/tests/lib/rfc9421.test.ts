@@ -306,7 +306,63 @@ describe("MPAS RFC 9421", () => {
     expect(isValidMpasAudienceOrigin("https://example.com")).toBe(true);
     expect(isValidMpasAudienceOrigin("https://example.com/path")).toBe(false);
     expect(isValidMpasAudienceOrigin("https://example.com/")).toBe(false);
+    expect(isValidMpasAudienceOrigin("https://user:pass@example.com")).toBe(false);
     expect(() => deriveMpasAudience("file:///tmp/coordination")).toThrow("http or https");
+  });
+
+  it("rejects invalid signing lifetimes and expires windows", async () => {
+    const signer = await fixtureSigner("proposer");
+    const body = requestBody(signer.did);
+    const base = { method: "POST", path, body, signer };
+
+    await expect(signMpasRfc9421({ ...base, lifetimeSeconds: 0 })).rejects.toThrow(/integer from 1 to 60/);
+    await expect(signMpasRfc9421({ ...base, lifetimeSeconds: 61 })).rejects.toThrow(/integer from 1 to 60/);
+    await expect(signMpasRfc9421({
+      ...base,
+      created: now,
+      expires: now,
+    })).rejects.toThrow(/expires must be after created/);
+  });
+
+  it("treats a non-JSON body as an invalid audience after digest verification", async () => {
+    const signer = await fixtureSigner("proposer");
+    const body = Buffer.from("not-json");
+    const headers = await signMpasRfc9421({
+      method: "POST",
+      path,
+      body,
+      signer,
+      created: new Date(now.getTime() - 10_000),
+      expires: new Date(now.getTime() + 50_000),
+    });
+
+    await expect(verify(headers, body)).resolves.toMatchObject({
+      ok: false,
+      reason: "audience_invalid",
+    });
+  });
+
+  it("throws on an invalid verification policy instead of failing closed as auth", async () => {
+    const signer = await fixtureSigner("proposer");
+    const body = requestBody(signer.did);
+    const headers = await signMpasRfc9421({
+      method: "POST",
+      path,
+      body,
+      signer,
+      created: new Date(now.getTime() - 10_000),
+      expires: new Date(now.getTime() + 50_000),
+    });
+
+    await expect(verifyMpasRfc9421({
+      method: "POST",
+      path,
+      headers,
+      body,
+      audiences: [audience],
+      now,
+      maxLifetimeSeconds: 0,
+    })).rejects.toThrow("Invalid RFC 9421 verification policy.");
   });
 
   it("keeps nonce claims atomic and retained through expiry", async () => {

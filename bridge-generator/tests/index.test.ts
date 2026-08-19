@@ -27,3 +27,22 @@ describe("low-level bridge generation", () => {
     expect(tools.map((tool) => tool.name)).toEqual(["create_issue", "delete_branch", "merge_pull_request"]);
   });
 });
+
+describe("CLI usage errors", () => {
+  it.each([
+    [[], "Missing required --output-bridge"],
+    [["--output-bridge", "bridge.ts"], "Missing upstream command after --."],
+    [["--unknown", "x", "--", "node", "server"], "Unknown argument: --unknown"],
+    [["--prompt-secret", "--", "node", "server"], "Missing value for --prompt-secret"],
+  ])("rejects %j", async (argv, message) => {
+    await expect(run(argv)).rejects.toThrow(message);
+  });
+
+  it("rejects missing generate flags", async () => {
+    await expect(run(["generate", "--app", "demo"])).rejects.toThrow("Missing required --out");
+    await expect(run(["generate", "--out", "out"])).rejects.toThrow("Missing required --app");
+    await expect(run(["generate", "--app", "demo", "--out", "out"])).rejects.toThrow(
+      "Missing upstream command after --.",
+    );
+  });
+});
