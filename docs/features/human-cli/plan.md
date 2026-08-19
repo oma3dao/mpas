@@ -20,7 +20,8 @@ Do not introduce an unattended approval mode in this feature.
 
 1. Record the schemas of `mpas_list_pending`, `mpas_review_action`,
    `mpas_approve`, and `mpas_reject`.
-2. Define a small typed MCP client adapter for those existing tools.
+2. Define a small typed MCP client adapter with minimum structured-response
+   validation for those existing tools.
 3. Confirm the existing signer-server registration and `.mpas` configuration
    are sufficient; do not create a parallel CLI profile.
 4. Add tool-response fixtures for pending, terminal, malformed, and failed
@@ -31,8 +32,9 @@ Exit criterion: the CLI needs no signer SDK or direct Coordination dependency.
 ## Phase 1: Signer Tool Client
 
 Add an MCP client adapter that invokes the four existing signer tools and
-normalizes their structured results for terminal rendering. Do not persist
-review sets or implement validation, hashing, signing, or submission.
+validates the minimum structured shape needed for raw JSON rendering. Do not
+persist review sets or implement cryptographic validation, hashing, signing,
+eligibility, or submission.
 
 Tests:
 
@@ -45,29 +47,29 @@ Tests:
 
 1. Reuse the existing signer-server MCP registration and `.mpas` files.
 2. Add no CLI-specific identity, key, Coordination, or package-cache settings.
-3. Centralize redaction for tool errors and JSON serialization.
+3. Preserve signer-server stderr diagnostics while keeping MCP stdout isolated.
 
-Tests cover missing signer-server registration, unavailable tools, and
-redaction. Key and signer configuration remain covered by signer-server tests.
+Tests cover missing signer configuration, unavailable tools, and visible
+startup/configuration diagnostics. Redaction remains a signer-server concern.
 
 ## Phase 3: Read-only Commands
 
 Add the command group and implement:
 
 ```text
-mpas action pending [--json]
-mpas action inspect <action-id> [--json]
+mpas action pending
+mpas action inspect <action-id>
 ```
 
-Build one normalized inspection model used by table, detailed terminal, and
-JSON renderers. Keep raw private/key data out of that model. Each invocation
-performs one on-demand Coordination query; there is no periodic polling.
+Print each signer tool's structured result as readable JSON by default. Do not
+add a normalized output model, table renderer, or CLI redaction layer. Each
+invocation performs one on-demand query; there is no periodic polling.
 
-Tests cover empty lists, multiple applications, Unicode/large arguments,
-redaction, stable JSON, transient failures, and interruption.
+Tests cover empty lists, malformed structured results, tool errors, and
+interruption.
 
-Exit criterion: a human can find and fully inspect a hosted pending Action
-without any Coordination mutation.
+Exit criterion: a human can find and fully inspect a pending Action without any
+Coordination mutation.
 
 ## Phase 4: Interactive Decisions
 
@@ -80,8 +82,8 @@ mpas action review <action-id>
 The command:
 
 1. calls `mpas_review_action` for the Action ID;
-2. render the normalized inspection view;
-3. show decision, Action ID, application, operation, and digest in the prompt;
+2. validate matching Action IDs and render the raw structured review JSON;
+3. show the Action ID in the prompt immediately after that JSON;
 4. require an attached interactive terminal and an explicit Approve, Reject,
    or Cancel decision;
 5. call `mpas_approve` or `mpas_reject` with the displayed Action ID;
@@ -99,17 +101,12 @@ malformed tool responses.
 Do not modify the signer server. Add compatibility tests proving the CLI uses
 the same tool names, schemas, and decision calls as an agent Maintainer.
 
-## Phase 6: End-to-end Verification
+## Phase 6: Integration Verification
 
-Run two end-to-end suites:
-
-1. reference localhost Coordination Service with generated test identities;
-2. hosted SignerSet staging/test environment with HTTP authentication enabled.
-
-Verify pending -> inspect -> review/approve -> proposer execution and pending ->
-review/reject -> terminal rejection through the existing signer tools. Also
-verify cancellation, unavailable tools, malformed results, and signer-server
-error propagation.
+Exercise the real CLI MCP client against the real signer server over stdio and
+a local Coordination fixture. Verify cancellation, unavailable tools, malformed
+results, signer diagnostics, and signer-server error propagation. Hosted
+SignerSet and full proposer-to-execution end-to-end behavior are separate work.
 
 No test may print or commit private keys.
 
@@ -119,17 +116,13 @@ No test may print or commit private keys.
    registration, plus command examples and troubleshooting.
 2. Document the exact approval security model and the absence of unattended
    signing.
-3. Add shell completion entries for the command group without completing
-   secrets or private paths.
-4. Add release notes and confirm package/executable installation paths.
-5. Link the implementation PR and final command names from issue #50.
+3. Link the implementation PR and final command names from issue #50.
 
 ## Definition of Done
 
 - All acceptance criteria in [spec.md](./spec.md) pass.
-- CLI tool-client and end-to-end tests pass in CI.
+- CLI tool-client and real-stdio integration tests pass in CI.
 - The CLI calls existing signer tools, never possesses the private key, and
   retains no Action Package.
-- Hosted SignerSet and localhost Coordination flows are documented and tested.
-- No private key material or application credential is exposed in output,
-  fixtures, logs, or repository history.
+- The CLI documents that signer responses are emitted as readable JSON and that
+  the signer server owns response redaction.

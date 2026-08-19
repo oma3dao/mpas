@@ -128,9 +128,10 @@ Decision [a]pprove, [r]eject, [c]ancel:
 - Reject invokes `mpas_reject` with the Action ID.
 - Cancel, empty input, EOF, or interruption submits nothing.
 
-`action review` requires an interactive terminal. `pending` and `inspect` are
-safe read-only commands and may be used in scripts; add `--json` for stable
-structured output.
+`action review` requires an interactive terminal. `pending`, `inspect`, and
+decision receipts print the signer tool's structured response as readable JSON
+by default. The signer server controls which fields it returns and is
+responsible for redaction; the CLI does not apply an additional filter.
 
 Approving an action authorizes the Credential Adapter to execute it. Always
 check the target application, operation, resources, exact arguments, proposer,

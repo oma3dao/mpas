@@ -1,7 +1,14 @@
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import { describe, expect, it } from "vitest";
+import { createServer } from "node:http";
+import { mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { describe, expect, it, vi } from "vitest";
 import { runCli } from "../../src/cli/index.js";
-import { signerToolNames, type SignerToolClient, type SignerToolName } from "../../src/cli/signer-tools.js";
+import { createSignerToolClient, signerToolNames, type SignerToolClient, type SignerToolName } from "../../src/cli/signer-tools.js";
+
+const demoRoot = fileURLToPath(new URL("../../", import.meta.url));
 
 class MemoryWriter {
   text = "";
@@ -34,6 +41,17 @@ function result(structuredContent: Record<string, unknown>): CallToolResult {
   return { content: [{ type: "text", text: "ok" }], structuredContent };
 }
 
+function reviewResult(actionId: string): CallToolResult {
+  return result({
+    approvalRequest: { actionRef: { actionId: { value: actionId } } },
+    reviewSet: { actionEnvelope: { actionId: { value: actionId } }, executionPayload: { name: "delete_branch" } },
+  });
+}
+
+function decisionResult(actionId: string, decision: "approve" | "reject"): CallToolResult {
+  return result({ approval: { actionId: { value: actionId }, decision } });
+}
+
 function io() {
   return { stdout: new MemoryWriter(), stderr: new MemoryWriter() };
 }
@@ -55,7 +73,7 @@ describe("human Maintainer action CLI", () => {
 
   it("inspects an action without making a decision call", async () => {
     const client = new FakeSignerClient({
-      mpas_review_action: result({ reviewSet: { operation: "delete_branch", digest: "sha256:abc" } }),
+      mpas_review_action: reviewResult("action-2"),
     });
     const output = io();
 
@@ -71,8 +89,8 @@ describe("human Maintainer action CLI", () => {
     ["reject", "mpas_reject"],
   ] as const)("reviews and submits an explicit %s decision", async (decision, expectedTool) => {
     const client = new FakeSignerClient({
-      mpas_review_action: result({ reviewSet: { actionId: "action-3", digest: "sha256:def" } }),
-      [expectedTool]: result({ accepted: true, decision }),
+      mpas_review_action: reviewResult("action-3"),
+      [expectedTool]: decisionResult("action-3", decision),
     });
     const output = io();
 
@@ -90,7 +108,7 @@ describe("human Maintainer action CLI", () => {
   });
 
   it("cancels review without calling approve or reject", async () => {
-    const client = new FakeSignerClient();
+    const client = new FakeSignerClient({ mpas_review_action: reviewResult("action-4") });
     const output = io();
 
     const response = await runCli(["action", "review", "action-4"], output, {
@@ -120,5 +138,107 @@ describe("human Maintainer action CLI", () => {
     const response = await runCli(["action", "review"], output);
     expect(response.exitCode).toBe(2);
     expect(output.stderr.text).toContain("requires <action-id>");
+  });
+
+  it.each([
+    ["missing structured content", { content: [{ type: "text", text: "looks fine" }] } as CallToolResult],
+    ["malformed structured content", result({ reviewSet: "invalid" })],
+    ["mismatched approval request", result({
+      approvalRequest: { actionRef: { actionId: { value: "other" } } },
+      reviewSet: { actionEnvelope: { actionId: { value: "action-5" } } },
+    })],
+    ["mismatched review set", result({
+      approvalRequest: { actionRef: { actionId: { value: "action-5" } } },
+      reviewSet: { actionEnvelope: { actionId: { value: "other" } } },
+    })],
+  ])("fails closed on %s and never prompts or decides", async (_label, response) => {
+    const client = new FakeSignerClient({ mpas_review_action: response });
+    const prompt = vi.fn(async () => "approve" as const);
+    const output = io();
+
+    const cliResult = await runCli(["action", "review", "action-5"], output, {
+      signerToolClient: client,
+      promptReviewDecision: prompt,
+    });
+
+    expect(cliResult.exitCode).toBe(1);
+    expect(prompt).not.toHaveBeenCalled();
+    expect(client.calls).toEqual([{ name: "mpas_review_action", args: { actionId: "action-5" } }]);
+    expect(output.stderr.text).toMatch(/structured content|Action ID mismatch/);
+  });
+
+  it("rejects --config without a value before using the default", async () => {
+    const client = new FakeSignerClient();
+    const output = io();
+    const response = await runCli(["action", "pending", "--config"], output, { signerToolClient: client });
+    expect(response.exitCode).toBe(2);
+    expect(output.stderr.text).toContain("--config requires a value");
+    expect(client.connected).toBe(false);
+  });
+
+  it("omitting --config retains default behavior", async () => {
+    const client = new FakeSignerClient({ mpas_list_pending: result({ approvalRequests: [] }) });
+    const response = await runCli(["action", "pending"], io(), { signerToolClient: client });
+    expect(response.exitCode).toBe(0);
+    expect(client.connected).toBe(true);
+  });
+
+  it("returns nonzero for signer tool errors", async () => {
+    const client = new FakeSignerClient({
+      mpas_list_pending: { isError: true, content: [{ type: "text", text: "signer failed" }] },
+    });
+    const output = io();
+    const response = await runCli(["action", "pending"], output, { signerToolClient: client });
+    expect(response.exitCode).toBe(1);
+    expect(output.stderr.text).toContain("signer failed");
+  });
+
+  it.each(["non-TTY", "EOF", "interruption"])("makes no decision call after %s prompt failure", async (reason) => {
+    const client = new FakeSignerClient({ mpas_review_action: reviewResult("action-6") });
+    const response = await runCli(["action", "review", "action-6"], io(), {
+      signerToolClient: client,
+      promptReviewDecision: async () => { throw new Error(reason); },
+    });
+    expect(response.exitCode).toBe(1);
+    expect(client.calls).toEqual([{ name: "mpas_review_action", args: { actionId: "action-6" } }]);
+  });
+
+  it("uses the real MCP client against the real stdio signer server", async () => {
+    const server = createServer((_request, response) => {
+      response.setHeader("content-type", "application/json");
+      response.end(JSON.stringify({ version: "1", type: "CoordinationPollResponse", approvalRequests: [] }));
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("test server did not bind");
+    const dir = await mkdtemp(join(tmpdir(), "mpas-maintainer-cli-"));
+    const configPath = join(dir, "signer.json");
+    await writeFile(configPath, JSON.stringify({
+      maintainerKey: join(demoRoot, "tests", "fixtures", "test-keys", "maintainer-a.json"),
+      coordinationUrl: `http://127.0.0.1:${address.port}`,
+    }));
+    const client = createSignerToolClient(
+      configPath,
+      process.stderr,
+      join(demoRoot, "dist", "signer-server", "index.js"),
+    );
+    try {
+      const response = await runCli(["action", "pending"], io(), { signerToolClient: client });
+      expect(response.exitCode).toBe(0);
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    }
+  });
+
+  it("forwards local signer startup diagnostics", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "mpas-maintainer-cli-bad-"));
+    const configPath = join(dir, "signer.json");
+    await writeFile(configPath, JSON.stringify({ maintainerKey: join(dir, "missing-key.json"), coordinationUrl: "http://127.0.0.1:1" }));
+    const diagnostics = new MemoryWriter();
+    const client = createSignerToolClient(configPath, diagnostics, join(demoRoot, "dist", "signer-server", "index.js"));
+    const output = io();
+    const response = await runCli(["action", "pending"], output, { signerToolClient: client });
+    expect(response.exitCode).toBe(1);
+    expect(diagnostics.text).toMatch(/missing-key|ENOENT/);
   });
 });

@@ -25,9 +25,11 @@ import {
 import {
   assertSignerTools,
   createSignerToolClient,
+  decisionResultValue,
   formatSignerResult,
+  pendingResultValue,
   promptReviewDecision,
-  toolResultValue,
+  reviewResultValue,
   type ReviewDecision,
   type SignerToolClient,
 } from "./signer-tools.js";
@@ -62,7 +64,6 @@ interface ParsedOptions {
   applicationDid?: string;
   noBrowser?: boolean;
   signerConfigPath?: string;
-  json?: boolean;
 }
 
 export interface CliDependencies {
@@ -82,7 +83,14 @@ export async function runCli(
   io: CliIo = defaultIo,
   dependencies: CliDependencies = {},
 ): Promise<CliResult> {
-  const { positionals, options } = parseArgs(args);
+  let parsed: ReturnType<typeof parseArgs>;
+  try {
+    parsed = parseArgs(args);
+  } catch (error) {
+    io.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    return { exitCode: 2 };
+  }
+  const { positionals, options } = parsed;
   const [domain, command, subject] = positionals;
 
   try {
@@ -694,9 +702,8 @@ function parseArgs(args: string[]): { positionals: string[]; options: ParsedOpti
     } else if (arg === "--no-browser") {
       options.noBrowser = true;
     } else if (arg === "--config") {
-      options.signerConfigPath = args[++index];
-    } else if (arg === "--json") {
-      options.json = true;
+      options.signerConfigPath = requiredOptionValue(args, index, arg);
+      index += 1;
     } else {
       positionals.push(arg);
     }
@@ -708,6 +715,14 @@ function parseArgs(args: string[]): { positionals: string[]; options: ParsedOpti
   return { positionals, options };
 }
 
+function requiredOptionValue(args: string[], index: number, option: string): string {
+  const value = args[index + 1];
+  if (!value || value.startsWith("--")) {
+    throw new Error(`${option} requires a value.`);
+  }
+  return value;
+}
+
 function usage(): string {
   const coordinationAuthFlags = "[--auth-enforcement] [--auth-audience <origin>] [--auth-clock-skew-seconds <seconds>] [--auth-signature-lifetime-seconds <seconds>]";
   return [
@@ -716,8 +731,8 @@ function usage(): string {
     "  mpas daemon status [--config-dir <dir>] [--host <host>] [--port <port>]",
     `  mpas coordination start [--host <host>] [--port <port>] [--trace <file>] ${coordinationAuthFlags}`,
     "  mpas signer-server start --config <path>",
-    "  mpas action pending [--config <signer-config>] [--json]",
-    "  mpas action inspect <action-id> [--config <signer-config>] [--json]",
+    "  mpas action pending [--config <signer-config>]",
+    "  mpas action inspect <action-id> [--config <signer-config>]",
     "  mpas action review <action-id> [--config <signer-config>]",
     "  mpas key generate <name> [--key-dir <dir>]",
     "  mpas test submit <file> [--url <adapter-url>]",
@@ -741,19 +756,19 @@ async function runMaintainerAction(
   io: CliIo,
   dependencies: CliDependencies,
 ): Promise<CliResult> {
-  const client = dependencies.signerToolClient ?? createSignerToolClient(options.signerConfigPath);
+  const client = dependencies.signerToolClient ?? createSignerToolClient(options.signerConfigPath, io.stderr);
   try {
     await client.connect();
     await assertSignerTools(client);
 
     if (command === "pending") {
       const result = await client.callTool("mpas_list_pending", {});
-      io.stdout.write(formatSignerResult(toolResultValue(result)));
+      io.stdout.write(formatSignerResult(pendingResultValue(result)));
       return { exitCode: 0 };
     }
 
     const review = await client.callTool("mpas_review_action", { actionId });
-    const reviewValue = toolResultValue(review);
+    const reviewValue = reviewResultValue(review, actionId!);
     io.stdout.write(formatSignerResult(reviewValue));
     if (command === "inspect") return { exitCode: 0 };
 
@@ -767,7 +782,7 @@ async function runMaintainerAction(
 
     const toolName = decision === "approve" ? "mpas_approve" : "mpas_reject";
     const result = await client.callTool(toolName, { actionId });
-    io.stdout.write(formatSignerResult(toolResultValue(result)));
+    io.stdout.write(formatSignerResult(decisionResultValue(result, toolName, actionId!)));
     return { exitCode: 0 };
   } finally {
     await client.close();

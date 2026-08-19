@@ -68,10 +68,9 @@ the names above.
 ### 5.1 `action pending`
 
 Lists pending Action Packages visible to and eligible for the configured
-Maintainer. The default table includes Action ID, application DID, proposer
-DID, operation, creation time, and expiry. `--json` emits structured read-only
-output. The initial release performs one on-demand query per invocation and has
-no watch or periodic-polling mode.
+Maintainer. It prints the signer tool's structured result as readable JSON by
+default. The initial release performs one on-demand query per invocation and
+has no watch or periodic-polling mode.
 
 ### 5.2 `action inspect`
 
@@ -93,7 +92,7 @@ Inspection never creates an Approval.
 Calls `mpas_review_action`, prints the complete returned review material, and
 prompts the human to choose Approve, Reject, or Cancel. Approve calls the
 existing `mpas_approve` tool; Reject calls `mpas_reject`; Cancel makes no tool
-call. A rejection reason is passed when the tool supports one.
+call.
 
 ## 6. Configuration
 
@@ -108,35 +107,38 @@ package cache, approval database, key setting, or Coordination setting.
 The CLI retains no Action Package between commands. `inspect` and `review`
 always call `mpas_review_action` and render the returned review set. After the
 human confirms the displayed Action ID and decision, the CLI calls exactly one
-existing decision tool with that Action ID. All retrieval, validation,
-eligibility, signing, freshness, and submission behavior remains the signer
-server's existing responsibility and is not reimplemented by the CLI.
+existing decision tool with that Action ID. The CLI validates the minimum
+response shape and checks that returned Action IDs match the requested ID.
+Cryptographic verification, eligibility, signing, freshness, and submission
+remain signer-server responsibilities and are not reimplemented by the CLI.
 
 ### 7.2 Interactive confirmation
 
-Review is interactive. The prompt states the Action ID, application,
-operation, and digest and offers Approve, Reject, or Cancel. Empty input, EOF,
-or an interrupted terminal means no decision is submitted.
+Review is interactive. The complete review JSON is printed immediately before
+the prompt, which states the Action ID and offers Approve, Reject, or Cancel.
+Empty input, EOF, or an interrupted terminal means no decision is submitted.
 
 The initial release has no `--yes`, piped-confirmation, or unattended signing
 mode. Read-only commands may be used noninteractively.
 
 ### 7.3 Terminal and duplicate states
 
-The CLI treats already resolved, rejected, cancelled, expired, or otherwise
-terminal Actions as non-approvable. A duplicate Approval response is reported
-accurately and never described as a new successful approval.
+The signer server determines whether an Action is eligible or terminal. The CLI
+prints its structured result or reports its tool error without independently
+reclassifying the Action.
 
 ## 8. Output and Errors
 
-Human output goes to stdout; diagnostics and warnings go to stderr. Secrets
-and private key fields are always redacted. Read-only commands support JSON.
-Mutating commands return a concise Coordination receipt containing the Action
-ID, decision, signer DID, and resulting workflow state when available.
+Signer tool results go to stdout as readable JSON by default; diagnostics and
+warnings go to stderr. `action pending`, `action inspect`, and decision receipts
+emit the structured response provided by the signer server. The signer server
+controls which fields appear in those responses and is responsible for
+redaction. The CLI performs no additional filtering and makes no independent
+guarantee that arbitrary signer-server output is redacted.
 
 The CLI uses nonzero exit codes for unavailable signer tools, invalid tool
-responses, declined confirmation, tool-call failure, and signer-server errors.
-It preserves the server's retryable versus permanent failure distinction.
+responses, tool-call failures, and signer-server errors. Cancel is a successful
+no-op; EOF and interruption fail without submitting a decision.
 
 ## 9. Architecture
 
@@ -146,8 +148,8 @@ The CLI is an MCP client adapter over the existing signer-server tools:
 - `inspect` and `review` call `mpas_review_action`;
 - a confirmed review calls `mpas_approve` or `mpas_reject`.
 
-The CLI owns argument parsing, terminal rendering, the interactive prompt,
-redaction, and exit-code mapping. It does not import signer SDK internals,
+The CLI owns argument parsing, raw structured-result rendering, the interactive
+prompt, response-shape checks, and exit-code mapping. It does not import signer SDK internals,
 access key material, call Coordination directly, or change the signer server.
 
 ## 10. Acceptance Criteria
@@ -162,8 +164,7 @@ access key material, call Coordination directly, or change the signer server.
   rewritten as CLI success.
 - Existing `.mpas` configuration is sufficient and the CLI retains no package.
 - The CLI uses the same signer tool calls as Marvin and other agent Maintainers.
-- Tool-client integration works with the existing signer server used against
-  both reference Coordination and hosted SignerSet.
-- Unit and integration tests cover tool discovery, result rendering,
-  confirmation, redaction, cancellation, and tool-call failures.
+- Tool-client integration works with the existing signer server over stdio.
+- Unit and integration tests cover tool discovery, response validation, result
+  rendering, confirmation, cancellation, diagnostics, and tool-call failures.
 - Setup and command usage are documented for a human Maintainer.
