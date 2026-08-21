@@ -30,13 +30,13 @@ describe("CLI management commands", () => {
 
     expect(install).toMatchObject({
       installed: true,
-      pluginDid: "did:web:plugins.oma3.example:github-mirror-plugin",
+      pluginDid: "did:web:plugins.oma3.org:github-mirror-plugin",
     });
     expect(list).toMatchObject({
       plugins: [
         {
           file: "github-mirror-plugin.json",
-          pluginDid: "did:web:plugins.oma3.example:github-mirror-plugin",
+          pluginDid: "did:web:plugins.oma3.org:github-mirror-plugin",
         },
       ],
     });
@@ -66,7 +66,7 @@ describe("CLI management commands", () => {
     ).resolves.toMatchObject({
       valid: true,
       name: "github-mirror",
-      pluginDid: "did:web:plugins.oma3.example:github-mirror-plugin",
+      pluginDid: "did:web:plugins.oma3.org:github-mirror-plugin",
       credentials: [
         {
           handle: "github-mirror-token",

@@ -337,7 +337,7 @@ const VARIANTS = {
   mirror: {
     suffix: "_mirror",
     applicationDid: "did:web:github-mirror.example",
-    pluginDid: "did:web:plugins.oma3.example:github-mirror-plugin",
+    pluginDid: "did:web:plugins.oma3.org:github-mirror-plugin",
     pluginFile: "github-mirror-plugin.json",
     credentialHandle: "github-mirror-token",
     upstreamServer: "tests/fixtures/adapter/echo-mcp-server.mjs",
@@ -345,7 +345,7 @@ const VARIANTS = {
   liveDemo: {
     suffix: "_demo",
     applicationDid: "did:web:github-live-demo.example",
-    pluginDid: "did:web:plugins.oma3.example:github-live-demo-plugin",
+    pluginDid: "did:web:plugins.oma3.org:github-live-demo-plugin",
     pluginFile: "github-live-demo-plugin.json",
     credentialHandle: "github-live-demo-token",
     upstreamServer: "tests/fixtures/adapter/github-mcp-server.mjs",
@@ -360,7 +360,7 @@ function makeGithubPlugin(variant: DemoVariant) {
     type: "MpasApplicationPlugin",
     pluginDid: variant.pluginDid,
     pluginVersion: "0.1.0",
-    publisherDid: "did:web:oma3.example",
+    publisherDid: "did:web:oma3.org",
     applicationDid: variant.applicationDid,
     executionProfile: {
       id: "did:web:profiles.oma3.org:mcp",

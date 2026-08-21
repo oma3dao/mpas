@@ -3,7 +3,7 @@
   "type": "MpasApplicationPlugin",
   "pluginDid": "did:web:plugins.example.com:malformed",
   "pluginVersion": "0.1.0",
-  "publisherDid": "did:web:oma3.example",
+  "publisherDid": "did:web:oma3.org",
   "applicationDid": "did:web:github-mirror.example",
   "executionProfile": {
     "id": "did:web:profiles.oma3.org:mcp",
