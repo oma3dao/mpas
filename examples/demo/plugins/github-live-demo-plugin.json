@@ -1,9 +1,9 @@
 {
   "version": "1",
   "type": "MpasApplicationPlugin",
-  "pluginDid": "did:web:plugins.oma3.example:github-live-demo-plugin",
+  "pluginDid": "did:web:plugins.oma3.org:github-live-demo-plugin",
   "pluginVersion": "0.1.0",
-  "publisherDid": "did:web:oma3.example",
+  "publisherDid": "did:web:oma3.org",
   "applicationDid": "did:web:github-live-demo.example",
   "executionProfile": {
     "id": "did:web:profiles.oma3.org:mcp",
