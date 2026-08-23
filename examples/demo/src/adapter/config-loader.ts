@@ -87,6 +87,7 @@ export interface DeploymentConfigLoadError {
     | "PLUGIN_REFERENCE_MISMATCH"
     | "PLUGIN_HASH_MISMATCH"
     | "PLUGIN_TRUST_REJECTED"
+    | "CREDENTIAL_PROVIDER_UNSUPPORTED"
     | "POLICY_REFERENCE_MISMATCH"
     | "DEFAULT_REQUIREMENT_UNSATISFIABLE"
     | "DUPLICATE_APPLICATION_DID";
@@ -321,6 +322,14 @@ async function loadDeploymentConfigFile(
   }
 
   const config = parsed as unknown as DeploymentConfig;
+  const unsupportedProvider = config.credentialBindings.find((binding) => binding.provider !== "file");
+  if (unsupportedProvider) {
+    return loadError(
+      "CREDENTIAL_PROVIDER_UNSUPPORTED",
+      `Credential provider "${unsupportedProvider.provider}" is not implemented. Use provider "file" or implement "${unsupportedProvider.provider}" explicitly. The adapter will not silently read credentials from disk.`,
+      filePath,
+    );
+  }
   const oauthAuth = config.executionTarget.type === "mcp.http" && config.executionTarget.auth?.type === "oauth2"
     ? config.executionTarget.auth
     : undefined;

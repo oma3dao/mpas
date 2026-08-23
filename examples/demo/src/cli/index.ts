@@ -157,14 +157,24 @@ export async function runCli(
       const service = dependencies.oauthOperator ?? fileOAuthOperatorService({
         onAuthorizationUrl: (url) => { io.stderr.write(`Open this URL to authorize the Credential Adapter:\n${url}\n`); },
       });
-      const request = selection;
+      const request = {
+        ...selection,
+        refreshScope: selection.refreshScope ?? "offline_access",
+      };
       const response = command === "login"
         ? await service.login({ ...request, openBrowser: options.noBrowser !== true })
         : command === "status"
           ? await service.status(request)
           : await service.logout(request);
+      if (response.status === "authorized" && response.warnings?.length) {
+        for (const warning of response.warnings) {
+          io.stderr.write(`WARNING ${warning.code}: ${warning.message}\n`);
+        }
+      }
       io.stdout.write(`${JSON.stringify(response, null, 2)}\n`);
-      return { exitCode: response.status === "oauth_operator_service_unavailable" ? 1 : 0 };
+      const failed = response.status === "oauth_operator_service_unavailable"
+        || response.status === "oauth_scope_not_supported";
+      return { exitCode: failed ? 1 : 0 };
     }
 
     if (domain === "test" && command === "submit" && subject) {
@@ -437,7 +447,12 @@ export async function validateConfig(name: string, options: Pick<ParsedOptions, 
   const credentialChecks = [];
   for (const binding of config.config.credentialBindings) {
     if (binding.provider !== "file") {
-      credentialChecks.push({ handle: binding.credentialHandle, provider: binding.provider, ok: true });
+      credentialChecks.push({
+        handle: binding.credentialHandle,
+        provider: binding.provider,
+        ok: false,
+        error: "CREDENTIAL_PROVIDER_UNSUPPORTED",
+      });
       continue;
     }
 

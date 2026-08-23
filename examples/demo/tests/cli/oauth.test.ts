@@ -51,6 +51,7 @@ const resolveOAuthDeployment = vi.fn(async (_configDir: string, selectedDid: str
   resourceUrl,
   session,
   credentialHandle,
+  refreshScope: "offline_access",
 }));
 
 describe("OAuth operator CLI", () => {
@@ -110,6 +111,7 @@ describe("OAuth operator CLI", () => {
       resourceUrl,
       session,
       credentialHandle,
+      refreshScope: "offline_access",
       openBrowser: false,
     });
     expect(JSON.parse(stdout.text)).toMatchObject({ status: "oauth_login_required" });
@@ -123,7 +125,13 @@ describe("OAuth operator CLI", () => {
       "oauth", command, "--application-did", applicationDid,
     ], { stdout, stderr }, { oauthOperator, resolveOAuthDeployment });
     expect(result.exitCode).toBe(0);
-    expect(oauthOperator[command]).toHaveBeenCalledWith({ applicationDid, resourceUrl, session, credentialHandle });
+    expect(oauthOperator[command]).toHaveBeenCalledWith({
+      applicationDid,
+      resourceUrl,
+      session,
+      credentialHandle,
+      refreshScope: "offline_access",
+    });
     expect(JSON.parse(stdout.text)).not.toHaveProperty("accessToken");
   });
 
@@ -147,6 +155,7 @@ describe("OAuth operator CLI", () => {
       resourceUrl,
       session,
       credentialHandle,
+      refreshScope: "offline_access",
     });
   });
 

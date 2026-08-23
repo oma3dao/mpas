@@ -14,6 +14,9 @@ export interface OAuthProtectedMcpFixtureOptions {
   authorizationServerIssuer?: string;
   codeChallengeMethodsSupported?: string[];
   omitCodeChallengeMethodsSupported?: boolean;
+  scopesSupported?: string[];
+  authorizationServerScopesSupported?: string[];
+  issueRefreshToken?: boolean;
 }
 
 export async function startOAuthProtectedMcpFixture(
@@ -37,7 +40,7 @@ export async function startOAuthProtectedMcpFixture(
       return json(response, 200, {
         resource: `${origin}/mcp`,
         authorization_servers: [`${origin}/issuer`],
-        scopes_supported: ["mcp:tools"],
+        scopes_supported: options.scopesSupported ?? ["mcp:tools"],
       });
     }
 
@@ -53,6 +56,7 @@ export async function startOAuthProtectedMcpFixture(
         response_types_supported: ["code"],
         grant_types_supported: ["authorization_code", "refresh_token"],
         token_endpoint_auth_methods_supported: ["none"],
+        scopes_supported: options.authorizationServerScopesSupported ?? ["offline_access"],
       });
     }
 
@@ -98,8 +102,8 @@ export async function startOAuthProtectedMcpFixture(
           access_token: accessToken,
           token_type: "Bearer",
           expires_in: 3600,
-          refresh_token: "fixture-refresh-token",
-          scope: "mcp:tools",
+          ...(options.issueRefreshToken === false ? {} : { refresh_token: "fixture-refresh-token" }),
+          scope: params.get("scope") ?? "mcp:tools",
         });
       });
     }

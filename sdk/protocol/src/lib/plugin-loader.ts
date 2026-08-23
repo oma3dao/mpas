@@ -17,6 +17,7 @@ export interface MpasApplicationPlugin {
   credentialRequirements?: Array<{
     type: string;
     requiredCapabilities?: string[];
+    refreshScope?: string;
     description?: string;
   }>;
   operations: Record<string, MpasOperationDescriptor>;
@@ -107,6 +108,7 @@ const applicationPluginSchema = {
         properties: {
           type: { type: "string" },
           requiredCapabilities: { type: "array", items: { type: "string" } },
+          refreshScope: { type: "string", minLength: 1 },
           description: { type: "string" },
         },
         additionalProperties: false,

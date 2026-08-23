@@ -38,7 +38,11 @@ export type McpDispatchResult = McpResult | McpDispatchError;
  * is issued, and an identical resubmission simply retries.
  */
 export interface DispatchPrepareError {
-  code: "TARGET_UNAVAILABLE";
+  code:
+    | "TARGET_UNAVAILABLE"
+    | "OAUTH_REAUTHORIZATION_REQUIRED"
+    | "OAUTH_AUTHENTICATION_FAILED"
+    | "OAUTH_INVALID_GRANT";
   message: string;
 }
 

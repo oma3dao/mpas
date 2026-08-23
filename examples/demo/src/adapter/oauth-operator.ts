@@ -3,11 +3,53 @@ import { createServer } from "node:http";
 import { spawn } from "node:child_process";
 import { chmod, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join } from "node:path";
-import { auth, type OAuthClientProvider, type OAuthDiscoveryState } from "@modelcontextprotocol/sdk/client/auth.js";
+import { join, resolve } from "node:path";
+import {
+  auth,
+  discoverOAuthServerInfo,
+  UnauthorizedError,
+  type OAuthClientProvider,
+  type OAuthDiscoveryState,
+} from "@modelcontextprotocol/sdk/client/auth.js";
+import { StreamableHTTPError } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { InvalidGrantError } from "@modelcontextprotocol/sdk/server/auth/errors.js";
 import type { OAuthClientInformationMixed, OAuthClientMetadata, OAuthTokens } from "@modelcontextprotocol/sdk/shared/auth.js";
+import { loadPlugin } from "@oma3/mpas/plugin-loader";
 import { assertExactAuthorizationServerIssuer } from "./oauth-discovery.js";
 import { createOAuthFetchPolicy } from "./oauth-fetch-policy.js";
+
+export const DEFAULT_OAUTH_REFRESH_SCOPE = "offline_access";
+
+export class OAuthReauthorizationRequiredError extends Error {
+  readonly code = "OAUTH_REAUTHORIZATION_REQUIRED";
+  readonly operatorCommand: string;
+
+  constructor(operatorCommand: string, message?: string) {
+    super(message ?? `OAuth reauthorization required. Run ${operatorCommand}.`);
+    this.name = "OAuthReauthorizationRequiredError";
+    this.operatorCommand = operatorCommand;
+  }
+}
+
+export class OAuthScopeNotSupportedError extends Error {
+  readonly code = "OAUTH_SCOPE_NOT_SUPPORTED";
+  readonly requestedScope: string;
+  readonly supportedScopes: string[];
+
+  constructor(requestedScope: string, supportedScopes: string[]) {
+    super(
+      `Requested scope "${requestedScope}" is not supported; supported: ${formatSupportedScopes(supportedScopes)}.`,
+    );
+    this.name = "OAuthScopeNotSupportedError";
+    this.requestedScope = requestedScope;
+    this.supportedScopes = supportedScopes;
+  }
+}
+
+export interface OAuthOperatorWarning {
+  code: "OAUTH_REFRESH_TOKEN_NOT_ISSUED" | "OAUTH_REFRESH_SCOPE_NOT_ADVERTISED";
+  message: string;
+}
 
 export interface OAuthOperatorRequest {
   applicationDid: string;
@@ -15,6 +57,7 @@ export interface OAuthOperatorRequest {
   session: string;
   credentialHandle: string;
   scopes?: string[];
+  refreshScope?: string;
 }
 
 export interface OAuthLoginRequest extends OAuthOperatorRequest {
@@ -38,6 +81,15 @@ export type OAuthOperatorResult =
       expiresAt?: string;
       refreshable: boolean;
       reauthorizationRequired: boolean;
+      warnings?: OAuthOperatorWarning[];
+    }
+  | {
+      status: "oauth_scope_not_supported";
+      applicationDid: string;
+      resourceUrl: string;
+      requestedScope: string;
+      supportedScopes: string[];
+      message: string;
     }
   | {
       status: "logged_out";
@@ -58,6 +110,7 @@ export interface OAuthDeploymentSelection {
   session: string;
   credentialHandle: string;
   scopes?: string[];
+  refreshScope: string;
 }
 
 export type ResolveOAuthDeployment = (
@@ -104,11 +157,15 @@ export async function resolveOAuthApplication(
     if (typeof binding?.credentialHandle !== "string" || binding.provider !== "file") {
       throw new Error(`OAuth application must configure one file credential binding: ${applicationDid}`);
     }
+    const pluginPath = isRecord(value.plugin) && typeof value.plugin.path === "string"
+      ? value.plugin.path
+      : undefined;
     matches.push({
       applicationDid,
       resourceUrl: executionTarget.url,
       session: oauth.session,
       credentialHandle: binding.credentialHandle,
+      refreshScope: await refreshScopeFromPlugin(configDir, pluginPath),
       ...(scopes ? { scopes } : {}),
     });
   }
@@ -153,6 +210,9 @@ export interface FileOAuthOperatorServiceOptions {
   onAuthorizationUrl?: (url: URL) => void | Promise<void>;
   openBrowser?: (url: URL) => void | Promise<void>;
   testOnlyAllowHttpLoopback?: boolean;
+  persistAuthorizationArtifacts?: boolean;
+  stripInventedAdvertisedScope?: boolean;
+  operatorCommand?: string;
 }
 
 export function fileOAuthOperatorService(options: FileOAuthOperatorServiceOptions = {}): OAuthOperatorService {
@@ -162,28 +222,49 @@ export function fileOAuthOperatorService(options: FileOAuthOperatorServiceOption
   return {
     async login(request) {
       const callback = await startCallbackServer(callbackTimeoutMs);
-      const path = credentialPath(credentialDir, request.credentialHandle);
-      const previous = await readSession(path);
-      const session: StoredOAuthSession = {
-        version: 1,
-        session: request.session,
-        credentialHandle: request.credentialHandle,
-        applicationDid: request.applicationDid,
-        resourceUrl: request.resourceUrl,
-        state: randomBytes(32).toString("base64url"),
-        redirectUrl: callback.redirectUrl,
-        ...(previous?.clientInformation ? { clientInformation: previous.clientInformation } : {}),
-        ...(previous?.discovery ? { discovery: previous.discovery } : {}),
-      };
-      const provider = new FileOAuthClientProvider(session, path, request.openBrowser, options);
-      const fetchFn = createOAuthFetchPolicy({
-        bearerTokenResourceUrl: request.resourceUrl,
-        testOnlyAllowHttpLoopback: options.testOnlyAllowHttpLoopback,
-      });
       try {
+        const path = credentialPath(credentialDir, request.credentialHandle);
+        const previous = await readSession(path);
+        const session: StoredOAuthSession = {
+          version: 1,
+          session: request.session,
+          credentialHandle: request.credentialHandle,
+          applicationDid: request.applicationDid,
+          resourceUrl: request.resourceUrl,
+          state: randomBytes(32).toString("base64url"),
+          redirectUrl: callback.redirectUrl,
+          ...(previous?.clientInformation ? { clientInformation: previous.clientInformation } : {}),
+          ...(previous?.discovery ? { discovery: previous.discovery } : {}),
+        };
+        const fetchFn = createOAuthFetchPolicy({
+          bearerTokenResourceUrl: request.resourceUrl,
+          testOnlyAllowHttpLoopback: options.testOnlyAllowHttpLoopback,
+        });
+        const supportedScopes = await discoverSupportedScopes(request.resourceUrl, fetchFn);
+        const resolved = resolveRequestedOAuthScopes({
+          configuredScopes: request.scopes,
+          refreshScope: request.refreshScope,
+          supportedScopes,
+        });
+        if (!resolved.ok) {
+          return {
+            status: "oauth_scope_not_supported",
+            applicationDid: request.applicationDid,
+            resourceUrl: request.resourceUrl,
+            requestedScope: resolved.requestedScope,
+            supportedScopes: resolved.supportedScopes,
+            message: resolved.message,
+          };
+        }
+        const provider = new FileOAuthClientProvider(session, path, request.openBrowser, {
+          ...options,
+          stripInventedAdvertisedScope: resolved.scopes.length === 0,
+          operatorCommand: oauthLoginCommand(request),
+        });
+        const scopeOption = resolved.scopes.length > 0 ? { scope: resolved.scopes.join(" ") } : {};
         const start = await auth(provider, {
           serverUrl: request.resourceUrl,
-          ...(request.scopes?.length ? { scope: request.scopes.join(" ") } : {}),
+          ...scopeOption,
           fetchFn,
         });
         if (start !== "REDIRECT") throw new Error("OAuth login did not require operator authorization");
@@ -191,11 +272,11 @@ export function fileOAuthOperatorService(options: FileOAuthOperatorServiceOption
         const completed = await auth(provider, {
           serverUrl: request.resourceUrl,
           authorizationCode: code,
-          ...(request.scopes?.length ? { scope: request.scopes.join(" ") } : {}),
+          ...scopeOption,
           fetchFn,
         });
         if (completed !== "AUTHORIZED") throw new Error("OAuth authorization did not complete");
-        return authorizedResult(session);
+        return authorizedResult(session, resolved.warnings);
       } finally {
         await callback.close();
       }
@@ -257,14 +338,24 @@ class FileOAuthClientProvider implements OAuthClientProvider {
     await writeSession(this.path, this.session);
   }
   async redirectToAuthorization(url: URL): Promise<void> {
-    await this.options.onAuthorizationUrl?.(url);
+    const authorizationUrl = this.options.stripInventedAdvertisedScope
+      ? stripInventedAdvertisedScope(url, this.session.discovery)
+      : url;
+    if (!this.shouldOpenBrowser && !this.options.onAuthorizationUrl) {
+      throw new OAuthReauthorizationRequiredError(
+        this.options.operatorCommand ?? "mpas oauth login",
+        `OAuth reauthorization required. The Credential Adapter cannot start a browser during dispatch. Run ${this.options.operatorCommand ?? "mpas oauth login"}.`,
+      );
+    }
+    await this.options.onAuthorizationUrl?.(authorizationUrl);
     if (this.shouldOpenBrowser) {
-      if (this.options.openBrowser) await this.options.openBrowser(url);
-      else await openUrl(url);
+      if (this.options.openBrowser) await this.options.openBrowser(authorizationUrl);
+      else await openUrl(authorizationUrl);
     }
   }
   async saveCodeVerifier(value: string): Promise<void> {
     this.session.codeVerifier = value;
+    if (this.options.persistAuthorizationArtifacts === false) return;
     await writeSession(this.path, this.session);
   }
   codeVerifier(): string {
@@ -286,13 +377,172 @@ export async function loadFileOAuthClientProvider(
   resourceUrl: string,
   credentialDir = join(homedir(), ".mpas", "credentials"),
 ): Promise<OAuthClientProvider | undefined> {
-  const path = credentialPath(credentialDir, credentialHandle);
-  const session = await readSession(path);
-  if (!session?.tokens || session.session !== sessionName || session.credentialHandle !== credentialHandle || session.applicationDid !== applicationDid || session.resourceUrl !== resourceUrl) return undefined;
-  return new FileOAuthClientProvider(session, path, false, {});
+  const loaded = await readBoundOAuthSession(sessionName, credentialHandle, applicationDid, resourceUrl, credentialDir);
+  if (!loaded) return undefined;
+  return new FileOAuthClientProvider(loaded.session, loaded.path, false, {
+    persistAuthorizationArtifacts: false,
+    operatorCommand: oauthLoginCommand({ applicationDid, resourceUrl, session: sessionName, credentialHandle }),
+  });
 }
 
-function authorizedResult(session: StoredOAuthSession): OAuthOperatorResult {
+export async function prepareOAuthForDispatch(
+  sessionName: string,
+  credentialHandle: string,
+  applicationDid: string,
+  resourceUrl: string,
+  credentialDir = join(homedir(), ".mpas", "credentials"),
+): Promise<
+  | { ok: true; provider: OAuthClientProvider }
+  | { ok: false; error: { code: "OAUTH_REAUTHORIZATION_REQUIRED" | "OAUTH_AUTHENTICATION_FAILED" | "OAUTH_INVALID_GRANT" | "TARGET_UNAVAILABLE"; message: string } }
+> {
+  const operatorCommand = oauthLoginCommand({ applicationDid, resourceUrl, session: sessionName, credentialHandle });
+  const loaded = await readBoundOAuthSession(sessionName, credentialHandle, applicationDid, resourceUrl, credentialDir);
+  if (!loaded) {
+    return {
+      ok: false,
+      error: {
+        code: "OAUTH_REAUTHORIZATION_REQUIRED",
+        message: `OAuth login required. Run ${operatorCommand}.`,
+      },
+    };
+  }
+  const provider = new FileOAuthClientProvider(loaded.session, loaded.path, false, {
+    persistAuthorizationArtifacts: false,
+    operatorCommand,
+    testOnlyAllowHttpLoopback: isLoopbackUrl(resourceUrl),
+  });
+  if (isAccessTokenExpired(loaded.session.tokens, loaded.session.tokensSavedAt)) {
+    if (typeof loaded.session.tokens?.refresh_token !== "string") {
+      return {
+        ok: false,
+        error: {
+          code: "OAUTH_REAUTHORIZATION_REQUIRED",
+          message: `OAuth access token is expired and no refresh_token is stored. Run ${operatorCommand}.`,
+        },
+      };
+    }
+    try {
+      const fetchFn = createOAuthFetchPolicy({
+        bearerTokenResourceUrl: resourceUrl,
+        testOnlyAllowHttpLoopback: isLoopbackUrl(resourceUrl),
+      });
+      const result = await auth(provider, { serverUrl: resourceUrl, fetchFn });
+      if (result !== "AUTHORIZED") {
+        return {
+          ok: false,
+          error: {
+            code: "OAUTH_REAUTHORIZATION_REQUIRED",
+            message: `OAuth reauthorization required. Run ${operatorCommand}.`,
+          },
+        };
+      }
+    } catch (error) {
+      return { ok: false, error: classifyOAuthPrepareError(error, operatorCommand) };
+    }
+  }
+  return { ok: true, provider };
+}
+
+export function classifyOAuthPrepareError(
+  error: unknown,
+  operatorCommand: string,
+): { code: "OAUTH_REAUTHORIZATION_REQUIRED" | "OAUTH_AUTHENTICATION_FAILED" | "OAUTH_INVALID_GRANT" | "TARGET_UNAVAILABLE"; message: string } {
+  if (error instanceof OAuthReauthorizationRequiredError) {
+    return { code: error.code, message: error.message };
+  }
+  if (error instanceof InvalidGrantError || isInvalidGrantError(error)) {
+    return {
+      code: "OAUTH_INVALID_GRANT",
+      message: `OAuth refresh grant is invalid or revoked. Run ${operatorCommand}.`,
+    };
+  }
+  if (error instanceof UnauthorizedError || isUnauthorizedError(error) || isPostRefreshAuthenticationFailure(error)) {
+    return {
+      code: "OAUTH_AUTHENTICATION_FAILED",
+      message: `OAuth authentication failed after a reachable target rejected the credentials. Run ${operatorCommand}.`,
+    };
+  }
+  return {
+    code: "TARGET_UNAVAILABLE",
+    message: `MCP HTTP target could not be connected and initialized: ${error instanceof Error ? error.message : String(error)}`,
+  };
+}
+
+export function resolveRequestedOAuthScopes(input: {
+  configuredScopes?: string[];
+  refreshScope?: string;
+  supportedScopes: string[];
+}):
+  | { ok: true; scopes: string[]; warnings: OAuthOperatorWarning[] }
+  | { ok: false; requestedScope: string; supportedScopes: string[]; message: string } {
+  const refreshScope = input.refreshScope?.trim() || DEFAULT_OAUTH_REFRESH_SCOPE;
+  const supported = input.supportedScopes;
+  const configured = input.configuredScopes ?? [];
+  for (const scope of configured) {
+    if (!supported.includes(scope)) {
+      const error = new OAuthScopeNotSupportedError(scope, supported);
+      return {
+        ok: false,
+        requestedScope: error.requestedScope,
+        supportedScopes: error.supportedScopes,
+        message: error.message,
+      };
+    }
+  }
+  const warnings: OAuthOperatorWarning[] = [];
+  const scopes = [...configured];
+  const selectedRefreshScope = selectRefreshScope(refreshScope, supported);
+  if (!selectedRefreshScope.ok) {
+    return {
+      ok: false,
+      requestedScope: selectedRefreshScope.requestedScope,
+      supportedScopes: selectedRefreshScope.supportedScopes,
+      message: selectedRefreshScope.message,
+    };
+  }
+  if (selectedRefreshScope.warning) warnings.push(selectedRefreshScope.warning);
+  if (!scopes.includes(selectedRefreshScope.scope)) scopes.push(selectedRefreshScope.scope);
+  return { ok: true, scopes, warnings };
+}
+
+function selectRefreshScope(
+  preferred: string,
+  supported: string[],
+):
+  | { ok: true; scope: string; warning?: OAuthOperatorWarning }
+  | { ok: false; requestedScope: string; supportedScopes: string[]; message: string } {
+  if (supported.includes(preferred)) return { ok: true, scope: preferred };
+  if (preferred !== DEFAULT_OAUTH_REFRESH_SCOPE && supported.includes(DEFAULT_OAUTH_REFRESH_SCOPE)) {
+    return {
+      ok: true,
+      scope: DEFAULT_OAUTH_REFRESH_SCOPE,
+      warning: {
+        code: "OAUTH_REFRESH_SCOPE_NOT_ADVERTISED",
+        message: `Plugin refresh scope "${preferred}" is not advertised; using ${DEFAULT_OAUTH_REFRESH_SCOPE}. Supported: ${formatSupportedScopes(supported)}.`,
+      },
+    };
+  }
+  const error = new OAuthScopeNotSupportedError(preferred, supported);
+  return {
+    ok: false,
+    requestedScope: error.requestedScope,
+    supportedScopes: error.supportedScopes,
+    message: `Refresh scope "${preferred}" is not advertised by the authorization server and ${DEFAULT_OAUTH_REFRESH_SCOPE} is not available. Supported: ${formatSupportedScopes(supported)}.`,
+  };
+}
+
+export function isAccessTokenExpired(
+  tokens: OAuthTokens | undefined,
+  tokensSavedAt: string | undefined,
+  now = Date.now(),
+): boolean {
+  const expiresIn = typeof tokens?.expires_in === "number" ? tokens.expires_in : undefined;
+  const savedAt = tokensSavedAt ? Date.parse(tokensSavedAt) : NaN;
+  if (expiresIn === undefined || !Number.isFinite(savedAt)) return false;
+  return savedAt + expiresIn * 1000 <= now;
+}
+
+function authorizedResult(session: StoredOAuthSession, extraWarnings: OAuthOperatorWarning[] = []): OAuthOperatorResult {
   const expiresIn = typeof session.tokens?.expires_in === "number" ? session.tokens.expires_in : undefined;
   const savedAt = session.tokensSavedAt ? Date.parse(session.tokensSavedAt) : NaN;
   const clientInformationRecord: Record<string, unknown> | undefined = isRecord(session.clientInformation)
@@ -304,6 +554,7 @@ function authorizedResult(session: StoredOAuthSession): OAuthOperatorResult {
   const scope = typeof session.tokens?.scope === "string"
     ? session.tokens.scope
     : clientScope;
+  const warnings = [...extraWarnings, ...postLoginWarnings(session)];
   return {
     status: "authorized",
     applicationDid: session.applicationDid,
@@ -313,8 +564,18 @@ function authorizedResult(session: StoredOAuthSession): OAuthOperatorResult {
     scopes: scope.split(/\s+/).filter(Boolean),
     ...(expiresIn && Number.isFinite(savedAt) ? { expiresAt: new Date(savedAt + expiresIn * 1000).toISOString() } : {}),
     refreshable: typeof session.tokens?.refresh_token === "string",
-    reauthorizationRequired: false,
+    reauthorizationRequired: isAccessTokenExpired(session.tokens, session.tokensSavedAt)
+      && typeof session.tokens?.refresh_token !== "string",
+    ...(warnings.length ? { warnings } : {}),
   };
+}
+
+function postLoginWarnings(session: StoredOAuthSession): OAuthOperatorWarning[] {
+  if (typeof session.tokens?.refresh_token === "string") return [];
+  return [{
+    code: "OAUTH_REFRESH_TOKEN_NOT_ISSUED",
+    message: "OAuth login succeeded but the authorization server did not issue a refresh_token. Unattended refresh is unavailable; deploys will fail when the access token expires. Re-run mpas oauth login after confirming the refresh scope is granted.",
+  }];
 }
 
 async function startCallbackServer(timeoutMs: number): Promise<{
@@ -399,4 +660,86 @@ function shellQuote(value: string): string {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+async function readBoundOAuthSession(
+  sessionName: string,
+  credentialHandle: string,
+  applicationDid: string,
+  resourceUrl: string,
+  credentialDir: string,
+): Promise<{ session: StoredOAuthSession; path: string } | undefined> {
+  const path = credentialPath(credentialDir, credentialHandle);
+  const session = await readSession(path);
+  if (!session?.tokens || session.session !== sessionName || session.credentialHandle !== credentialHandle || session.applicationDid !== applicationDid || session.resourceUrl !== resourceUrl) {
+    return undefined;
+  }
+  return { session, path };
+}
+
+async function refreshScopeFromPlugin(configDir: string, pluginPath: string | undefined): Promise<string> {
+  if (!pluginPath) return DEFAULT_OAUTH_REFRESH_SCOPE;
+  const loaded = await loadPlugin(resolve(configDir, pluginPath));
+  if (!loaded.ok) return DEFAULT_OAUTH_REFRESH_SCOPE;
+  const declared = loaded.plugin.credentialRequirements
+    ?.map((requirement) => requirement.refreshScope)
+    .find((scope) => typeof scope === "string" && scope.trim().length > 0);
+  return declared?.trim() || DEFAULT_OAUTH_REFRESH_SCOPE;
+}
+
+async function discoverSupportedScopes(
+  resourceUrl: string,
+  fetchFn: ReturnType<typeof createOAuthFetchPolicy>,
+): Promise<string[]> {
+  const info = await discoverOAuthServerInfo(resourceUrl, { fetchFn });
+  return uniqueScopes(
+    info.resourceMetadata?.scopes_supported,
+    info.authorizationServerMetadata?.scopes_supported,
+  );
+}
+
+function uniqueScopes(...lists: Array<string[] | undefined>): string[] {
+  const seen = new Set<string>();
+  for (const list of lists) {
+    for (const scope of list ?? []) {
+      if (typeof scope === "string" && scope.length > 0) seen.add(scope);
+    }
+  }
+  return [...seen];
+}
+
+function stripInventedAdvertisedScope(url: URL, discovery: OAuthDiscoveryState | undefined): URL {
+  const advertised = discovery?.resourceMetadata?.scopes_supported;
+  if (!Array.isArray(advertised) || url.searchParams.get("scope") !== advertised.join(" ")) return url;
+  const stripped = new URL(url);
+  stripped.searchParams.delete("scope");
+  return stripped;
+}
+
+function formatSupportedScopes(supportedScopes: string[]): string {
+  return supportedScopes.length > 0 ? supportedScopes.join(", ") : "(none advertised)";
+}
+
+function isLoopbackUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.hostname === "127.0.0.1" || url.hostname === "[::1]";
+  } catch {
+    return false;
+  }
+}
+
+function isInvalidGrantError(error: unknown): boolean {
+  return error instanceof Error && (error.name === "InvalidGrantError" || /invalid_grant/i.test(error.message));
+}
+
+function isUnauthorizedError(error: unknown): boolean {
+  return error instanceof Error && (error.name === "UnauthorizedError" || /unauthorized/i.test(error.message));
+}
+
+function isPostRefreshAuthenticationFailure(error: unknown): boolean {
+  if (error instanceof StreamableHTTPError) return error.code === 401 || error.code === 403;
+  if (!isRecord(error)) return false;
+  return (error.name === "StreamableHTTPError" || error.name === "Error")
+    && (error.code === 401 || error.code === 403);
 }

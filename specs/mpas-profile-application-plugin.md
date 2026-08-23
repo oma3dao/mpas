@@ -472,7 +472,8 @@ Field definitions:
 | Field                  | Required | Description                                                                                                                                          |
 | :--------------------- | :------: | :--------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `type`                 | Yes      | Credential class, such as `oauthToken`, `apiKey`, `sshKey`, `serviceAccount`, `walletKey`, `sessionCredential`, `passkey`, or profile-defined value. |
-| `requiredCapabilities` | Optional | Array of capability strings describing the authority expected.                                                                                        |
+| `requiredCapabilities` | Optional | Array of capability strings describing the authority expected. These are governance artifacts and MUST NOT be transmitted as OAuth scopes.           |
+| `refreshScope`         | Optional | Provider-specific OAuth refresh-scope name. Defaults to `offline_access` when omitted (`offline.access` for X/Twitter, `refresh_token` for Salesforce). |
 | `description`          | Optional | Human-readable explanation. Non-authoritative.                                                                                                       |
 
 Credential requirements apply to the plugin as a whole. All operations described by the plugin share the same credential class requirements.
@@ -962,6 +963,10 @@ This appendix provides an initial JSON Schema for structural validation. The sch
           "items": {
             "type": "string"
           }
+        },
+        "refreshScope": {
+          "type": "string",
+          "minLength": 1
         },
         "description": {
           "type": "string"
