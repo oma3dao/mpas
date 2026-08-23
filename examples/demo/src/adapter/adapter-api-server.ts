@@ -26,7 +26,7 @@ import {
 import { DispatchLedger } from "./dispatch-ledger.js";
 import type { LoadedDeploymentConfig } from "./config-loader.js";
 import type { FileCredentialProvider } from "./credential-provider.js";
-import { loadFileOAuthClientProvider, oauthLoginCommand } from "./oauth-operator.js";
+import { oauthLoginCommand, prepareOAuthForDispatch } from "./oauth-operator.js";
 import { prepareMcpHttp } from "./dispatch/mcp-http.js";
 import { prepareMcpStdio, type DispatchPrepareResult, type McpDispatchResult } from "./dispatch/mcp-stdio.js";
 
@@ -307,7 +307,11 @@ export function createAdapterApiServer(options: HttpEndpointOptions): FastifyIns
       });
     }
 
-    const prepared = await prepareTarget(loadedConfig, credential?.ok ? credential.value : undefined);
+    const prepared = await prepareTarget(
+      loadedConfig,
+      credential?.ok ? credential.value : undefined,
+      options.credentialProvider.directory,
+    );
     if (!prepared.ok) {
       trace.emit("dispatch", { actionId, result: "rejected", code: prepared.error.code, reason: "target_prepare_failed" });
       return actionResponse(options, {
@@ -412,32 +416,39 @@ export function classifyDispatch(dispatchResult: McpDispatchResult): {
   }
 }
 
-async function prepareTarget(loadedConfig: LoadedDeploymentConfig, credential: string | undefined): Promise<DispatchPrepareResult> {
+async function prepareTarget(
+  loadedConfig: LoadedDeploymentConfig,
+  credential: string | undefined,
+  credentialDir?: string,
+): Promise<DispatchPrepareResult> {
   const protocolVersion = loadedConfig.plugin.executionProfile.protocolVersion;
   if (loadedConfig.config.executionTarget.type === "mcp.http") {
-    const authProvider = loadedConfig.config.executionTarget.auth?.type === "oauth2"
-      ? await loadFileOAuthClientProvider(
-          loadedConfig.config.executionTarget.auth.session,
-          loadedConfig.config.credentialBindings[0].credentialHandle,
-          loadedConfig.config.target.applicationDid,
-          loadedConfig.config.executionTarget.url,
-        )
-      : undefined;
-    if (loadedConfig.config.executionTarget.auth?.type === "oauth2" && !authProvider) {
-      return {
-        ok: false,
-        error: {
-          code: "TARGET_UNAVAILABLE",
-          message: `OAuth login required. Run ${oauthLoginCommand({
-            applicationDid: loadedConfig.config.target.applicationDid,
-            resourceUrl: loadedConfig.config.executionTarget.url,
-            session: loadedConfig.config.executionTarget.auth.session,
-            credentialHandle: loadedConfig.config.credentialBindings[0].credentialHandle,
-          })}.`,
-        },
-      };
+    if (loadedConfig.config.executionTarget.auth?.type === "oauth2") {
+      const operatorCommand = oauthLoginCommand({
+        applicationDid: loadedConfig.config.target.applicationDid,
+        resourceUrl: loadedConfig.config.executionTarget.url,
+        session: loadedConfig.config.executionTarget.auth.session,
+        credentialHandle: loadedConfig.config.credentialBindings[0].credentialHandle,
+      });
+      const preparedOAuth = await prepareOAuthForDispatch(
+        loadedConfig.config.executionTarget.auth.session,
+        loadedConfig.config.credentialBindings[0].credentialHandle,
+        loadedConfig.config.target.applicationDid,
+        loadedConfig.config.executionTarget.url,
+        credentialDir,
+      );
+      if (!preparedOAuth.ok) {
+        return { ok: false, error: preparedOAuth.error };
+      }
+      return prepareMcpHttp(
+        loadedConfig.config.executionTarget,
+        credential,
+        protocolVersion,
+        preparedOAuth.provider,
+        operatorCommand,
+      );
     }
-    return prepareMcpHttp(loadedConfig.config.executionTarget, credential, protocolVersion, authProvider);
+    return prepareMcpHttp(loadedConfig.config.executionTarget, credential, protocolVersion);
   }
   if (credential === undefined) {
     return { ok: false, error: { code: "TARGET_UNAVAILABLE", message: "No credential binding configured." } };
@@ -498,6 +509,18 @@ function diagnosticMessage(code: string): string {
   switch (code) {
     case "TARGET_UNAVAILABLE":
       return "The upstream MCP target could not be launched or initialized.";
+    case "OAUTH_REAUTHORIZATION_REQUIRED":
+      return "The OAuth grant is missing, expired without a refresh token, or requires operator login.";
+    case "OAUTH_AUTHENTICATION_FAILED":
+      return "The upstream MCP server rejected OAuth authentication. This is not a target outage.";
+    case "OAUTH_INVALID_GRANT":
+      return "The stored OAuth refresh grant is invalid or revoked. Operator reauthorization is required.";
+    case "OAUTH_SCOPE_NOT_SUPPORTED":
+      return "A configured OAuth scope is not advertised by the authorization server.";
+    case "OAUTH_REFRESH_TOKEN_NOT_ISSUED":
+      return "Login succeeded but no refresh token was issued. Unattended refresh is unavailable.";
+    case "CREDENTIAL_PROVIDER_UNSUPPORTED":
+      return "The configured credential provider is not implemented.";
     case "PROCESS_EXITED":
       return "The upstream MCP process exited before responding.";
     case "DISPATCH_TIMEOUT":

@@ -22,6 +22,10 @@ export type CredentialProviderResult = CredentialResult | CredentialError;
 export class FileCredentialProvider {
   constructor(private readonly credentialDir = join(homedir(), ".mpas", "credentials")) {}
 
+  get directory(): string {
+    return this.credentialDir;
+  }
+
   async getCredential(credentialHandle: string): Promise<CredentialProviderResult> {
     const path = join(this.credentialDir, `${credentialHandle}.json`);
 

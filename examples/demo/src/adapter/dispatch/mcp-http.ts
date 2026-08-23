@@ -3,6 +3,7 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import type { TransportSendOptions } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
 import type { OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
+import { classifyOAuthPrepareError, oauthLoginCommand } from "../oauth-operator.js";
 import { withInitializeProtocolVersion } from "./mcp-protocol-version.js";
 import { errorMessage, McpClientSession, type DispatchPrepareResult } from "./mcp-stdio.js";
 
@@ -27,6 +28,7 @@ export async function prepareMcpHttp(
   credential: string | undefined,
   protocolVersion: string,
   authProvider?: OAuthClientProvider,
+  oauthOperatorCommand?: string,
 ): Promise<DispatchPrepareResult> {
   const timeoutMs = target.timeoutMs ?? 30_000;
   const transport = new VersionedStreamableHttpClientTransport(
@@ -48,6 +50,20 @@ export async function prepareMcpHttp(
   } catch (error) {
     await client.close().catch(() => {});
     await transport.close().catch(() => {});
+    if (authProvider) {
+      return {
+        ok: false,
+        error: classifyOAuthPrepareError(
+          error,
+          oauthOperatorCommand ?? oauthLoginCommand({
+            applicationDid: "unknown",
+            resourceUrl: target.url,
+            session: target.auth?.session ?? "unknown",
+            credentialHandle: "unknown",
+          }),
+        ),
+      };
+    }
     return {
       ok: false,
       error: {

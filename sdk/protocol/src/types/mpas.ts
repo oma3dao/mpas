@@ -315,6 +315,12 @@ export interface CoordinationCancelResponse {
 export interface CredentialRequirement {
   type: string;
   requiredCapabilities?: string[];
+  /**
+   * Provider-specific OAuth refresh scope. Defaults to `offline_access` when
+   * omitted. This is not a permission scope and MUST NOT be copied from
+   * `requiredCapabilities`.
+   */
+  refreshScope?: string;
   description?: string;
 }
 
