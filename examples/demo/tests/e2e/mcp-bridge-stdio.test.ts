@@ -19,7 +19,8 @@ const TASK_META = {
   },
 };
 
-let client: JsonRpcStdioClient;
+let tasksClient: JsonRpcStdioClient;
+let compatibilityClient: JsonRpcStdioClient;
 
 beforeAll(async () => {
   execSync("npm run build", { cwd: demoRoot, stdio: "ignore" });
@@ -36,19 +37,21 @@ beforeAll(async () => {
     }),
   );
 
-  client = new JsonRpcStdioClient(
+  const bridgeArgs = [join(demoRoot, "dist", "bridge", "github-bridge.js"), "--config", configPath];
+  tasksClient = new JsonRpcStdioClient(
     process.execPath,
-    [join(demoRoot, "dist", "bridge", "github-bridge.js"), "--config", configPath],
+    bridgeArgs,
   );
+  compatibilityClient = new JsonRpcStdioClient(process.execPath, bridgeArgs);
 }, 120_000);
 
 afterAll(async () => {
-  await client?.close();
+  await Promise.all([tasksClient?.close(), compatibilityClient?.close()]);
 });
 
 describe("MCP 2026 stdio transport smoke test", () => {
   it("allows discovery and exact tool listing before negotiation", async () => {
-    const discovery = await client.request("server/discover");
+    const discovery = await tasksClient.request("server/discover");
     expect(discovery).toMatchObject({
       resultType: "complete",
       supportedVersions: ["2026-07-28"],
@@ -60,7 +63,7 @@ describe("MCP 2026 stdio transport smoke test", () => {
       },
     });
 
-    const listed = await client.request("tools/list");
+    const listed = await tasksClient.request("tools/list");
     const tools = listed.tools as Array<{ name: string; description?: string; inputSchema: object }>;
     expect(tools.map((tool) => tool.name)).toEqual([
       "create_issue_demo",
@@ -71,7 +74,7 @@ describe("MCP 2026 stdio transport smoke test", () => {
   });
 
   it("creates and retrieves a flat official Task", async () => {
-    const created = await client.request("tools/call", {
+    const created = await tasksClient.request("tools/call", {
       name: "delete_branch_demo",
       arguments: { owner: "example-org", repo: "mpas-demo-repository", branch: "smoke-test" },
       _meta: TASK_META,
@@ -82,24 +85,24 @@ describe("MCP 2026 stdio transport smoke test", () => {
       _meta: { "org.oma3/mpas": { version: "2", authorizationState: "submitted" } },
     });
 
-    const current = await client.request("tasks/get", { taskId: created.taskId, _meta: TASK_META });
+    const current = await tasksClient.request("tasks/get", { taskId: created.taskId, _meta: TASK_META });
     expect(current).toMatchObject({ resultType: "complete", taskId: created.taskId, status: "working" });
   });
 
   it("returns protocol errors for missing Tasks and capabilities", async () => {
     await expect(
-      client.request("tasks/get", {
+      tasksClient.request("tasks/get", {
         taskId: "urn:uuid:99999999-9999-4999-8999-999999999999",
         _meta: TASK_META,
       }),
     ).rejects.toMatchObject({ code: -32602, message: "Task not found" });
 
-    await expect(client.request("tools/call", { name: "delete_branch_demo", arguments: {} })).rejects.toMatchObject({
+    await expect(tasksClient.request("tools/call", { name: "delete_branch_demo", arguments: {} })).rejects.toMatchObject({
       code: -32602,
     });
 
     await expect(
-      client.request("tools/call", {
+      tasksClient.request("tools/call", {
         name: "delete_branch_demo",
         arguments: {},
         _meta: {
@@ -117,6 +120,57 @@ describe("MCP 2026 stdio transport smoke test", () => {
         },
       },
     });
+  });
+});
+
+describe("conventional MCP stdio compatibility smoke test", () => {
+  it("initializes and lists the legacy wait-tool surface", async () => {
+    const initialized = await compatibilityClient.request("initialize", {
+      protocolVersion: "2024-11-05",
+      capabilities: {},
+      clientInfo: { name: "compatibility-smoke", version: "1.0.0" },
+    });
+    expect(initialized).toMatchObject({
+      protocolVersion: "2024-11-05",
+      capabilities: { tools: { listChanged: false } },
+      serverInfo: { name: "mpas-demo-github-server-mpas-bridge", version: "1.0.0" },
+    });
+    compatibilityClient.notify("notifications/initialized");
+
+    const listed = await compatibilityClient.request("tools/list");
+    const tools = listed.tools as Array<{ name: string; description?: string }>;
+    expect(tools.map((tool) => tool.name)).toEqual([
+      "create_issue_demo",
+      "delete_branch_demo",
+      "merge_pull_request_demo",
+      "mpas_wait_for_action_result",
+    ]);
+    expect(tools.find((tool) => tool.name === "merge_pull_request_demo")?.description).toContain(
+      "may return a deferred Action reference",
+    );
+  });
+
+  it("creates and observes a deferred Action without switching protocol", async () => {
+    const created = await compatibilityClient.request("tools/call", {
+      name: "delete_branch_demo",
+      arguments: { owner: "example-org", repo: "mpas-demo-repository", branch: "compatibility-smoke" },
+    });
+    expect(created).toMatchObject({
+      structuredContent: {
+        type: "MpasBridgeDeferredResult",
+        actionRef: { actionId: { value: expect.stringMatching(/^urn:uuid:/) } },
+      },
+    });
+    const actionId = created.structuredContent.actionRef.actionId.value as string;
+
+    const observed = await compatibilityClient.request("tools/call", {
+      name: "mpas_wait_for_action_result",
+      arguments: { actionId, timeoutSeconds: 0 },
+    });
+    expect(observed).toMatchObject({
+      structuredContent: { type: "MpasBridgeDeferredResult", actionRef: { actionId: { value: actionId } } },
+    });
+    await expect(compatibilityClient.request("server/discover")).rejects.toMatchObject({ code: -32601 });
   });
 });
 
@@ -154,6 +208,11 @@ class JsonRpcStdioClient {
       this.pending.set(id, { resolve, reject });
       this.child.stdin.write(`${JSON.stringify(message)}\n`);
     });
+  }
+
+  notify(method: string, params?: Record<string, unknown>): void {
+    const message = { jsonrpc: "2.0", method, ...(params === undefined ? {} : { params }) };
+    this.child.stdin.write(`${JSON.stringify(message)}\n`);
   }
 
   async close(): Promise<void> {

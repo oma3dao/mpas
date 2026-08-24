@@ -56,12 +56,15 @@ Evaluate JSON policy configurations per the MPAS Policy Profile:
 - `KeyManager` — load Ed25519 keys from file, derive `did:jwk`, sign/verify JWS
 - `deriveDidKey`, `generateEd25519Key`, `didKeyToKid` — DID utilities
 
-### Proposer Bridge Runtime (`lib/bridge-runtime.ts`, `lib/mcp-tasks-server.ts`, `lib/workflow-engine.ts`, `lib/workflow-store.ts`)
+### Proposer Bridge Runtime (`lib/bridge-runtime.ts`, `lib/mcp-protocol-server.ts`, `lib/mcp-tasks-server.ts`, `lib/mcp-compatibility-server.ts`, `lib/workflow-engine.ts`, `lib/workflow-store.ts`)
 
-Build asynchronous proposer bridges using MCP 2026-07-28 and the official Tasks extension:
+Build asynchronous proposer bridges with wire-level detection for MCP 2026-07-28
+Tasks clients and conventional MCP clients:
 
+- `MpasProtocolServer` — single transport owner that locks each connection to Tasks or compatibility mode from its handshake
 - `MpasTasksServer` — MCP discovery, exact upstream tools, and official `tasks/*` operations
-- `ProposerBridge` — creates Tasks and maps durable MPAS workflows to Task state
+- `MpasCompatibilityServer` — conventional initialization, deferred results, and `mpas_wait_for_action_result`
+- `ProposerBridge` — creates Actions and maps one durable MPAS workflow to either client presentation
 - `BridgeWorkflowEngine` — background workflow: submission, coordination, resubmission, restart recovery
 - `WorkflowStore`, `MemoryWorkflowStore` — durable-store contract and in-memory reference (no database dependency)
 

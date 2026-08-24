@@ -16,7 +16,7 @@ or equivalent). Do not combine both roles in one agent.
 
 | Skill | Role |
 |---|---|
-| `mpas-proposer` | Proposes governed actions through MPAS MCP bridges. Tracks MCP Tasks through the authorization lifecycle. |
+| `mpas-proposer` | Proposes governed actions through MPAS MCP bridges. Tracks them through harness-managed MCP Tasks or the compatibility wait tool exposed to conventional clients. |
 | `mpas-maintainer` | Reviews and approves/rejects proposed actions. Independent verification gate before execution. |
 
 Install one depending on the agent's role.

@@ -15,6 +15,15 @@ import type {
 } from "./mcp-tasks-extension.js";
 import { workflowProposerDid } from "./mpas-task-meta.js";
 import {
+  MPAS_WAIT_TOOL_NAME,
+  buildCompatibilityError,
+  buildCompatibilityToolDefinitions,
+  compatibilityResultForRecord,
+  validateCompatibilityWaitInput,
+  type CompatibilityResultOptions,
+  type CompatibilityToolResult,
+} from "./bridge-compatibility.js";
+import {
   BridgeWorkflowEngine,
   type WorkflowAdapter,
   type WorkflowCoordination,
@@ -44,6 +53,10 @@ export interface ProposerBridgeOptions {
   pollIntervalMs?: number;
   /** Client-facing tasks/get polling hint. Default 5000ms. */
   taskPollIntervalMs?: number;
+  /** Legacy wait-tool maximum. Default 300 seconds. */
+  maxWaitTimeoutSeconds?: number;
+  /** Deployment assigns maintainer notification outside the proposing client. */
+  notificationAssignedElsewhere?: boolean;
   workerId?: string;
   now?: () => number;
 }
@@ -69,6 +82,9 @@ export class ProposerBridge {
   private readonly store: WorkflowStore;
   private readonly proposerDid: Did;
   private readonly resultConfig: TaskResultConfig;
+  private readonly compatibilityResultConfig: CompatibilityResultOptions;
+  private readonly compatibilityTools: BridgeUpstreamTool[];
+  private readonly maxWaitTimeoutSeconds: number;
   private readonly pollIntervalMs: number;
   private ticker?: ReturnType<typeof setInterval>;
 
@@ -81,6 +97,17 @@ export class ProposerBridge {
       resultRetentionSeconds: options.resultRetentionSeconds,
       taskPollIntervalMs: options.taskPollIntervalMs ?? 5_000,
     };
+    this.compatibilityResultConfig = {
+      resultRetentionSeconds: options.resultRetentionSeconds,
+      ...(options.notificationAssignedElsewhere !== undefined
+        ? { notificationAssignedElsewhere: options.notificationAssignedElsewhere }
+        : {}),
+      ...(options.now !== undefined ? { now: options.now } : {}),
+    };
+    this.maxWaitTimeoutSeconds = options.maxWaitTimeoutSeconds ?? 300;
+    this.compatibilityTools = buildCompatibilityToolDefinitions(this.tools, {
+      maxTimeoutSeconds: this.maxWaitTimeoutSeconds,
+    });
     this.pollIntervalMs = options.pollIntervalMs ?? 2_000;
     this.engine = new BridgeWorkflowEngine({
       store: options.store,
@@ -97,22 +124,35 @@ export class ProposerBridge {
     return structuredClone(this.tools);
   }
 
+  /** Legacy MCP surface selected only for clients that initialize conventionally. */
+  getCompatibilityToolDefinitions(): BridgeUpstreamTool[] {
+    return structuredClone(this.compatibilityTools);
+  }
+
   /** Every accepted application call creates and returns an official Task. */
   async handleToolCall(toolName: string, args: object): Promise<CreateTaskResult> {
+    return buildCreateTaskResult(await this.proposeToolCall(toolName, args), this.resultConfig);
+  }
+
+  /** Legacy application and reserved wait-tool dispatch over the same workflow. */
+  async handleCompatibilityToolCall(toolName: string, args: object): Promise<CompatibilityToolResult> {
+    if (toolName === MPAS_WAIT_TOOL_NAME) {
+      return this.handleCompatibilityWait(args);
+    }
     if (!this.tools.some((tool) => tool.name === toolName)) {
-      throw new UnknownBridgeToolError(toolName);
+      return buildCompatibilityError("UNKNOWN_TOOL", `Unknown tool: ${toolName}`, false);
     }
 
-    const actionPackage = await this.buildActionPackage(toolName, args);
-    const envelope = actionPackage.actionEnvelope;
-    const outcome = await this.engine.propose({
-      actionId: envelope.actionId.value,
-      actionEnvelopeHash: computeHash(envelope).value,
-      toolName,
-      actionPackage,
-      expiresAt: envelope.expiresAt,
-    });
-    return buildCreateTaskResult(outcome.record, this.resultConfig);
+    try {
+      const record = await this.proposeToolCall(toolName, args);
+      return compatibilityResultForRecord(record, this.compatibilityResultConfig);
+    } catch {
+      return buildCompatibilityError(
+        "BRIDGE_UNAVAILABLE",
+        "Could not construct or durably record the MPAS Action.",
+        true,
+      );
+    }
   }
 
   /** Read-only Task observation; never advances the MPAS workflow. */
@@ -135,6 +175,7 @@ export class ProposerBridge {
   }
 
   async start(): Promise<void> {
+    if (this.ticker) return;
     await this.engine.reconcile();
     this.ticker = setInterval(() => {
       void this.engine.pollOnce().then(() => {
@@ -154,6 +195,54 @@ export class ProposerBridge {
   async pollOnce(): Promise<void> {
     await this.engine.pollOnce();
     this.store.purgeExpiredResults(this.resultConfig.resultRetentionSeconds * 1_000);
+  }
+
+  private async proposeToolCall(toolName: string, args: object): Promise<WorkflowRecord> {
+    if (!this.tools.some((tool) => tool.name === toolName)) {
+      throw new UnknownBridgeToolError(toolName);
+    }
+
+    const actionPackage = await this.buildActionPackage(toolName, args);
+    const envelope = actionPackage.actionEnvelope;
+    const outcome = await this.engine.propose({
+      actionId: envelope.actionId.value,
+      actionEnvelopeHash: computeHash(envelope).value,
+      toolName,
+      actionPackage,
+      expiresAt: envelope.expiresAt,
+    });
+    return outcome.record;
+  }
+
+  private async handleCompatibilityWait(args: object): Promise<CompatibilityToolResult> {
+    const input = validateCompatibilityWaitInput(args, {
+      maxTimeoutSeconds: this.maxWaitTimeoutSeconds,
+    });
+    if (input.kind === "error") {
+      return buildCompatibilityError(input.code, input.message, false);
+    }
+
+    try {
+      this.visibleRecord(input.actionId);
+      const record = await this.engine.waitForResult(input.actionId, input.timeoutSeconds * 1_000);
+      if (!record || workflowProposerDid(record) !== this.proposerDid) {
+        return buildCompatibilityError(
+          "ACTION_NOT_FOUND",
+          "No visible Action matches the supplied Action ID.",
+          false,
+        );
+      }
+      return compatibilityResultForRecord(record, this.compatibilityResultConfig);
+    } catch (error) {
+      if (error instanceof TaskNotFoundError) {
+        return buildCompatibilityError(
+          "ACTION_NOT_FOUND",
+          "No visible Action matches the supplied Action ID.",
+          false,
+        );
+      }
+      return buildCompatibilityError("BRIDGE_UNAVAILABLE", "Could not read the MPAS Action result.", true);
+    }
   }
 
   private visibleRecord(taskId: string): WorkflowRecord {

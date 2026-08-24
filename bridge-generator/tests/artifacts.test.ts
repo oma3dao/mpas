@@ -172,7 +172,23 @@ describe("harness config and merge (spec §3.5, §5)", () => {
       addedTools: [],
       outputSchemaUnions: [],
       extensionCapabilities: ["io.modelcontextprotocol/tasks", "org.oma3/mpas"],
-      note: "The bridge uses the official MCP Tasks extension and preserves upstream tool definitions.",
+      protocolModes: {
+        tasks: {
+          handshake: "server/discover",
+          addedTools: [],
+          modifiedDescriptions: [],
+          outputSchemaUnions: [],
+          extensionCapabilities: ["io.modelcontextprotocol/tasks", "org.oma3/mpas"],
+        },
+        compatibility: {
+          handshake: "initialize",
+          addedTools: ["mpas_wait_for_action_result"],
+          modifiedDescriptions: ["application-tools"],
+          outputSchemaUnions: ["application-tools-with-output-schema"],
+          extensionCapabilities: [],
+        },
+      },
+      note: "The bridge auto-detects MCP Tasks or the conventional MPAS wait-tool compatibility surface. Tasks mode preserves upstream tool definitions.",
     });
     expect(config).not.toHaveProperty("highImpact");
   });
@@ -212,6 +228,7 @@ describe("harness config and merge (spec §3.5, §5)", () => {
       addedTools: [],
       outputSchemaUnions: [],
       extensionCapabilities: ["io.modelcontextprotocol/tasks", "org.oma3/mpas"],
+      protocolModes: expect.any(Object),
     });
   });
 });

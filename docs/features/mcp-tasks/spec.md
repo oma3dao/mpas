@@ -54,8 +54,11 @@ and cooperative cancellation without changing application tool schemas.
    `io.modelcontextprotocol/tasks`. The experimental 2025-11-25 Tasks API is
    not supported.
 
-2. **No backward-compatibility shim.** `mpas_wait_for_action_result` and the
-   MPAS-specific result wrappers are removed.
+2. **Tasks mode has no shim.** `mpas_wait_for_action_result` and the
+   MPAS-specific result wrappers are absent from the Tasks surface. The
+   temporary [conventional-client compatibility feature](../mcp-client-compatibility/spec.md)
+   restores them only on a separately negotiated compatibility surface over
+   the same MPAS workflow.
 
 3. **Every accepted application call returns a task.** The bridge always
    returns a flat `CreateTaskResult`, including when the MPAS workflow reaches
@@ -418,7 +421,7 @@ For every application tool exposed by the bridge:
 5. Upstream annotations and other fields pass through unchanged.
 6. The bridge does not add `execution.taskSupport`.
 
-Removed from the surface:
+Removed from the Tasks surface:
 
 - `mpas_wait_for_action_result`
 - MPAS description notices
@@ -426,6 +429,11 @@ Removed from the surface:
 
 Clients detect the bridge through `org.oma3/mpas` in `server/discover`, not by
 scanning tool names.
+
+Conventional clients that select the temporary compatibility surface through
+`initialize` instead receive the adapter defined in
+[`mcp-client-compatibility/spec.md`](../mcp-client-compatibility/spec.md). Its
+wait tool and transformed definitions MUST NOT leak into this Tasks surface.
 
 ---
 

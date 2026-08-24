@@ -10,13 +10,13 @@
 
 **Depends on:** [MPAS Core Specification v0.2](./mpas-specification.md), [MPAS MCP Execution Profile](./mpas-profile-mcp.md), and the official MCP extension `io.modelcontextprotocol/tasks`
 
-**Feature record:** [Official MCP Tasks integration](../docs/features/mcp-tasks/spec.md)
+**Feature records:** [Official MCP Tasks integration](../docs/features/mcp-tasks/spec.md), [temporary conventional-client compatibility](../docs/features/mcp-client-compatibility/spec.md)
 
 ---
 
 ## 1. Purpose and Scope
 
-This profile defines what a proposing MCP client can expect when it connects
+This profile primarily defines what a Tasks-capable proposing MCP client can expect when it connects
 to and calls an MPAS MCP proposer bridge. It defines the client-facing MCP
 contract: bridge identity, tool exposure, asynchronous Action lifecycle,
 result retrieval, task visibility, and the MPAS authorization metadata carried
@@ -266,11 +266,12 @@ background interval.
 
 ## 10. Versioning and Compatibility
 
-Profile version 2 replaces the incompatible version 1 client interface, which
-did not advertise `org.oma3/mpas` and used the proprietary
-`mpas_wait_for_action_result` tool, tool-presence discovery, description
-notices, output-schema unions, and MPAS-specific result wrappers. New and
-regenerated bridges MUST NOT implement those mechanisms.
+Profile version 2 replaces the incompatible version 1 client interface as the
+primary interface. Version 1 did not advertise `org.oma3/mpas` and used the
+proprietary `mpas_wait_for_action_result` tool, tool-presence discovery,
+description notices, output-schema unions, and MPAS-specific result wrappers.
+New and regenerated bridges MUST use the Tasks behavior in Sections 3 through
+9 for Tasks-capable clients.
 
 This profile targets the official `io.modelcontextprotocol/tasks` extension on
 MCP `2026-07-28`. It MUST NOT be implemented with the removed 2025-11-25 core
@@ -281,3 +282,31 @@ does not identify the MPAS Core version, HTTP Profile version, MCP Execution
 Profile version, or negotiated MCP protocol version. A breaking change to the
 Task metadata schema, result interpretation, discovery requirements, or
 client-visible workflow responsibilities requires a new profile version.
+
+### 10.1 Temporary conventional-client compatibility annex
+
+Until maintained agent harnesses can consume the official Tasks extension, a
+bridge MAY also implement the temporary compatibility adapter defined by the
+[MCP Client Compatibility feature](../docs/features/mcp-client-compatibility/spec.md).
+This annex does not make the legacy surface part of profile version 2.
+
+The bridge MUST select one connection-local surface from the wire handshake:
+`server/discover` selects the Tasks profile, while conventional `initialize`
+selects compatibility mode. It MUST NOT select by client name or version, and
+it MUST NOT switch modes during a connection.
+
+In compatibility mode only, the bridge:
+
+- uses the negotiated conventional MCP protocol version;
+- exposes the application tools plus exactly one
+  `mpas_wait_for_action_result` tool;
+- may add the deterministic legacy description notice and output-schema union;
+- returns legacy deferred and terminal result wrappers; and
+- does not advertise or dispatch `tasks/*` or the profile extensions.
+
+Both surfaces MUST create and observe the same durable MPAS workflow. The
+compatibility adapter MUST NOT alter Action construction, proposer signing,
+policy evaluation, Coordination, Credential Adapter custody, authorization,
+credential substitution, or upstream execution. It MUST NOT add a direct
+application transport. An Action remains visible only through a bridge whose
+configured proposer DID matches the stored signed Action Package.

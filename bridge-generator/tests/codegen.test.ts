@@ -40,7 +40,10 @@ describe("generateBridge", () => {
     const source = generateBridge(upstream);
     // The spec-compliance surface comes from the SDK, not inline logic.
     expect(source).toContain("ProposerBridge");
-    expect(source).toContain("MpasTasksServer");
+    expect(source).toContain("MpasProtocolServer");
+    expect(source).toContain("mcp_protocol_mode_selected");
+    expect(source).not.toContain("clientInfo.name");
+    expect(source).not.toContain("clientInfo.version");
     expect(source).toContain('from "@modelcontextprotocol/server/stdio"');
     expect(source).toContain('from "@oma3/mpas"');
     // Durable store is emitted repository code, memory store is the fallback.
