@@ -8,8 +8,8 @@
  *
  * This file is generated then checked in. Edit freely.
  *
- * Uses MCP 2026-07-28 with io.modelcontextprotocol/tasks and org.oma3/mpas.
- * Application calls return durable Tasks while MPAS advances independently.
+ * Uses MCP 2026-07-28 Tasks when supported and the legacy MPAS wait-tool
+ * compatibility surface for conventional MCP clients.
  */
 
 import { readFileSync } from "node:fs";
@@ -23,7 +23,7 @@ import {
   CoordinationClient,
   KeyManager,
   MemoryWorkflowStore,
-  MpasTasksServer,
+  MpasProtocolServer,
   ProposerBridge,
 } from "@oma3/mpas";
 import type {
@@ -58,6 +58,10 @@ interface WorkflowConfig {
   pollIntervalMs?: number;
   /** Client-facing tasks/get polling hint. Default 5000ms. */
   taskPollIntervalMs?: number;
+  /** Compatibility wait-tool maximum. Default 300 seconds. */
+  maxWaitTimeoutSeconds?: number;
+  /** Deployment assigns maintainer notification outside the proposing client. */
+  notificationAssignedElsewhere?: boolean;
 }
 
 interface BridgeConfig extends Omit<ProposerConfig, "approvalStrategy" | "approvalTimeoutMs"> {
@@ -147,6 +151,10 @@ export class GeneratedBridge {
         resultRetentionSeconds: workflow.resultRetentionSeconds ?? 86_400,
         ...(workflow.pollIntervalMs !== undefined ? { pollIntervalMs: workflow.pollIntervalMs } : {}),
         ...(workflow.taskPollIntervalMs !== undefined ? { taskPollIntervalMs: workflow.taskPollIntervalMs } : {}),
+        ...(workflow.maxWaitTimeoutSeconds !== undefined ? { maxWaitTimeoutSeconds: workflow.maxWaitTimeoutSeconds } : {}),
+        ...(workflow.notificationAssignedElsewhere !== undefined
+          ? { notificationAssignedElsewhere: workflow.notificationAssignedElsewhere }
+          : {}),
       });
     });
   }
@@ -175,8 +183,8 @@ export class GeneratedBridge {
     });
   }
 
-  async buildMcpServer(): Promise<MpasTasksServer> {
-    return new MpasTasksServer({
+  async buildMcpServer(): Promise<MpasProtocolServer> {
+    return new MpasProtocolServer({
       bridge: await this.bridgePromise,
       serverInfo: {
         name: "mpas-demo-github-server-mpas-bridge",
@@ -184,6 +192,9 @@ export class GeneratedBridge {
       },
       onerror(error) {
         log("error", "mcp_protocol_error", { message: error.message });
+      },
+      onmode(mode, selector) {
+        log("info", "mcp_protocol_mode_selected", { mode, selector });
       },
     });
   }
@@ -239,7 +250,7 @@ function toBridgeConfig(config: CliConfig, configDir: string): BridgeConfig {
   }
   if (config.approvalStrategy !== undefined || config.approvalTimeoutMs !== undefined) {
     log("warn", "deprecated_config_ignored", {
-      note: "approvalStrategy/approvalTimeoutMs are ignored: the bridge uses the official MCP Tasks extension.",
+      note: "approvalStrategy/approvalTimeoutMs are ignored: the bridge uses asynchronous Tasks or compatibility results.",
     });
   }
   const pluginPath = resolve(configDir, config.plugin);

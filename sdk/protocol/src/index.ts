@@ -19,8 +19,11 @@ export * from "./lib/rfc9421.js";
 export * from "./lib/verification.js";
 export * from "./lib/mcp-tasks-extension.js";
 export * from "./lib/mcp-tasks-server.js";
+export * from "./lib/mcp-compatibility-server.js";
+export * from "./lib/mcp-protocol-server.js";
 export * from "./lib/mpas-task-meta.js";
 export * from "./lib/bridge-tasks.js";
+export * from "./lib/bridge-compatibility.js";
 // Workflow contract + engine are spec-compliance behavior with no storage
 // dependency: the SDK ships the WorkflowStore interface and an in-memory
 // reference. Durable stores (e.g. SQLite) are implementation-specific and

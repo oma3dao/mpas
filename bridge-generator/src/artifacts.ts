@@ -55,6 +55,22 @@ export interface HarnessConfig {
     addedTools?: string[];
     outputSchemaUnions?: string[];
     extensionCapabilities?: string[];
+    protocolModes?: {
+      tasks: {
+        handshake: "server/discover";
+        addedTools: string[];
+        modifiedDescriptions: string[];
+        outputSchemaUnions: string[];
+        extensionCapabilities: string[];
+      };
+      compatibility: {
+        handshake: "initialize";
+        addedTools: string[];
+        modifiedDescriptions: string[];
+        outputSchemaUnions: string[];
+        extensionCapabilities: string[];
+      };
+    };
     note?: string;
   };
 }
@@ -174,7 +190,8 @@ export function buildHarnessConfig(upstream: UpstreamInfo): HarnessConfig {
       addedTools: [],
       outputSchemaUnions: [],
       extensionCapabilities: ["io.modelcontextprotocol/tasks", "org.oma3/mpas"],
-      note: "The bridge uses the official MCP Tasks extension and preserves upstream tool definitions.",
+      protocolModes: compatibilityProtocolModes(),
+      note: "The bridge auto-detects MCP Tasks or the conventional MPAS wait-tool compatibility surface. Tasks mode preserves upstream tool definitions.",
     },
   };
 }
@@ -200,7 +217,27 @@ export function mergeHarnessConfig(existing: HarnessConfig, upstream: UpstreamIn
       addedTools: [],
       outputSchemaUnions: [],
       extensionCapabilities: ["io.modelcontextprotocol/tasks", "org.oma3/mpas"],
-      note: "The bridge uses the official MCP Tasks extension and preserves upstream tool definitions.",
+      protocolModes: compatibilityProtocolModes(),
+      note: "The bridge auto-detects MCP Tasks or the conventional MPAS wait-tool compatibility surface. Tasks mode preserves upstream tool definitions.",
+    },
+  };
+}
+
+function compatibilityProtocolModes(): NonNullable<HarnessConfig["intentionalDeviations"]["protocolModes"]> {
+  return {
+    tasks: {
+      handshake: "server/discover",
+      addedTools: [],
+      modifiedDescriptions: [],
+      outputSchemaUnions: [],
+      extensionCapabilities: ["io.modelcontextprotocol/tasks", "org.oma3/mpas"],
+    },
+    compatibility: {
+      handshake: "initialize",
+      addedTools: ["mpas_wait_for_action_result"],
+      modifiedDescriptions: ["application-tools"],
+      outputSchemaUnions: ["application-tools-with-output-schema"],
+      extensionCapabilities: [],
     },
   };
 }

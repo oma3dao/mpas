@@ -408,7 +408,7 @@ it.
 
 Update `bridge-generator/tests/codegen.test.ts` to assert:
 
-- no `mpas_wait_for_action_result`
+- no `mpas_wait_for_action_result` on the Tasks surface
 - no schema unions or description notices
 - no `execution.taskSupport`
 - no request `task` requirement
@@ -667,7 +667,7 @@ not create a standalone MPAS extension specification. The profile must define:
 
 ## Acceptance Criteria
 
-- The wait tool and MPAS result wrappers are absent.
+- The wait tool and MPAS result wrappers are absent from the Tasks surface.
 - Tool definitions match upstream exactly.
 - The server speaks MCP 2026-07-28 through SDK v2.
 - Discovery advertises the official Tasks extension and MPAS profile extension.
@@ -683,6 +683,10 @@ not create a standalone MPAS extension specification. The profile must define:
 - The database hash string remains unchanged.
 - Background MPAS workflow progression and transient retries continue without
   client requests.
+
+The later [MCP client compatibility plan](../mcp-client-compatibility/plan.md)
+temporarily adds a separately negotiated conventional MCP surface. It does not
+change these Tasks-mode acceptance criteria.
 - GitHub and Netlify builds and tests pass.
 - The temporary upstream schema pin is documented and tracked for removal.
 
