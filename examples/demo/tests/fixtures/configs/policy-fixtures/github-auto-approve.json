@@ -6,9 +6,9 @@
     "applicationDid": "did:web:github-mirror.example"
   },
   "plugin": {
-    "pluginDid": "did:web:plugins.oma3.example:github-mirror-plugin",
+    "pluginDid": "did:web:plugins.oma3.org:github-mirror-plugin",
     "pluginVersion": "0.1.0",
-    "artifactDid": "did:artifact:bafkreibuuyyqyb7jqrlflorjiiko2efz2xgagwxxdgathcrdpcniiyzhfi",
+    "artifactDid": "did:artifact:bafkreibz3gttsq5iq7tynp5yldhroq3sybhtiogeuarody5wlstl3umpxy",
     "path": "../plugins/github-mirror-plugin.json"
   },
   "credentialBindings": [

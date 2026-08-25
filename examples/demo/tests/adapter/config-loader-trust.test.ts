@@ -89,7 +89,7 @@ describe("plugin trust confirmation during config loading", () => {
     const report = {
       artifactDid: "did:artifact:bafktest",
       publisherDid: "did:web:publisher.example",
-      pluginDid: "did:web:plugins.oma3.example:github-mirror-plugin",
+      pluginDid: "did:web:plugins.oma3.org:github-mirror-plugin",
       pluginVersion: "0.1.0",
       targetApplicationDid: "did:web:github-mirror.example",
       verdict: {
@@ -136,7 +136,7 @@ describe("plugin trust confirmation during config loading", () => {
     const report = {
       artifactDid: "did:artifact:bafktest",
       publisherDid: "did:web:publisher.example",
-      pluginDid: "did:web:plugins.oma3.example:github-mirror-plugin",
+      pluginDid: "did:web:plugins.oma3.org:github-mirror-plugin",
       pluginVersion: "0.1.0",
       targetApplicationDid: "did:web:github-mirror.example",
       verdict: {
