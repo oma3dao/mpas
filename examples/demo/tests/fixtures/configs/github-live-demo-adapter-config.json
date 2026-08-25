@@ -6,9 +6,9 @@
     "applicationDid": "did:web:github-live-demo.example"
   },
   "plugin": {
-    "pluginDid": "did:web:plugins.oma3.example:github-live-demo-plugin",
+    "pluginDid": "did:web:plugins.oma3.org:github-live-demo-plugin",
     "pluginVersion": "0.1.0",
-    "artifactDid": "did:artifact:bafkreicelwvteijg5kocahrhwdflsgn7skk3vzp2gvrnqq2e4a5s4rbvkm",
+    "artifactDid": "did:artifact:bafkreihcup4j7hatszkewaty6py54an7yt6uj5onbniazrm6tntwhzto3m",
     "path": "../plugins/github-live-demo-plugin.json"
   },
   "credentialBindings": [

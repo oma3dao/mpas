@@ -31,7 +31,7 @@ const mockFetchArtifactTrust = vi.mocked(fetchArtifactTrust);
 const fakePlugin: MpasApplicationPlugin = {
   version: "1",
   type: "MpasApplicationPlugin",
-  pluginDid: "did:web:plugins.oma3.example:github-mirror-plugin",
+  pluginDid: "did:web:plugins.oma3.org:github-mirror-plugin",
   pluginVersion: "0.1.0",
   publisherDid: "did:web:publisher.example",
   applicationDid: "did:web:github-mirror.example",
@@ -48,7 +48,7 @@ const fakeConfig: DeploymentConfig = {
   name: "github-test",
   target: { applicationDid: "did:web:github-mirror.example" },
   plugin: {
-    pluginDid: "did:web:plugins.oma3.example:github-mirror-plugin",
+    pluginDid: "did:web:plugins.oma3.org:github-mirror-plugin",
     pluginVersion: "0.1.0",
     artifactDid: "did:artifact:bafkreibfakeartifactdid",
     path: "../plugins/github-mirror-plugin.json",
