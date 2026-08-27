@@ -287,7 +287,7 @@ export async function verifyMpasRfc9421(options: VerifyMpasRfc9421Options): Prom
 export function deriveMpasAudience(serviceUrl: string): string {
   const url = new URL(serviceUrl);
   if (url.protocol !== "http:" && url.protocol !== "https:") {
-    throw new Error("Coordination Service URL must use http or https.");
+    throw new Error("MPAS service URL must use http or https.");
   }
   return url.origin;
 }

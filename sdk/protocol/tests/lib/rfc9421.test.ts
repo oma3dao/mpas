@@ -132,7 +132,7 @@ describe("MPAS RFC 9421", () => {
   });
 
   it.each([
-    ["tampered path", { path: "/mpas/v1/coordination/action" }],
+    ["tampered path", { path: "/mpas/v1/coordination/workflow" }],
     ["tampered key", { key: "maintainer-a" }],
   ])("rejects a %s", async (_name, mutation) => {
     const signer = await fixtureSigner("proposer");

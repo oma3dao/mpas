@@ -16,6 +16,8 @@ export type AdapterTraceType =
  * Trace event types emitted by the coordination service.
  */
 export type CoordinationTraceType =
+  | "coordination_workflow_create"
+  /** @deprecated Use `coordination_workflow_create`. */
   | "coordination_submit"
   | "coordination_poll"
   | "approval_received"

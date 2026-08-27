@@ -1,5 +1,5 @@
 import { compactVerify, decodeProtectedHeader, importJWK, type JWK } from "jose";
-import { didJwkToJwk, isDidJwk } from "./did-jwk.js";
+import { deriveDidJwk, didJwkToJwk, isDidJwk } from "./did-jwk.js";
 import type { ActionEnvelope, ActionPackage, Approval, CanonicalApprovalPayload, Did } from "../types/mpas.js";
 import type { ExecutionPayload, Hash } from "../types/mpas.js";
 import type { VerificationTraceCallback } from "./trace.js";
@@ -264,11 +264,14 @@ export function validateActionEnvelope(envelope: ActionEnvelope, options: Valida
   return { ok: true };
 }
 
-/** True when the Action Envelope's `expiresAt` is at or before `now`. */
-export function isEnvelopeExpired(envelope: ActionEnvelope, now = Date.now()): boolean {
+/** Returns whether an Action Envelope has reached its authoritative expiry time. */
+export function isActionEnvelopeExpired(envelope: ActionEnvelope, now = Date.now()): boolean {
   const expiresAt = Date.parse(envelope.expiresAt);
   return !Number.isNaN(expiresAt) && expiresAt <= now;
 }
+
+/** @deprecated Use {@link isActionEnvelopeExpired}. */
+export const isEnvelopeExpired = isActionEnvelopeExpired;
 
 export function verifyPayloadBinding(payload: ExecutionPayload, envelope: ActionEnvelope): boolean {
   if (envelope.executionPayloadHash.alg !== "sha-256") {
@@ -292,6 +295,28 @@ export async function verifyApprovalSignature(approval: Approval, publicKey: JWK
     const key = await importJWK(publicKey, protectedHeader.alg);
     await compactVerify(approval.signature.value, key);
     return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Verifies a did:jwk Approval signature and its signed/top-level field binding.
+ *
+ * Use {@link verifyApprovalSignature} when only cryptographic signature validity is
+ * needed. This function additionally verifies the Action hash, decision, timestamp,
+ * and signer DID carried by the signed Approval payload.
+ */
+export async function verifyApproval(approval: Approval, signerPublicKey: JWK): Promise<boolean> {
+  if (!(await verifyApprovalSignature(approval, signerPublicKey))) return false;
+  try {
+    const payload = await verifiedApprovalPayload(approval, signerPublicKey);
+    return (
+      hashesEqual(payload.actionEnvelopeHash, approval.actionEnvelopeHash) &&
+      payload.decision === approval.decision &&
+      payload.createdAt === approval.createdAt &&
+      payload.signerDid === deriveDidJwk(signerPublicKey)
+    );
   } catch {
     return false;
   }

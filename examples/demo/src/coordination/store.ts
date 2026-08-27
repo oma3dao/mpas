@@ -1,13 +1,19 @@
 import type {
+  ActionRequest,
+  ActionResponse,
   ActionPackage,
   Approval,
   ApprovalRequirements,
+  AuthorizationRequirements,
   CanonicalApprovalPayload,
+  CoordinationDeliveryResponse,
   Decision,
   Did,
+  DeliveryEnvelope,
   Hash,
   ThresholdRequirement,
 } from "../core/types.js";
+import { computeIdempotencyFingerprint, evaluateApprovalRequirements } from "@oma3/mpas";
 import { computeJsonHash } from "../core/verification.js";
 import type {
   ActionRef,
@@ -38,7 +44,7 @@ export class CoordinationStoreError extends Error {
 
 interface StoredApproval {
   approval: Approval;
-  signerDid?: Did;
+  signerDid: Did;
   decision: Decision;
 }
 
@@ -51,19 +57,200 @@ interface StoredAction {
   createdAt: string;
   updatedAt: string;
   cancelledAt?: string;
+  rejectedAt?: string;
+  readyDeliveryCreated?: boolean;
+  deliveryRecipients: Did[];
 }
 
-export interface SubmitActionResult {
+interface StoredRelayedAction {
+  envelope: DeliveryEnvelope<ActionRequest>;
+  actionRef: ActionRef;
+  verifierDid: Did;
+  createdAt: string;
+  response?: ActionResponse;
+  result: Promise<ActionResponse>;
+  resolve: (response: ActionResponse) => void;
+}
+
+interface StoredDelivery {
+  sequence: number;
+  recipient: Did;
+  envelope: DeliveryEnvelope;
+}
+
+export interface RoutingAuditEntry {
+  purpose: "initialAction" | "actionResponse" | "readyAction";
+  sender: Did;
+  recipients: Did[];
+  designatedVerifierDid: Did;
+  payloadHash: Hash;
+  createdAt: string;
+}
+
+export interface CreateWorkflowResult {
   response: CoordinationActionResponse;
   created: boolean;
 }
 
+const DELIVERY_PAGE_SIZE = 100;
+const IDEMPOTENCY_CACHE_TTL_MS = 15 * 60_000;
+
 export class CoordinationStore {
   private readonly actionsById = new Map<string, StoredAction>();
   private readonly actionsByEnvelopeHash = new Map<string, StoredAction>();
+  private readonly relayedActionsById = new Map<string, StoredRelayedAction>();
+  private readonly relayedActionsByEnvelopeHash = new Map<string, StoredRelayedAction>();
+  private readonly deliveries: StoredDelivery[] = [];
+  private readonly routingAuditEntries: RoutingAuditEntry[] = [];
+  // Demo-scope cache only. Production services need durable idempotency records
+  // with an operator-defined retention policy and atomic claim semantics.
+  private readonly idempotency = new Map<string, {
+    fingerprint: string;
+    result: Promise<unknown>;
+    expiresAt: number;
+  }>();
+  private nextDeliverySequence = 1;
 
-  submitAction(request: CoordinationActionRequest): SubmitActionResult {
-    this.validateSubmitAction(request);
+  runIdempotent<T>(did: Did, key: string | undefined, request: unknown, operation: () => T | Promise<T>): Promise<T> {
+    if (!key) return Promise.resolve().then(operation);
+    const now = Date.now();
+    for (const [cachedScope, entry] of this.idempotency) {
+      if (entry.expiresAt <= now) this.idempotency.delete(cachedScope);
+    }
+    const scope = `${did}\0${key}`;
+    const fingerprint = computeIdempotencyFingerprint(request);
+    const existing = this.idempotency.get(scope);
+    if (existing) {
+      if (existing.fingerprint !== fingerprint) {
+        throw new CoordinationStoreError(409, "idempotency_conflict", "Idempotency key was reused with a different request.");
+      }
+      return existing.result as Promise<T>;
+    }
+    const result = Promise.resolve().then(operation);
+    this.idempotency.set(scope, { fingerprint, result, expiresAt: now + IDEMPOTENCY_CACHE_TTL_MS });
+    void result.catch(() => this.idempotency.delete(scope));
+    return result;
+  }
+
+  beginRelayedAction(envelope: DeliveryEnvelope<ActionRequest>, verifierDid: Did): {
+    created: boolean;
+    response: Promise<ActionResponse>;
+  } {
+    this.validateRelayedAction(envelope, verifierDid);
+    const hash = computeJsonHash(envelope.payload.actionPackage.actionEnvelope);
+    const existing = this.relayedActionsByEnvelopeHash.get(hash.value);
+    if (existing) return { created: false, response: existing.result };
+
+    let resolve!: (response: ActionResponse) => void;
+    const result = new Promise<ActionResponse>((resolved) => { resolve = resolved; });
+    const actionRef = buildActionRef(envelope.payload.actionPackage, hash);
+    const stored: StoredRelayedAction = {
+      envelope,
+      actionRef,
+      verifierDid,
+      createdAt: new Date().toISOString(),
+      result,
+      resolve,
+    };
+    this.relayedActionsById.set(actionRef.actionId.value, stored);
+    this.relayedActionsByEnvelopeHash.set(hash.value, stored);
+    this.storeEnvelope(envelope);
+    this.recordRoutingAudit("initialAction", envelope, verifierDid);
+    return { created: true, response: result };
+  }
+
+  validateRelayedAction(envelope: DeliveryEnvelope<ActionRequest>, verifierDid: Did): void {
+    validateActionPackageBindings(envelope.payload.actionPackage);
+    const hash = computeJsonHash(envelope.payload.actionPackage.actionEnvelope);
+    const actionId = envelope.payload.actionPackage.actionEnvelope.actionId.value;
+    const existing = this.relayedActionsById.get(actionId) ?? this.actionsById.get(actionId);
+    if (existing && existing.actionRef.actionEnvelopeHash.value !== hash.value) {
+      throw new CoordinationStoreError(409, "ACTION_ID_CONFLICT", "Action ID already exists with a different envelope hash.");
+    }
+    if (!envelope.recipients.includes(verifierDid)) {
+      throw new CoordinationStoreError(400, "INVALID_REQUEST", "Configured Verifier DID is not an envelope recipient.");
+    }
+  }
+
+  validateResponseDelivery(
+    envelope: DeliveryEnvelope<ActionResponse>,
+    administrativelyAuthorizedRecipients: Iterable<Did> = [],
+  ): void {
+    this.responseDeliveryTarget(envelope, administrativelyAuthorizedRecipients);
+  }
+
+  submitResponseDelivery(
+    envelope: DeliveryEnvelope<ActionResponse>,
+    administrativelyAuthorizedRecipients: Iterable<Did> = [],
+  ): CoordinationDeliveryResponse {
+    const stored = this.responseDeliveryTarget(envelope, administrativelyAuthorizedRecipients);
+
+    this.storeEnvelope(envelope);
+    this.recordRoutingAudit("actionResponse", envelope, stored.verifierDid);
+    if (!stored.response) {
+      stored.response = envelope.payload;
+      this.createApprovalWorkflowFromResponse(stored, envelope.payload);
+      stored.resolve(envelope.payload);
+    }
+    return {
+      version: "1",
+      type: "CoordinationDeliveryResponse",
+      accepted: true,
+      createdAt: new Date().toISOString(),
+    };
+  }
+
+  private responseDeliveryTarget(
+    envelope: DeliveryEnvelope<ActionResponse>,
+    administrativelyAuthorizedRecipients: Iterable<Did>,
+  ): StoredRelayedAction {
+    const responseHash = envelope.payload.actionEnvelopeHash;
+    const stored = responseHash ? this.relayedActionsByEnvelopeHash.get(responseHash.value) : undefined;
+    if (!stored) throw new CoordinationStoreError(404, "ACTION_NOT_FOUND", "Relayed action was not found.");
+    if (responseHash?.alg !== stored.actionRef.actionEnvelopeHash.alg) {
+      throw new CoordinationStoreError(400, "ACTION_HASH_MISMATCH", "Action Response hash algorithm does not match the relayed Action.");
+    }
+    if (envelope.sender !== stored.verifierDid || envelope.payload.verifier?.did !== stored.verifierDid) {
+      throw new CoordinationStoreError(403, "permission_denied", "Response sender is not the workflow's designated Verifier.");
+    }
+    if (!envelope.recipients.includes(stored.envelope.payload.actionPackage.actionEnvelope.proposer.did)) {
+      throw new CoordinationStoreError(400, "INVALID_REQUEST", "Response envelope must address the Action Proposer.");
+    }
+    const requirements = envelope.payload.authorizationRequirements;
+    if (envelope.payload.result === "additionalApprovalsRequired" && !requirements) {
+      throw new CoordinationStoreError(
+        400,
+        "INVALID_REQUEST",
+        "additionalApprovalsRequired response must include Authorization Requirements.",
+      );
+    }
+    if (envelope.payload.result !== "additionalApprovalsRequired" && requirements) {
+      throw new CoordinationStoreError(
+        400,
+        "INVALID_REQUEST",
+        "Authorization Requirements are valid only with additionalApprovalsRequired.",
+      );
+    }
+    if (requirements) {
+      validateAuthorizationRequirements(requirements, stored.actionRef.actionEnvelopeHash, stored.verifierDid);
+    }
+
+    const authorizedRecipients = new Set<Did>([
+      stored.envelope.payload.actionPackage.actionEnvelope.proposer.did,
+      ...administrativelyAuthorizedRecipients,
+      ...maintainersFrom(
+        requirements ?? this.actionsByEnvelopeHash.get(stored.actionRef.actionEnvelopeHash.value)?.authorizationRequirements,
+      ),
+    ]);
+    if (envelope.recipients.some((did) => !authorizedRecipients.has(did))) {
+      throw new CoordinationStoreError(403, "permission_denied", "Response envelope contains an unauthorized recipient.");
+    }
+
+    return stored;
+  }
+
+  createWorkflow(request: CoordinationActionRequest): CreateWorkflowResult {
+    this.validateCreateWorkflow(request);
     const actionEnvelopeHash = computeJsonHash(request.actionPackage.actionEnvelope);
     const existingByHash = this.actionsByEnvelopeHash.get(actionEnvelopeHash.value);
     if (existingByHash) {
@@ -88,6 +275,7 @@ export class CoordinationStore {
       actionRef,
       state: "awaitingApprovals",
       approvals: [],
+      deliveryRecipients: [request.authorizationRequirements.verifier.did],
       createdAt: now,
       updatedAt: now,
     };
@@ -107,12 +295,9 @@ export class CoordinationStore {
   }
 
   submitApproval(request: CoordinationApprovalSubmission): CoordinationApprovalSubmissionResponse {
-    const { stored, payload } = this.approvalPreflight(request);
+    const { stored, payload, duplicate } = this.approvalPreflight(request);
 
-    const existing = stored.approvals.some(
-      (entry) => entry.signerDid === payload.signerDid && entry.decision === payload.decision,
-    );
-    if (!existing) {
+    if (!duplicate) {
       stored.approvals.push({
         approval: request.approval,
         signerDid: payload.signerDid,
@@ -121,9 +306,17 @@ export class CoordinationStore {
       stored.updatedAt = new Date().toISOString();
     }
 
-    if (stored.state === "awaitingApprovals" && isReady(stored.authorizationRequirements.approvalRequirements, stored.approvals)) {
-      stored.state = "readyForResubmission";
-      stored.updatedAt = new Date().toISOString();
+    if (stored.state === "awaitingApprovals") {
+      const status = evaluateApprovalRequirements(stored.authorizationRequirements.approvalRequirements, stored.approvals);
+      if (status === "satisfied") {
+        stored.state = "readyForResubmission";
+        stored.updatedAt = new Date().toISOString();
+        this.createReadyDelivery(stored);
+      } else if (status === "unreachable") {
+        stored.state = "rejected";
+        stored.rejectedAt = new Date().toISOString();
+        stored.updatedAt = stored.rejectedAt;
+      }
     }
 
     return {
@@ -136,7 +329,7 @@ export class CoordinationStore {
     };
   }
 
-  poll(did: Did): CoordinationPollResponse {
+  poll(did: Did, cursor?: string): CoordinationPollResponse {
     const approvalRequests: ApprovalRequest[] = [];
     const actionUpdates: ActionUpdate[] = [];
 
@@ -155,11 +348,21 @@ export class CoordinationStore {
       }
     }
 
+    const after = parseCursor(cursor);
+    const deliveries = this.deliveries
+      .filter((entry) => entry.sequence > after)
+      .filter((entry) => entry.recipient === did)
+      .filter((entry) => entry.envelope.expiresAt === undefined || Date.parse(entry.envelope.expiresAt) > Date.now())
+      .slice(0, DELIVERY_PAGE_SIZE);
+    const nextCursor = deliveries.length > 0 ? String(deliveries.at(-1)!.sequence) : undefined;
+
     return {
       version: "1",
       type: "CoordinationPollResponse",
       approvalRequests,
       actionUpdates,
+      ...(deliveries.length > 0 ? { deliveries: deliveries.map((entry) => entry.envelope) } : {}),
+      ...(nextCursor !== undefined ? { nextCursor } : {}),
     };
   }
 
@@ -184,9 +387,12 @@ export class CoordinationStore {
     };
   }
 
-  validateSubmitAction(request: CoordinationActionRequest): void {
+  validateCreateWorkflow(request: CoordinationActionRequest): void {
+    validateActionPackageBindings(request.actionPackage);
     const actionEnvelopeHash = computeJsonHash(request.actionPackage.actionEnvelope);
-    const existingById = this.actionsById.get(request.actionPackage.actionEnvelope.actionId.value);
+    validateAuthorizationRequirements(request.authorizationRequirements, actionEnvelopeHash);
+    const actionId = request.actionPackage.actionEnvelope.actionId.value;
+    const existingById = this.actionsById.get(actionId) ?? this.relayedActionsById.get(actionId);
     if (existingById && existingById.actionRef.actionEnvelopeHash.value !== actionEnvelopeHash.value) {
       throw new CoordinationStoreError(409, "ACTION_ID_CONFLICT", "Action ID already exists with a different envelope hash.");
     }
@@ -213,6 +419,9 @@ export class CoordinationStore {
     if (stored.state === "readyForResubmission") {
       throw new CoordinationStoreError(409, "ACTION_READY", "Action is already ready for resubmission.");
     }
+    if (stored.state === "rejected") {
+      throw new CoordinationStoreError(409, "ACTION_REJECTED", "Action approval requirements are already unreachable.");
+    }
   }
 
   proposerForAction(actionId: string): Did | undefined {
@@ -228,12 +437,104 @@ export class CoordinationStore {
     return stored
       ? thresholdsFor(stored.authorizationRequirements.approvalRequirements).some((threshold) =>
           threshold.eligibleSigners.includes(did),
-        )
+        ) || (stored.authorizationRequirements.approvalRequirements.overrideSigners ?? []).some((entry) => entry.signer === did)
       : false;
   }
 
+  participantsForActionHash(actionEnvelopeHash: string): Did[] {
+    const stored = this.actionsByEnvelopeHash.get(actionEnvelopeHash);
+    if (!stored) return [];
+    return [...new Set<Did>([
+      stored.actionPackage.actionEnvelope.proposer.did,
+      stored.authorizationRequirements.verifier.did,
+      ...stored.deliveryRecipients,
+      ...thresholdsFor(stored.authorizationRequirements.approvalRequirements).flatMap((threshold) => threshold.eligibleSigners),
+      ...(stored.authorizationRequirements.approvalRequirements.overrideSigners ?? []).map((entry) => entry.signer),
+    ])];
+  }
+
+  hasOutstandingWork(did: Did): boolean {
+    for (const stored of this.actionsById.values()) {
+      this.expireIfNeeded(stored);
+      if (stored.state === "awaitingApprovals" && this.approvalRequestFor(stored, did)) return true;
+      // Action updates have no acknowledgement cursor in v1, so even a terminal
+      // proposer update remains pollable and must not be hidden on reconnect.
+      if (stored.actionPackage.actionEnvelope.proposer.did === did) return true;
+    }
+    return this.deliveries.some((entry) =>
+      entry.recipient === did &&
+      (entry.envelope.expiresAt === undefined || Date.parse(entry.envelope.expiresAt) > Date.now()));
+  }
+
+  routingAudit(): RoutingAuditEntry[] {
+    return structuredClone(this.routingAuditEntries);
+  }
+
+  private storeEnvelope(envelope: DeliveryEnvelope<unknown>): void {
+    for (const recipient of envelope.recipients) {
+      this.deliveries.push({
+        sequence: this.nextDeliverySequence++,
+        recipient,
+        envelope: structuredClone(envelope) as DeliveryEnvelope,
+      });
+    }
+  }
+
+  private createApprovalWorkflowFromResponse(stored: StoredRelayedAction, response: ActionResponse): void {
+    if (response.result !== "additionalApprovalsRequired" ||
+        response.authorizationRequirements?.result !== "additionalApprovalsRequired") return;
+    if (this.actionsByEnvelopeHash.has(stored.actionRef.actionEnvelopeHash.value)) return;
+    const now = new Date().toISOString();
+    const action: StoredAction = {
+      actionPackage: stored.envelope.payload.actionPackage,
+      authorizationRequirements: response.authorizationRequirements,
+      actionRef: stored.actionRef,
+      state: "awaitingApprovals",
+      approvals: [],
+      deliveryRecipients: [...stored.envelope.recipients],
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.actionsById.set(action.actionRef.actionId.value, action);
+    this.actionsByEnvelopeHash.set(action.actionRef.actionEnvelopeHash.value, action);
+  }
+
+  private createReadyDelivery(stored: StoredAction): void {
+    if (stored.readyDeliveryCreated) return;
+    stored.readyDeliveryCreated = true;
+    const envelope: DeliveryEnvelope<ActionRequest> = {
+      version: "1",
+      type: "DeliveryEnvelope",
+      sender: stored.actionPackage.actionEnvelope.proposer.did,
+      recipients: [...stored.deliveryRecipients],
+      createdAt: new Date().toISOString(),
+      payload: {
+        version: "1",
+        type: "ActionRequest",
+        actionPackage: buildCompletedActionPackage(stored),
+      },
+    };
+    this.storeEnvelope(envelope);
+    this.recordRoutingAudit("readyAction", envelope, stored.authorizationRequirements.verifier.did);
+  }
+
+  private recordRoutingAudit(
+    purpose: RoutingAuditEntry["purpose"],
+    envelope: DeliveryEnvelope<unknown>,
+    designatedVerifierDid: Did,
+  ): void {
+    this.routingAuditEntries.push({
+      purpose,
+      sender: envelope.sender,
+      recipients: [...envelope.recipients],
+      designatedVerifierDid,
+      payloadHash: computeJsonHash(envelope.payload),
+      createdAt: new Date().toISOString(),
+    });
+  }
+
   private expireIfNeeded(stored: StoredAction, now = Date.now()): void {
-    if (stored.state === "cancelled" || stored.state === "expired") {
+    if (stored.state === "cancelled" || stored.state === "expired" || stored.state === "rejected") {
       return;
     }
 
@@ -245,7 +546,7 @@ export class CoordinationStore {
   }
 
   private effectiveState(stored: StoredAction, now = Date.now()): CoordinationState {
-    if (stored.state === "cancelled" || stored.state === "expired") return stored.state;
+    if (stored.state === "cancelled" || stored.state === "expired" || stored.state === "rejected") return stored.state;
     const expiresAt = Date.parse(stored.actionPackage.actionEnvelope.expiresAt);
     return !Number.isNaN(expiresAt) && expiresAt <= now ? "expired" : stored.state;
   }
@@ -253,6 +554,7 @@ export class CoordinationStore {
   private approvalPreflight(request: CoordinationApprovalSubmission): {
     stored: StoredAction;
     payload: CanonicalApprovalPayload & { signerDid: Did };
+    duplicate: boolean;
   } {
     const stored = this.actionsByEnvelopeHash.get(request.actionEnvelopeHash.value);
     if (!stored || this.effectiveState(stored) === "cancelled" || this.effectiveState(stored) === "expired") {
@@ -272,24 +574,46 @@ export class CoordinationStore {
       throw new CoordinationStoreError(400, "APPROVAL_SIGNER_MISSING", "Signed approval payload does not include signerDid.");
     }
 
+    if (request.approval.decision !== payload.decision) {
+      throw new CoordinationStoreError(400, "APPROVAL_DECISION_MISMATCH", "Approval decision does not match its signed payload.");
+    }
+
     // Self-approval prevention: the proposer of an action cannot approve their own action.
     if (payload.signerDid === stored.actionPackage.actionEnvelope.proposer.did) {
       throw new CoordinationStoreError(403, "SELF_APPROVAL_DENIED", "The proposer of an action cannot approve their own action.");
     }
 
-    return { stored, payload: payload as CanonicalApprovalPayload & { signerDid: Did } };
+    const prior = stored.approvals.find((entry) => entry.signerDid === payload.signerDid);
+    if (prior && prior.decision !== payload.decision) {
+      throw new CoordinationStoreError(
+        409,
+        "SIGNER_DECISION_CONFLICT",
+        "A Signer's first decision for an Action Envelope is final.",
+      );
+    }
+    if (stored.state !== "awaitingApprovals" && !prior) {
+      throw new CoordinationStoreError(409, "ACTION_NOT_AWAITING_APPROVALS", "The workflow is no longer accepting new decisions.");
+    }
+
+    return {
+      stored,
+      payload: payload as CanonicalApprovalPayload & { signerDid: Did },
+      duplicate: prior !== undefined,
+    };
   }
 
   private approvalRequestFor(stored: StoredAction, did: Did): ApprovalRequest | undefined {
     const requirement = thresholdsFor(stored.authorizationRequirements.approvalRequirements).find((threshold) =>
       threshold.eligibleSigners.includes(did),
     );
-    if (!requirement) {
+    const override = (stored.authorizationRequirements.approvalRequirements.overrideSigners ?? [])
+      .find((entry) => entry.signer === did);
+    if (!requirement && !override) {
       return undefined;
     }
 
-    const decision = requirement.decision ?? "approve";
-    const alreadyResponded = stored.approvals.some((entry) => entry.signerDid === did && entry.decision === decision);
+    const decision = requirement?.decision ?? (override?.permissions.includes("approve") ? "approve" : "reject");
+    const alreadyResponded = stored.approvals.some((entry) => entry.signerDid === did);
     if (alreadyResponded) {
       return undefined;
     }
@@ -312,6 +636,14 @@ export class CoordinationStore {
   }
 }
 
+function parseCursor(cursor: string | undefined): number {
+  if (cursor === undefined) return 0;
+  if (!/^\d+$/.test(cursor)) {
+    throw new CoordinationStoreError(400, "INVALID_CURSOR", "Coordination cursor is invalid.");
+  }
+  return Number(cursor);
+}
+
 function buildActionRef(actionPackage: ActionPackage, actionEnvelopeHash: Hash): ActionRef {
   return {
     version: "1",
@@ -332,6 +664,11 @@ function buildActionUpdate(stored: StoredAction): ActionUpdate {
 
   if (stored.state === "cancelled") {
     update.cancelledAt = stored.cancelledAt;
+    return update;
+  }
+
+  if (stored.state === "rejected") {
+    update.rejectedAt = stored.rejectedAt;
     return update;
   }
 
@@ -364,14 +701,6 @@ function buildCompletedActionPackage(stored: StoredAction): ActionPackage {
   };
 }
 
-function isReady(requirements: ApprovalRequirements, approvals: StoredApproval[]): boolean {
-  const anyOf = requirements.anyOf ?? [];
-  const allOf = requirements.allOf ?? [];
-  const anyOfSatisfied = anyOf.length === 0 || anyOf.some((threshold) => isThresholdSatisfied(threshold, approvals));
-  const allOfSatisfied = allOf.every((threshold) => isThresholdSatisfied(threshold, approvals));
-  return anyOfSatisfied && allOfSatisfied;
-}
-
 function progressFor(requirements: ApprovalRequirements, approvals: StoredApproval[]): CoordinationProgress {
   const thresholds = thresholdsFor(requirements);
   const threshold = thresholds.find((candidate) => !isThresholdSatisfied(candidate, approvals)) ?? thresholds[0];
@@ -388,7 +717,7 @@ function progressFor(requirements: ApprovalRequirements, approvals: StoredApprov
   return {
     required: threshold.threshold,
     collected: Math.min(approved.size, threshold.threshold),
-    pending: threshold.eligibleSigners.filter((did) => !approved.has(did)),
+    pending: threshold.eligibleSigners.filter((did) => !approvals.some((entry) => entry.signerDid === did)),
   };
 }
 
@@ -407,6 +736,120 @@ function approvedSignersFor(threshold: ThresholdRequirement, decision: Decision,
 
 function thresholdsFor(requirements: ApprovalRequirements): ThresholdRequirement[] {
   return [...(requirements.anyOf ?? []), ...(requirements.allOf ?? [])];
+}
+
+function maintainersFrom(requirements: AuthorizationRequirements | undefined): Did[] {
+  if (!requirements || !("approvalRequirements" in requirements)) return [];
+  return [...new Set<Did>([
+    ...thresholdsFor(requirements.approvalRequirements).flatMap((threshold) => threshold.eligibleSigners),
+    ...(requirements.approvalRequirements.overrideSigners ?? []).map((override) => override.signer),
+  ])];
+}
+
+function validateActionPackageBindings(actionPackage: ActionPackage): void {
+  const raw = actionPackage as unknown as Record<string, unknown>;
+  if (!("executionPayload" in raw) || !isRecord(raw.actionEnvelope) || !isRecord(raw.approvalBundle) ||
+      !isRecord(raw.actionEnvelope.executionPayloadHash) ||
+      !isRecord(raw.approvalBundle.actionEnvelopeHash)) {
+    throw new CoordinationStoreError(400, "INVALID_REQUEST", "Action Package hash bindings are malformed.");
+  }
+  const payloadHash = computeJsonHash(actionPackage.executionPayload);
+  if (!hashesEqual(payloadHash, actionPackage.actionEnvelope.executionPayloadHash)) {
+    throw new CoordinationStoreError(
+      400,
+      "artifact_hash_mismatch",
+      "Execution Payload hash does not match ActionEnvelope.executionPayloadHash.",
+    );
+  }
+  const actionEnvelopeHash = computeJsonHash(actionPackage.actionEnvelope);
+  if (!hashesEqual(actionEnvelopeHash, actionPackage.approvalBundle.actionEnvelopeHash)) {
+    throw new CoordinationStoreError(
+      400,
+      "artifact_hash_mismatch",
+      "ApprovalBundle.actionEnvelopeHash does not match the Action Envelope.",
+    );
+  }
+}
+
+function validateAuthorizationRequirements(
+  requirements: AuthorizationRequirements,
+  actionEnvelopeHash: Hash,
+  verifierDid?: Did,
+): void {
+  const raw = requirements as unknown as Record<string, unknown>;
+  if (!isRecord(raw.actionEnvelopeHash) ||
+      typeof raw.actionEnvelopeHash.alg !== "string" ||
+      typeof raw.actionEnvelopeHash.value !== "string" ||
+      !isRecord(raw.verifier) ||
+      typeof raw.verifier.did !== "string" ||
+      !raw.verifier.did.startsWith("did:") ||
+      !isRecord(raw.approvalRequirements)) {
+    throw new CoordinationStoreError(400, "INVALID_REQUEST", "Authorization Requirements are malformed.");
+  }
+  for (const field of ["anyOf", "allOf"] as const) {
+    const entries = raw.approvalRequirements[field];
+    if (entries !== undefined && !Array.isArray(entries)) {
+      throw new CoordinationStoreError(400, "INVALID_REQUEST", `approvalRequirements.${field} must be an array.`);
+    }
+    for (const entry of Array.isArray(entries) ? entries : []) {
+      if (!isRecord(entry) || entry.type !== "threshold" || !Array.isArray(entry.eligibleSigners) ||
+          entry.eligibleSigners.some((did) => typeof did !== "string" || !did.startsWith("did:"))) {
+        throw new CoordinationStoreError(400, "INVALID_REQUEST", "Authorization threshold is malformed.");
+      }
+    }
+  }
+  const rawOverrides = raw.approvalRequirements.overrideSigners;
+  if (rawOverrides !== undefined && (!Array.isArray(rawOverrides) || rawOverrides.some((entry) =>
+    !isRecord(entry) || typeof entry.signer !== "string" || !entry.signer.startsWith("did:") ||
+    !Array.isArray(entry.permissions) || entry.permissions.length === 0 ||
+    entry.permissions.some((permission) => typeof permission !== "string")))) {
+    throw new CoordinationStoreError(400, "INVALID_REQUEST", "Authorization override Signers are malformed.");
+  }
+
+  if (requirements.result !== "additionalApprovalsRequired") {
+    throw new CoordinationStoreError(400, "INVALID_REQUEST", "Approval workflow requires additional-approval requirements.");
+  }
+  if (!hashesEqual(requirements.actionEnvelopeHash, actionEnvelopeHash)) {
+    throw new CoordinationStoreError(400, "artifact_hash_mismatch", "Authorization Requirements are bound to another Action.");
+  }
+  if (verifierDid !== undefined && requirements.verifier.did !== verifierDid) {
+    throw new CoordinationStoreError(403, "permission_denied", "Authorization Requirements came from another Verifier.");
+  }
+  if (requirements.expiresAt !== undefined) {
+    const expiresAt = Date.parse(requirements.expiresAt);
+    if (Number.isNaN(expiresAt)) {
+      throw new CoordinationStoreError(400, "INVALID_REQUEST", "Authorization Requirements expiry is invalid.");
+    }
+    if (expiresAt <= Date.now()) {
+      throw new CoordinationStoreError(409, "expired", "Authorization Requirements are expired.");
+    }
+  }
+
+  const thresholds = thresholdsFor(requirements.approvalRequirements);
+  const overrides = requirements.approvalRequirements.overrideSigners ?? [];
+  if (thresholds.length === 0 && overrides.length === 0) {
+    throw new CoordinationStoreError(400, "INVALID_REQUEST", "Authorization Requirements contain no approval path.");
+  }
+  for (const threshold of thresholds) {
+    const eligible = new Set(threshold.eligibleSigners);
+    if (eligible.size !== threshold.eligibleSigners.length) {
+      throw new CoordinationStoreError(400, "INVALID_REQUEST", "Threshold eligibleSigners must be unique.");
+    }
+    if (!Number.isInteger(threshold.threshold) || threshold.threshold < 1 || threshold.threshold > eligible.size) {
+      throw new CoordinationStoreError(400, "INVALID_REQUEST", "Threshold must be achievable by its eligibleSigners.");
+    }
+  }
+  if (new Set(overrides.map((entry) => entry.signer)).size !== overrides.length) {
+    throw new CoordinationStoreError(400, "INVALID_REQUEST", "Override Signer DIDs must be unique.");
+  }
+}
+
+function hashesEqual(left: Hash, right: Hash): boolean {
+  return left.alg === right.alg && left.value === right.value;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function decodeApprovalPayload(approval: Approval | undefined): CanonicalApprovalPayload | undefined {

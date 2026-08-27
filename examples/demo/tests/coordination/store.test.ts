@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { CompactSign, importJWK, type JWK } from "jose";
 import { canonicalize } from "json-canonicalize";
 import { describe, expect, it } from "vitest";
+import { buildDeliveryEnvelope } from "@oma3/mpas";
 import { CoordinationStore, CoordinationStoreError } from "../../src/coordination/store.js";
 import type { CoordinationActionRequest } from "../../src/coordination/types.js";
 import type { ActionPackage, Approval, Decision, Did, Hash } from "../../src/core/types.js";
@@ -21,7 +22,7 @@ describe("CoordinationStore", () => {
     const request = await coordinationActionRequest();
     const store = new CoordinationStore();
 
-    const result = store.submitAction(request);
+    const result = store.createWorkflow(request);
     const maintainerPoll = store.poll((await fixtureKey("maintainer-a")).did);
     const proposerPoll = store.poll(request.actionPackage.actionEnvelope.proposer.did);
     const outsiderPoll = store.poll("did:web:agents.example:outsider" as Did);
@@ -46,14 +47,19 @@ describe("CoordinationStore", () => {
     conflictingPackage.approvalBundle.actionEnvelopeHash = computeJsonHash(conflictingPackage.actionEnvelope);
     const store = new CoordinationStore();
 
-    store.submitAction(request);
+    store.createWorkflow(request);
 
     expect(() =>
-      store.submitAction({
+      store.createWorkflow({
         ...request,
         actionPackage: conflictingPackage,
       }),
     ).toThrowError(CoordinationStoreError);
+    expect(() => store.beginRelayedAction(buildDeliveryEnvelope({
+      sender: conflictingPackage.actionEnvelope.proposer.did,
+      recipients: [adapterDid],
+      payload: { version: "1", type: "ActionRequest", actionPackage: conflictingPackage },
+    }), adapterDid)).toThrowError(CoordinationStoreError);
   });
 
   it("tracks approvals, ignores duplicate signer counts, and assembles a completed action package", async () => {
@@ -62,7 +68,7 @@ describe("CoordinationStore", () => {
     const maintainerA = await fixtureKey("maintainer-a");
     const maintainerB = await fixtureKey("maintainer-b");
 
-    store.submitAction(request);
+    store.createWorkflow(request);
     store.submitApproval({
       version: "1",
       type: "CoordinationApprovalSubmission",
@@ -95,11 +101,110 @@ describe("CoordinationStore", () => {
     expect(store.poll(maintainerB.did).approvalRequests).toHaveLength(0);
   });
 
+  it("makes each Signer's first decision final for an Action Envelope", async () => {
+    const request = await coordinationActionRequest();
+    const store = new CoordinationStore();
+    const maintainerA = await fixtureKey("maintainer-a");
+    store.createWorkflow(request);
+
+    const approve = await signApproval(request.authorizationRequirements.actionEnvelopeHash, maintainerA, "approve");
+    const first = store.submitApproval({
+      version: "1",
+      type: "CoordinationApprovalSubmission",
+      actionEnvelopeHash: request.authorizationRequirements.actionEnvelopeHash,
+      approval: approve,
+    });
+    const duplicate = store.submitApproval({
+      version: "1",
+      type: "CoordinationApprovalSubmission",
+      actionEnvelopeHash: request.authorizationRequirements.actionEnvelopeHash,
+      approval: approve,
+    });
+    const changedDecision = await signApproval(
+      request.authorizationRequirements.actionEnvelopeHash,
+      maintainerA,
+      "reject",
+    );
+
+    expect(first.state).toBe("awaitingApprovals");
+    expect(duplicate.state).toBe("awaitingApprovals");
+    try {
+      store.submitApproval({
+        version: "1",
+        type: "CoordinationApprovalSubmission",
+        actionEnvelopeHash: request.authorizationRequirements.actionEnvelopeHash,
+        approval: changedDecision,
+      });
+      throw new Error("changed decision unexpectedly accepted");
+    } catch (error) {
+      expect(error).toBeInstanceOf(CoordinationStoreError);
+      expect(error).toMatchObject({ statusCode: 409, code: "SIGNER_DECISION_CONFLICT" });
+    }
+  });
+
+  it("rejects a workflow as soon as immutable decisions make its threshold unreachable", async () => {
+    const request = await coordinationActionRequest();
+    const store = new CoordinationStore();
+    const maintainerA = await fixtureKey("maintainer-a");
+    store.createWorkflow(request);
+
+    const response = store.submitApproval({
+      version: "1",
+      type: "CoordinationApprovalSubmission",
+      actionEnvelopeHash: request.authorizationRequirements.actionEnvelopeHash,
+      approval: await signApproval(request.authorizationRequirements.actionEnvelopeHash, maintainerA, "reject"),
+    });
+    const update = store.poll(request.actionPackage.actionEnvelope.proposer.did).actionUpdates[0];
+
+    expect(response.state).toBe("rejected");
+    expect(update).toMatchObject({ state: "rejected" });
+    expect(update.rejectedAt).toBeDefined();
+    expect(store.poll((await fixtureKey("maintainer-b")).did).approvalRequests).toHaveLength(0);
+  });
+
+  it("rejects invalid requirements and Action Package bindings before workflow creation", async () => {
+    const request = await coordinationActionRequest();
+    const cases: CoordinationActionRequest[] = [];
+
+    const unachievable = structuredClone(request);
+    unachievable.authorizationRequirements.approvalRequirements.anyOf![0].threshold = 3;
+    cases.push(unachievable);
+
+    const duplicate = structuredClone(request);
+    duplicate.authorizationRequirements.approvalRequirements.anyOf![0].eligibleSigners = [
+      duplicate.authorizationRequirements.approvalRequirements.anyOf![0].eligibleSigners[0],
+      duplicate.authorizationRequirements.approvalRequirements.anyOf![0].eligibleSigners[0],
+    ];
+    cases.push(duplicate);
+
+    const wrongRequirementsHash = structuredClone(request);
+    wrongRequirementsHash.authorizationRequirements.actionEnvelopeHash.value = "wrong";
+    cases.push(wrongRequirementsHash);
+
+    const expiredRequirements = structuredClone(request);
+    expiredRequirements.authorizationRequirements.expiresAt = "2020-01-01T00:00:00.000Z";
+    cases.push(expiredRequirements);
+
+    const payloadMismatch = structuredClone(request);
+    payloadMismatch.actionPackage.executionPayload = { changed: true };
+    cases.push(payloadMismatch);
+
+    const envelopeMismatch = structuredClone(request);
+    envelopeMismatch.actionPackage.approvalBundle.actionEnvelopeHash.value = "wrong";
+    cases.push(envelopeMismatch);
+
+    for (const invalid of cases) {
+      const store = new CoordinationStore();
+      expect(() => store.createWorkflow(invalid)).toThrowError(CoordinationStoreError);
+      expect(store.poll(invalid.actionPackage.actionEnvelope.proposer.did).actionUpdates).toHaveLength(0);
+    }
+  });
+
   it("preserves unenforcing behavior by storing but not counting an ineligible Approval", async () => {
     const request = await coordinationActionRequest();
     const store = new CoordinationStore();
     const adapter = await fixtureKey("adapter");
-    store.submitAction(request);
+    store.createWorkflow(request);
 
     const response = store.submitApproval({
       version: "1",
@@ -121,7 +226,7 @@ describe("CoordinationStore", () => {
     // Make the proposer eligible as a signer for this test
     request.authorizationRequirements.approvalRequirements.anyOf![0].eligibleSigners.push(proposer.did);
 
-    store.submitAction(request);
+    store.createWorkflow(request);
 
     // Proposer tries to approve their own action
     const selfApproval = await signApproval(request.authorizationRequirements.actionEnvelopeHash, proposer, "approve");
@@ -140,7 +245,7 @@ describe("CoordinationStore", () => {
     const store = new CoordinationStore();
     const maintainerA = await fixtureKey("maintainer-a");
 
-    store.submitAction(request);
+    store.createWorkflow(request);
     const cancelled = store.cancelAction({
       version: "1",
       type: "CoordinationActionCancelRequest",

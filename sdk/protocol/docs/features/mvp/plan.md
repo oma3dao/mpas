@@ -353,7 +353,7 @@ class CoordinationClient {
 ```
 
 HTTP calls map to the Coordination Service endpoints (per MPAS HTTP Profile Section 8.3):
-- `submitPendingAction` → `POST /mpas/v1/coordination/action`
+- `submitPendingAction` → `POST /mpas/v1/coordination/workflow` (`/coordination/action` remains a temporary server-side alias)
 - `listPending` → `POST /mpas/v1/coordination/poll` (with signer DID filter)
 - `getReviewSet` → `POST /mpas/v1/coordination/poll` (with action ID filter, returns Signer Review Set)
 - `submitApproval` → `POST /mpas/v1/coordination/approval`

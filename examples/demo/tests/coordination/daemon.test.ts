@@ -38,7 +38,7 @@ describe("coordination daemon", () => {
     const maintainerA = await fixtureKey("maintainer-a");
     const maintainerB = await fixtureKey("maintainer-b");
 
-    const submit = await post(daemon.address, "/mpas/v1/coordination/action", request);
+    const submit = await post(daemon.address, "/mpas/v1/coordination/workflow", request);
     const signerPoll = await post(daemon.address, "/mpas/v1/coordination/poll", {
       version: "1",
       type: "CoordinationPollRequest",

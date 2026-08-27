@@ -1,5 +1,5 @@
 import type { ActionPackage, Did } from "../types/mpas.js";
-import { computeHash } from "../utils/hash.js";
+import { computeJsonHash } from "../utils/hash.js";
 import {
   buildCancelTaskResult,
   buildCreateTaskResult,
@@ -25,8 +25,10 @@ import {
 } from "./bridge-compatibility.js";
 import {
   BridgeWorkflowEngine,
+  type WorkflowActionEndpoint,
   type WorkflowAdapter,
   type WorkflowCoordination,
+  type WorkflowCoordinationService,
 } from "./workflow-engine.js";
 import type { WorkflowRecord, WorkflowStore } from "./workflow-store.js";
 
@@ -45,8 +47,14 @@ export interface ProposerBridgeOptions {
   tools: BridgeUpstreamTool[];
   buildActionPackage: (toolName: string, args: object) => Promise<ActionPackage>;
   store: WorkflowStore;
-  adapter: WorkflowAdapter;
-  coordination: WorkflowCoordination;
+  /** Common Action endpoint used for initial and completed Action submission. */
+  actionEndpoint?: WorkflowActionEndpoint;
+  /** Coordination Service used for approval collection and workflow updates. */
+  coordinationService?: WorkflowCoordinationService;
+  /** @deprecated Use {@link actionEndpoint}. */
+  adapter?: WorkflowAdapter;
+  /** @deprecated Use {@link coordinationService}. */
+  coordination?: WorkflowCoordination;
   proposerDid: Did;
   resultRetentionSeconds: number;
   /** Background MPAS engine tick interval. Default 2000ms. */
@@ -111,8 +119,10 @@ export class ProposerBridge {
     this.pollIntervalMs = options.pollIntervalMs ?? 2_000;
     this.engine = new BridgeWorkflowEngine({
       store: options.store,
-      adapter: options.adapter,
-      coordination: options.coordination,
+      ...(options.actionEndpoint !== undefined ? { actionEndpoint: options.actionEndpoint } : {}),
+      ...(options.coordinationService !== undefined ? { coordinationService: options.coordinationService } : {}),
+      ...(options.adapter !== undefined ? { adapter: options.adapter } : {}),
+      ...(options.coordination !== undefined ? { coordination: options.coordination } : {}),
       proposerDid: options.proposerDid,
       ...(options.workerId !== undefined ? { workerId: options.workerId } : {}),
       ...(options.now !== undefined ? { now: options.now } : {}),
@@ -206,7 +216,7 @@ export class ProposerBridge {
     const envelope = actionPackage.actionEnvelope;
     const outcome = await this.engine.propose({
       actionId: envelope.actionId.value,
-      actionEnvelopeHash: computeHash(envelope).value,
+      actionEnvelopeHash: computeJsonHash(envelope).value,
       toolName,
       actionPackage,
       expiresAt: envelope.expiresAt,

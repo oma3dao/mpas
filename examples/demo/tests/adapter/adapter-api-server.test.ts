@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
 import { compactVerify, importJWK, type JWK } from "jose";
+import { buildDeliveryEnvelope, type ActionPackage } from "@oma3/mpas";
 import { loadDeploymentConfigs } from "../../src/adapter/config-loader.js";
 import { FileCredentialProvider } from "../../src/adapter/credential-provider.js";
 import { createAdapterApiServer } from "../../src/adapter/adapter-api-server.js";
@@ -245,6 +246,28 @@ describe("HTTP endpoint", () => {
     // Repeating the same package yields the same verdict — the actionId was not consumed.
     const second = await submitFixture(app, "insufficient-approvals.json");
     expect(second.json()).toMatchObject({ result: "additionalApprovalsRequired" });
+  });
+
+  it("accepts a canonical multi-recipient Action envelope when the configured Verifier DID is a recipient", async () => {
+    const app = await makeApp();
+    const actionPackage = await readJson<ActionPackage>(join(fixturesDir, "core", "insufficient-approvals.json"));
+    const adapter = await readJson<KeyFixture>(join(fixturesDir, "test-keys", "adapter.json"));
+    const envelope = buildDeliveryEnvelope({
+      sender: actionPackage.actionEnvelope.proposer.did,
+      recipients: [adapter.did, "did:jwk:observer" as Did],
+      payload: { version: "1", type: "ActionRequest", idempotencyKey: "direct-1", actionPackage },
+    });
+
+    const response = await app.inject({ method: "POST", url: "/mpas/v1/action", payload: envelope });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ type: "ActionResponse", result: "additionalApprovalsRequired" });
+
+    const missingVerifier = await app.inject({
+      method: "POST",
+      url: "/mpas/v1/action",
+      payload: { ...envelope, recipients: ["did:jwk:observer"] },
+    });
+    expect(missingVerifier.statusCode).toBe(400);
   });
 
   it("returns a 400 MpasHttpError for an unparseable package (missing Action Envelope)", async () => {

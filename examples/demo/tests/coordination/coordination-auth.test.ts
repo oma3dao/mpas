@@ -65,10 +65,19 @@ describe("coordination RFC 9421 authentication", () => {
     const health = await app.inject({ method: "GET", url: "/mpas/v1/coordination/health" });
     expect(health.statusCode).toBe(200);
 
-    for (const path of ["action", "poll", "approval", "action-cancel"]) {
+    for (const path of [
+      "/mpas/v1/action",
+      "/mpas/v1/coordination/workflow",
+      "/mpas/v1/coordination/action",
+      "/mpas/v1/coordination/poll",
+      "/mpas/v1/coordination/approval",
+      "/mpas/v1/coordination/action-cancel",
+      "/mpas/v1/coordination/delivery",
+      "/mpas/v1/coordination/session",
+    ]) {
       const response = await app.inject({
         method: "POST",
-        url: `/mpas/v1/coordination/${path}`,
+        url: path,
         payload: {},
       });
       expect(response.statusCode).toBe(401);
@@ -87,7 +96,7 @@ describe("coordination RFC 9421 authentication", () => {
     const maintainerA = await fixtureSigner("maintainer-a");
     const maintainerB = await fixtureSigner("maintainer-b");
 
-    const submit = await signedInject(app, "/mpas/v1/coordination/action", request, proposer.signer);
+    const submit = await signedInject(app, "/mpas/v1/coordination/workflow", request, proposer.signer);
     expect(submit.statusCode).toBe(201);
 
     const pollA = await signedInject(
@@ -134,7 +143,7 @@ describe("coordination RFC 9421 authentication", () => {
     const app = createApp();
     const request = await coordinationActionRequest();
     const proposer = await fixtureSigner("proposer");
-    await signedInject(app, "/mpas/v1/coordination/action", request, proposer.signer);
+    await signedInject(app, "/mpas/v1/coordination/workflow", request, proposer.signer);
 
     const cancel: CoordinationActionCancelRequest = {
       version: "1",
@@ -157,14 +166,14 @@ describe("coordination RFC 9421 authentication", () => {
 
     const mismatchedAction = await signedInject(
       actionApp,
-      "/mpas/v1/coordination/action",
+      "/mpas/v1/coordination/workflow",
       request,
       maintainerA.signer,
     );
     expectPermissionDenied(mismatchedAction);
 
     const app = createApp();
-    await signedInject(app, "/mpas/v1/coordination/action", request, proposer.signer);
+    await signedInject(app, "/mpas/v1/coordination/workflow", request, proposer.signer);
 
     const mismatchedPoll = await signedInject(
       app,
@@ -242,7 +251,7 @@ describe("coordination RFC 9421 authentication", () => {
     const request = await coordinationActionRequest();
     const proposer = await fixtureSigner("proposer");
     const signed = await buildSignedRequest(
-      "/mpas/v1/coordination/action",
+      "/mpas/v1/coordination/workflow",
       request,
       proposer.signer,
       "concurrent-nonce",
@@ -265,7 +274,7 @@ describe("coordination RFC 9421 authentication", () => {
     wrongIdentity.actionPackage.actionEnvelope.proposer.did = maintainerA.fixture.did;
     const identityFailure = await signedInject(
       identityApp,
-      "/mpas/v1/coordination/action",
+      "/mpas/v1/coordination/workflow",
       wrongIdentity,
       proposer.signer,
       "reusable-identity-nonce",
@@ -273,7 +282,7 @@ describe("coordination RFC 9421 authentication", () => {
     expectPermissionDenied(identityFailure);
     const correctedIdentity = await signedInject(
       identityApp,
-      "/mpas/v1/coordination/action",
+      "/mpas/v1/coordination/workflow",
       request,
       proposer.signer,
       "reusable-identity-nonce",
@@ -281,7 +290,7 @@ describe("coordination RFC 9421 authentication", () => {
     expect(correctedIdentity.statusCode).toBe(201);
 
     const preflightApp = createApp();
-    await signedInject(preflightApp, "/mpas/v1/coordination/action", request, proposer.signer);
+    await signedInject(preflightApp, "/mpas/v1/coordination/workflow", request, proposer.signer);
     const missingHash = { alg: "sha-256", value: "missing-action" } as Hash;
     const invalidApproval: CoordinationApprovalSubmission = {
       version: "1",
@@ -352,7 +361,7 @@ describe("coordination RFC 9421 authentication", () => {
       fixture: unknownKey as FixtureKey,
       signer: KeyManager.fromJwk(unknownKey.privateJwk),
     };
-    await signedInject(app, "/mpas/v1/coordination/action", request, proposer.signer);
+    await signedInject(app, "/mpas/v1/coordination/workflow", request, proposer.signer);
 
     const identities = [maintainerA, adapter, unknown];
     const successful = await Promise.all(
@@ -398,7 +407,7 @@ describe("coordination RFC 9421 authentication", () => {
     const request = await coordinationActionRequest();
     const proposer = await fixtureSigner("proposer");
     const signed = await buildSignedRequest(
-      "/mpas/v1/coordination/action",
+      "/mpas/v1/coordination/workflow",
       request,
       proposer.signer,
       "secret-nonce-value",
@@ -407,7 +416,7 @@ describe("coordination RFC 9421 authentication", () => {
     const response = await app.inject(signed);
     expect(response.statusCode).toBe(201);
     const trace = await readFile(tracePath, "utf8");
-    expect(trace).toContain("coordination_submit");
+    expect(trace).toContain("coordination_workflow_create");
     expect(trace).not.toContain("Signature-Input");
     expect(trace).not.toContain("secret-nonce-value");
     expect(trace).not.toContain(proposer.fixture.did);
@@ -420,6 +429,7 @@ describe("coordination RFC 9421 authentication", () => {
 function createApp(auth: Partial<CoordinationAuthOptions> = {}, traceLogger?: TraceLogger) {
   const app = createCoordinationApiServer({
     traceLogger,
+    designatedVerifierDid: "did:web:adapter.local" as Did,
     auth: {
       enforcement: true,
       audiences: [AUDIENCE],

@@ -3,7 +3,14 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { JWK } from "jose";
 import { describe, expect, it } from "vitest";
-import { ApprovalBuilder, computeHash, KeyManager, type ActionPackage, type Did } from "../../src/index.js";
+import {
+  ApprovalBuilder,
+  computeJsonHash,
+  KeyManager,
+  verifyApproval,
+  type ActionPackage,
+  type Did,
+} from "../../src/index.js";
 
 const fixturesDir = fileURLToPath(new URL("../fixtures/", import.meta.url));
 
@@ -29,9 +36,10 @@ describe("ApprovalBuilder", () => {
     expect(approval).toMatchObject({
       version: "1",
       type: "Approval",
-      actionEnvelopeHash: computeHash(actionPackage.actionEnvelope),
+      actionEnvelopeHash: computeJsonHash(actionPackage.actionEnvelope),
       decision: "approve",
     });
+    await expect(verifyApproval(approval, signer.publicJwk)).resolves.toBe(true);
     await expect(builder.verifyApproval(approval, signer.publicJwk)).resolves.toBe(true);
   });
 
@@ -44,9 +52,9 @@ describe("ApprovalBuilder", () => {
     const builder = new ApprovalBuilder({ keyManager });
     const approval = await builder.buildApproval(actionPackage.actionEnvelope, "approve");
 
-    await expect(builder.verifyApproval({ ...approval, decision: "reject" }, signer.publicJwk)).resolves.toBe(false);
+    await expect(verifyApproval({ ...approval, decision: "reject" }, signer.publicJwk)).resolves.toBe(false);
     await expect(
-      builder.verifyApproval(
+      verifyApproval(
         {
           ...approval,
           signature: {

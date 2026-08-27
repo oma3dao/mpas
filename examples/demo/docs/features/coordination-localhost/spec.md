@@ -11,11 +11,11 @@
 
 The local coordination service is a lightweight in-memory service that runs as a separate Node.js process alongside the Credential Adapter. It implements the MPAS HTTP Profile Coordination Service endpoints for local development, integration tests, and demos.
 
-The service is a mailbox and state machine for approval collection. It maintains a non-authoritative workflow view of action progress per MPAS Core Section 6.9.4 (Action Lifecycle — Component Views and Naming Consistency). Its states reflect coordination workflow progress, not Verifier authorization state. The Verifier's lifecycle (open → executing → resolved) is authoritative; the coordination service never observes Verifier state directly — it learns outcomes only when the Proposer relays them.
+The service is a mailbox, Action relay, and state machine for approval collection. It maintains a non-authoritative workflow view of action progress per MPAS Core. Its states reflect coordination workflow progress, not Verifier authorization state.
 
 The service is not a Verifier, does not hold application credentials, does not execute actions, and does not share memory or internal state with the Credential Adapter.
 
-The Proposer (e.g.- proposer bridge) always submits Action Packages directly to the Credential Adapter. If the adapter returns `additionalApprovalsRequired`, the Proposer sends the original Action Package and the Authorization Requirements to the coordination service. Maintainer bridges discover pending work by polling, then submit Approvals to the coordination service. When enough Approvals have been collected, the coordination service assembles a completed Action Package (containing the original Execution Payload, Action Envelope, and an updated Approval Bundle with all collected Approvals including the Proposer's original Approval). The Proposer fetches the completed Action Package and re-submits it directly to the adapter.
+The demo supports both HTTP Profile topologies. A Proposer may submit directly to the Verifier and create a coordination workflow after `additionalApprovalsRequired`, or submit `DeliveryEnvelope<ActionRequest>` through the Coordination Service relay. Relayed Verifier responses return through `/mpas/v1/coordination/delivery`. Participants retrieve authoritative work through polling; the optional WebSocket only signals that polling work exists.
 
 ---
 
@@ -27,6 +27,8 @@ The Proposer (e.g.- proposer bridge) always submits Action Packages directly to 
 - Let maintainer bridges poll for pending work and submit Approvals.
 - Let proposer bridges poll for workflow state changes.
 - Let proposer bridges fetch a completed Action Package ready for direct resubmission to the Verifier.
+- Relay addressed Action requests and Verifier responses through Delivery Envelopes.
+- Offer notification-only WebSocket sessions without moving payload retrieval off the signed poll.
 - Detect `actionId` conflicts where the same action ID is submitted with a different Action Envelope hash.
 - Run alongside the adapter via unified `mpas daemon start`, on port `7545` by default.
 - Follow the adapter's Fastify, TypeScript, ESM, and Vitest patterns.
@@ -87,12 +89,14 @@ Response:
 
 This endpoint is not part of the MPAS protocol. It exists for daemon startup checks, monitoring, and CLI status commands.
 
-### 5.2 Submit Action
+### 5.2 Create Workflow
 
 ```http
-POST /mpas/v1/coordination/action
+POST /mpas/v1/coordination/workflow
 Content-Type: application/mpas+json
 ```
+
+`POST /mpas/v1/coordination/action` is retained temporarily as a deprecated alias of the workflow endpoint. It accepts the same request and returns the same response.
 
 Request:
 
@@ -340,14 +344,15 @@ Rules:
 - The service determines what to return based on the DID alone.
 - `approvalRequests` contains pending Approval Requests for actions where the DID is listed in `eligibleSigners` and the action is in `awaitingApprovals` state. Empty array if none. Cancelled and expired actions are not included.
 - `actionUpdates` contains state and progress for actions where the DID is the proposer. Empty array if none.
-- Each action update carries `version` and `type` (`CoordinationActionUpdate`) and includes a `progress` object with `required` (threshold count), `collected` (approvals collected so far), and `pending` (eligible DIDs that haven't responded), consistent with the HTTP Profile §8.5. Progress is not present for cancelled or expired actions.
+- Each action update carries `version` and `type` (`CoordinationActionUpdate`) and includes a `progress` object with `required` (threshold count), `collected` (approvals collected so far), and `pending` (eligible DIDs that haven't responded), consistent with the HTTP Profile §8.5. Progress is not present for rejected, cancelled, or expired actions.
 - When state is `readyForResubmission`, the action update includes the completed `actionPackage`.
 - `actionPackage` is only present when state is `readyForResubmission`. It contains the original Execution Payload, Action Envelope, and an updated Approval Bundle with all collected Approvals (including the Proposer's original Approval).
 - When state is `cancelled`, the action update includes `cancelledAt` and no `progress` or `actionPackage`.
 - When state is `expired`, the action update includes no `progress` or `actionPackage`. The `expiresAt` from the original Action Envelope indicates when expiry occurred.
+- When immutable Signer decisions make the requirements unreachable, state becomes `rejected`, the update includes `rejectedAt`, and no further approval request is returned.
 - A DID that is both a proposer on one action and an eligible signer on another receives both in the same response.
 - The proposer can take the `actionPackage` from an action update and submit it directly to the Credential Adapter without further assembly.
-- The service is polling-first; no WebSocket or SSE is implemented. The local service returns all relevant items in a single response and does not paginate, so it never emits `nextCursor` and ignores any supplied `cursor` (HTTP Profile §8.5).
+- The service is polling-first and also implements the optional notification-only WebSocket. Approval Requests and action updates are returned in full. Addressed deliveries are capped per page, and every non-empty delivery page includes a delivery-position `nextCursor` checkpoint (HTTP Profile §8.5).
 - On each poll, the service checks `actionEnvelope.expiresAt` for all relevant actions and transitions expired actions to `expired` state before computing the response.
 
 ### 5.4 Submit Approval
@@ -469,6 +474,7 @@ The local service maintains a non-authoritative workflow view using the followin
 |---|---|
 | `awaitingApprovals` | The action is stored and more Approvals are needed. |
 | `readyForResubmission` | Stored Approvals appear to satisfy the Authorization Requirements threshold count. |
+| `rejected` | Immutable Signer decisions have made the approval expression unreachable. This is a non-authoritative coordination result. |
 | `cancelled` | The proposer cancelled the action. No longer served to signers. |
 | `expired` | The Action Envelope's `expiresAt` has passed. No longer served to signers. |
 

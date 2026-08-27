@@ -8,19 +8,25 @@ import type {
   Did,
   ExecutionPayload,
 } from "../types/mpas.js";
-import { computeHash } from "../utils/hash.js";
+import { computeJsonHash } from "../utils/hash.js";
 import { KeyManager } from "./key-manager.js";
 
+/** Reusable configuration for constructing Proposer-authored Action Packages. */
 export interface ActionPackageBuilderConfig {
+  /** DID of the MPAS Application targeted by constructed Actions. */
   applicationDid: Did;
+  /** Execution profile identifier and payload format placed in each Action Envelope. */
   executionProfile: {
     id: Did;
     format: string;
   };
+  /** Proposer key used to derive the Proposer DID and sign the proposal Approval. */
   keyManager: KeyManager;
+  /** Default Action validity window. Defaults to 30 minutes. */
   defaultExpirationMinutes?: number;
 }
 
+/** Builds complete, Proposer-signed Action Packages from MCP tool calls. */
 export class ActionPackageBuilder {
   private readonly defaultExpirationMinutes: number;
 
@@ -28,22 +34,43 @@ export class ActionPackageBuilder {
     this.defaultExpirationMinutes = config.defaultExpirationMinutes ?? 30;
   }
 
+  /** Builds and signs one complete Action Package for a tool name and arguments object. */
   async buildFromToolCall(toolName: string, args: object): Promise<ActionPackage> {
-    const payload = this.buildPayload(toolName, args);
-    const envelope = this.buildEnvelope(payload);
-    const approval = await this.signProposerApproval(envelope);
+    const payload = this.createPayload(toolName, args);
+    const envelope = this.createEnvelope(payload);
+    const approval = await this.createProposerApproval(envelope);
 
-    return this.assemblePackage(payload, envelope, approval);
+    return this.createPackage(payload, envelope, approval);
   }
 
+  /** @deprecated Use {@link buildFromToolCall}; staged construction is not part of the canonical API. */
   buildPayload(toolName: string, args: object): ExecutionPayload {
+    return this.createPayload(toolName, args);
+  }
+
+  /** @deprecated Use {@link buildFromToolCall}; staged construction is not part of the canonical API. */
+  buildEnvelope(payload: ExecutionPayload): ActionEnvelope {
+    return this.createEnvelope(payload);
+  }
+
+  /** @deprecated Use {@link buildFromToolCall}; staged construction is not part of the canonical API. */
+  async signProposerApproval(envelope: ActionEnvelope): Promise<Approval> {
+    return this.createProposerApproval(envelope);
+  }
+
+  /** @deprecated Use {@link buildFromToolCall}; staged construction is not part of the canonical API. */
+  assemblePackage(payload: ExecutionPayload, envelope: ActionEnvelope, approval: Approval): ActionPackage {
+    return this.createPackage(payload, envelope, approval);
+  }
+
+  private createPayload(toolName: string, args: object): ExecutionPayload {
     return {
       name: toolName,
       arguments: { ...args },
     };
   }
 
-  buildEnvelope(payload: ExecutionPayload): ActionEnvelope {
+  private createEnvelope(payload: ExecutionPayload): ActionEnvelope {
     const now = new Date();
     const expiresAt = new Date(now.getTime() + this.defaultExpirationMinutes * 60 * 1000);
 
@@ -57,7 +84,7 @@ export class ActionPackageBuilder {
         applicationDid: this.config.applicationDid,
       },
       executionProfile: this.config.executionProfile,
-      executionPayloadHash: computeHash(payload),
+      executionPayloadHash: computeJsonHash(payload),
       actionId: {
         value: `urn:uuid:${randomUUID()}`,
       },
@@ -66,9 +93,9 @@ export class ActionPackageBuilder {
     };
   }
 
-  async signProposerApproval(envelope: ActionEnvelope): Promise<Approval> {
+  private async createProposerApproval(envelope: ActionEnvelope): Promise<Approval> {
     const createdAt = new Date().toISOString();
-    const actionEnvelopeHash = computeHash(envelope);
+    const actionEnvelopeHash = computeJsonHash(envelope);
     const approvalPayload: CanonicalApprovalPayload = {
       type: "ApprovalPayload",
       actionEnvelopeHash,
@@ -76,7 +103,7 @@ export class ActionPackageBuilder {
       signerDid: this.config.keyManager.did,
       createdAt,
     };
-    const signature = await this.config.keyManager.sign(Buffer.from(canonicalize(approvalPayload)));
+    const signature = await this.config.keyManager.signCompactJws(Buffer.from(canonicalize(approvalPayload)));
 
     return {
       version: "1",
@@ -91,8 +118,8 @@ export class ActionPackageBuilder {
     };
   }
 
-  assemblePackage(payload: ExecutionPayload, envelope: ActionEnvelope, approval: Approval): ActionPackage {
-    const actionEnvelopeHash = computeHash(envelope);
+  private createPackage(payload: ExecutionPayload, envelope: ActionEnvelope, approval: Approval): ActionPackage {
+    const actionEnvelopeHash = computeJsonHash(envelope);
     const createdAt = new Date().toISOString();
 
     return {

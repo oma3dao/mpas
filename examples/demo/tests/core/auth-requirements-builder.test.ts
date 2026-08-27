@@ -70,11 +70,11 @@ describe("buildAuthorizationRequirements", () => {
     }
 
     const adapter = await readJson<KeyFixture>(join(fixturesDir, "test-keys", "adapter.json"));
-    const requirements = buildAuthorizationRequirements(
-      actionPackage.actionEnvelope,
-      policyResult.unsatisfiedRules,
-      adapter.did,
-    );
+    const requirements = buildAuthorizationRequirements({
+      actionEnvelope: actionPackage.actionEnvelope,
+      unsatisfiedRules: policyResult.unsatisfiedRules,
+      verifierDid: adapter.did,
+    });
 
     expect(requirements).toMatchObject({
       version: "1",

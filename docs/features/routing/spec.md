@@ -1,287 +1,390 @@
-# MPAS Routing and Delivery — Feature Specification
+# MPAS Routing and Push Notification — Feature Specification
 
 **Status:** Draft
 **Created:** 2026-08-20
-**Revised:** 2026-08-22
+**Revised:** 2026-08-27
 **Tracks:** [#45](https://github.com/oma3dao/mpas/issues/45), [#20](https://github.com/oma3dao/mpas/issues/20), [#17](https://github.com/oma3dao/mpas/issues/17)
 **Companion:** [plan.md](./plan.md)
-**Related specs:** [HTTP Profile](../../../specs/mpas-profile-http.md), [MPAS Core](../../../specs/mpas-specification.md), [MCP Proposer Bridge Profile](../../../specs/mpas-profile-mcp-proposer-bridge-client.md)
+**Related specifications:** [HTTP Profile](../../../specs/mpas-profile-http.md), [MPAS Core](../../../specs/mpas-specification.md)
 
 ---
 
-## 1. Purpose
+## 1. Purpose and Relationship to MPAS
 
-This feature defines a protocol-level delivery model for MPAS artifacts routed through a Coordination Service. Today, the HTTP Profile specifies polling endpoints and lists webhook event types as optional/deployment-specific (§9.2–9.3). No delivery envelope schema or body-level idempotency mechanism is defined.
+This feature adds a routing envelope, a Coordination Service relay binding for the existing Action interface, routed delivery through the existing coordination poll, optional WebSocket work notifications, and body-level idempotency.
 
-This leaves two gaps:
+It does not restate MPAS roles or processing. Implementations continue to follow:
 
-1. **Idempotency** is header-only (§4.5). Non-HTTP transports (MCP over stdio, WebSocket frames, future transports) cannot use HTTP headers.
-2. **Routing metadata** (destination DIDs, expiration) lives implicitly in Authorization Requirements. Making it explicit in a delivery envelope enables richer topologies without altering MPAS verification semantics.
+- [Core §2](../../../specs/mpas-specification.md#2-definitions-and-terminology) for terminology;
+- [Core §4](../../../specs/mpas-specification.md#4-architecture) and [Core §6](../../../specs/mpas-specification.md#6-protocol-and-processing-rules) for architecture, Action processing, coordination topologies, and the Action lifecycle;
+- [Core §7.7](../../../specs/mpas-specification.md#77-coordination-service) for the Coordination Service trust boundary;
+- [HTTP §4](../../../specs/mpas-profile-http.md#4-common-http-rules) for common HTTP, authentication, and idempotency rules;
+- [HTTP §6](../../../specs/mpas-profile-http.md#6-common-action-interface) for `ActionRequest` and `ActionResponse` processing;
+- [HTTP §8](../../../specs/mpas-profile-http.md#8-coordination-service-interface) for the existing Coordination Service workflow and poll; and
+- [HTTP §§9–11](../../../specs/mpas-profile-http.md#9-polling-and-optional-push-notification) for polling, security, and conformance.
 
-This specification introduces:
+This feature updates [HTTP §6.2](../../../specs/mpas-profile-http.md#62-endpoint), [§8.5](../../../specs/mpas-profile-http.md#85-post-mpasv1coordinationpoll), and [§14](../../../specs/mpas-profile-http.md#14-coordination-service-topology). A Proposer may submit the same enveloped Action request to either a directly reachable Verifier or a Coordination Service relay, and a Verifier may retrieve a relayed Action request through the Coordination Service poll.
 
-- A **Delivery Envelope** that wraps any MPAS artifact for routing without modifying the artifact or inspecting its contents.
-- A **body-level `idempotencyKey` field** that supersedes the HTTP header for transport neutrality.
+## 2. Additive Scope
 
-Push delivery mechanisms (webhooks, WebSocket, SSE, message queues) are implementation details of individual Coordination Service deployments. This specification does not define transport bindings — it defines the payload format that any transport can carry.
+This feature defines only:
 
----
+- `DeliveryEnvelope`;
+- body-level `idempotencyKey` on `ActionRequest` and signed-request `audience` on the outer submitted object;
+- canonical `DeliveryEnvelope<ActionRequest>` submission to `POST /mpas/v1/action`;
+- the existing `ActionResponse` as the response from either a direct Verifier or a Coordination Service relay;
+- Verifier submission of `DeliveryEnvelope<ActionResponse>` to a Coordination Service;
+- an optional `deliveries` field on `CoordinationPollResponse`;
+- an authenticated WebSocket session and payload-free work notification; and
+- routing that Verifier response to its addressed recipients.
 
-## 2. Scope
+It does not change the Core schemas or verification rules for `ActionEnvelope`, `ActionPackage`, `Approval`, `AuthorizationRequirements`, `ActionResponse`, or `ExecutionReceipt`. It does not define participant discovery, webhook registration, WebSocket payload delivery, acknowledgements, exactly-once delivery, end-to-end encryption, retry queues, or operational tuning.
 
-### 2.1 In Scope
+## 3. Delivery Envelope
 
-- Delivery Envelope schema definition (transport-layer wrapper).
-- Body-level idempotency key (migration from HTTP header).
-- Security properties and trust boundaries for envelope routing.
-- Compatibility with existing polling-first model.
-
-### 2.2 Out of Scope
-
-- Changes to MPAS artifact schemas (Action Package, Approval, Execution Receipt, etc.).
-- Changes to verification or authorization semantics.
-- Transport bindings (webhooks, WebSocket, etc.) — these are implementation choices for Coordination Service deployments.
-- Subscription management APIs — implementation-specific.
-- End-to-end encryption of envelope payloads (future work).
-- DID enrollment, rotation, suspension, or revocation (tracked separately).
-- MCP transport binding (covered by MCP Proposer Bridge Profile).
-- Credential Adapter plugin internals.
-
----
-
-## 3. Design Principles
-
-1. **Wrap, never alter.** The Delivery Envelope is a pure transport wrapper. Enclosed MPAS artifacts remain independently verifiable. A recipient MUST be able to extract and verify the artifact without understanding the envelope.
-
-2. **Layer separation.** The envelope is a routing layer. It MUST NOT inspect, duplicate, or depend on fields within the enclosed payload. Like the OSI network layer, it addresses and delivers without understanding application semantics.
-
-3. **Polling remains mandatory.** Push delivery (however implemented) is an optimization. A conforming Coordination Service MUST continue to expose `/mpas/v1/coordination/poll`. Push delivery is informational — recipients MUST verify canonical artifacts before acting.
-
-4. **DID-scoped delivery.** Recipients receive only artifacts addressed to their authenticated DIDs. Routing metadata MUST NOT grant signer eligibility or execution authority.
-
-5. **Idempotent by default.** Duplicate, delayed, reordered, or replayed deliveries MUST NOT cause duplicate execution. The idempotency key in the message body ensures this property across all transports.
-
-6. **Transport-neutral idempotency.** The idempotency key lives in the message body so it is available on all transports and automatically covered by content-digest.
-
----
-
-## 4. Delivery Envelope
-
-### 4.1 Schema
+### 3.1 Schema
 
 ```json
 {
   "version": "1",
   "type": "DeliveryEnvelope",
-  "sender": "did:web:coordination.example",
-  "recipients": ["did:web:adapter.example", "did:web:signer.example"],
-  "createdAt": "2026-08-20T12:00:00.000Z",
-  "expiresAt": "2026-08-20T12:05:00.000Z",
-  "payload": { ... }
+  "sender": "did:jwk:...sender...",
+  "recipients": [
+    "did:jwk:...recipient-1...",
+    "did:jwk:...recipient-2..."
+  ],
+  "createdAt": "2026-08-25T12:00:00.000Z",
+  "expiresAt": "2026-08-25T12:05:00.000Z",
+  "audience": "https://action-service.example.com",
+  "payload": {
+    "version": "1",
+    "type": "ActionRequest"
+  }
 }
 ```
 
-### 4.2 Field Definitions
+| Field | Required | Definition |
+| --- | :---: | --- |
+| `version` | Yes | MUST be `"1"`. |
+| `type` | Yes | MUST be `"DeliveryEnvelope"`. |
+| `sender` | Yes | DID of the participant responsible for the payload's recorded provenance. |
+| `recipients` | Yes | Non-empty array of unique recipient DIDs. |
+| `createdAt` | Yes | MPAS Core §5 timestamp: RFC 3339 UTC with exactly three fractional digits and a `Z` suffix. |
+| `expiresAt` | Optional | MPAS Core §5 timestamp and retrieval deadline. If present, it MUST be later than `createdAt`. |
+| `audience` | Conditional | Receiving service origin under HTTP §4.6.3 when the envelope is the body of a signed HTTP request. |
+| `payload` | Yes | JSON representation of an MPAS message or artifact. |
 
-| Field        | Required | Description |
-| ------------ | :------: | ----------- |
-| `version`    | Yes      | MUST be `"1"`. |
-| `type`       | Yes      | MUST be `"DeliveryEnvelope"`. |
-| `sender`     | Yes      | DID string identifying the sending participant or service. |
-| `recipients` | Yes      | Array of DID strings identifying intended recipients. |
-| `createdAt`  | Yes      | ISO 8601 timestamp of envelope creation. |
-| `expiresAt`  | Optional | ISO 8601 timestamp after which the delivery is stale. Recipients SHOULD discard expired envelopes. |
-| `payload`    | Yes      | The enclosed MPAS artifact. Opaque to the routing layer. MUST NOT be modified, inspected, or interpreted by the envelope. |
+`DeliveryEnvelope` is routing metadata. It is not an Approval, does not assign an MPAS role, and does not replace the payload's verification requirements. These constraints follow Core §6.8.4 and HTTP §§4.4 and 10.
 
-### 4.3 Design Rationale
+For participant-authored submission, the receiving endpoint MUST establish `signature keyid == DeliveryEnvelope.sender` under HTTP §4.6. A Coordination Service-created workflow delivery records the previously authenticated participant provenance used for `sender`. The envelope is not an end-to-end signature.
 
-The envelope deliberately excludes fields that describe the payload:
+`audience` belongs to the outer submitted object because it authenticates the HTTP request. A participant retrieving a stored envelope does not reinterpret the submission audience as routing or payload authorization data.
 
-- **No `artifactType`** — The routing layer does not need to know what it is delivering. The recipient inspects the payload's `type` field after extraction.
-- **No `actionRef`** — Action correlation is a property of the payload, not the envelope. The recipient determines which action a payload belongs to by examining the payload itself.
-- **No `event`** — Event classification is application semantics. The routing layer delivers; the recipient classifies.
-- **No `deliveryId`** — Deduplication is handled by the `idempotencyKey` on mutating requests, or by the payload's own identity (e.g., `actionId` + artifact type). A synthetic delivery ID adds complexity without value when the payload already carries identity.
-- **No recipient `role`** — Roles are determined by the payload and the recipient's relationship to the action, not by the envelope. The Coordination Service addresses recipients by DID; what they do with the payload is their concern.
-- **`sender` is a plain DID string** — No need for an object wrapper when a single field suffices.
+A Coordination Service stores an independent retrieval obligation for each recipient. Retrieval by one recipient does not consume another recipient's delivery. Delivery storage uses the explicit recipient list and does not inspect the payload to infer recipients or authorization.
 
-### 4.4 Payload Integrity
+A receiving endpoint MUST reject an envelope whose `expiresAt` is not in the future at submission, before it creates any delivery obligation. Implementations SHOULD enforce a finite deployment-specific recipient-count limit to bound authorization work and delivery fan-out.
 
-The Delivery Envelope carries routing semantics only. It MUST NOT alter the verification or authorization semantics of the enclosed artifact.
+Every recipient receives the complete envelope and therefore learns the complete `recipients` array. In a multi-tenant deployment, this means that administrator-added recipients are visible to the other recipients carried in the same envelope.
 
-Implementations MUST:
+For idempotent request equivalence, the Delivery Envelope layer treats `sender` and `recipients` as significant, with `recipients` compared as a set. `createdAt`, `expiresAt`, and `audience` are not significant because they may be regenerated for transport retry. The first accepted envelope remains authoritative, so a retry does not extend its stored `expiresAt`.
 
-- Preserve the payload byte-for-byte through routing (no re-serialization that alters field order or whitespace when content-digest is used).
-- Not sign the envelope as if it were an MPAS Approval or Execution Receipt.
-- Not use envelope metadata (sender, recipients) as input to Verifier policy evaluation.
+## 4. Common Action Submission
 
-Recipients MUST:
+### 4.1 ActionRequest Additions
 
-- Verify the enclosed artifact independently using standard MPAS verification rules before acting on it.
-- Treat envelope metadata as advisory routing hints, not authorization signals.
+`ActionRequest` remains the HTTP §6.3 request message and gains:
 
-### 4.5 Relationship to Push Delivery
+| Field | Required | Definition |
+| --- | :---: | --- |
+| `idempotencyKey` | Recommended | Mutation idempotency key defined in Section 9. |
+| `audience` | Conditional | Action endpoint origin under HTTP §4.6.3 only when a bare `ActionRequest` is the body of a signed direct request. |
 
-The Delivery Envelope is the payload format for any push delivery mechanism. Whether a Coordination Service delivers via webhook, WebSocket, server-sent events, message queue, or any other transport, the body of the delivery is a Delivery Envelope.
+For enveloped submission, `audience` occurs on the outer `DeliveryEnvelope`, while `idempotencyKey` remains in `ActionRequest` for the Action-processing layer. A bare direct submission carries both fields in `ActionRequest` because that message is then the outer submitted object.
 
-The choice of push transport, subscription management, delivery acknowledgement, retry policy, and dead-letter handling are implementation decisions for each Coordination Service deployment. They are not specified here.
+The canonical request is:
 
-The only normative requirement on push delivery is: **polling remains the consistency guarantee.** Any push mechanism is supplementary. Recipients SHOULD poll periodically regardless of push subscription status.
-
----
-
-## 5. Body-Level Idempotency Key
-
-### 5.1 Motivation
-
-HTTP Profile §4.5 defines `Idempotency-Key` as an HTTP header. MPAS aims to be transport-neutral — transports without headers (MCP over stdio, WebSocket frames, future non-HTTP bindings) benefit from the same idempotency semantics.
-
-A body-level key is automatically covered by content-digest and requires no special handling in the RFC 9421 signature's covered components.
-
-The body-level idempotency key is independent of the Delivery Envelope. It benefits any request that creates or mutates state, whether or not a Delivery Envelope is involved.
-
-### 5.2 Specification
-
-All Coordination Service request messages that create or mutate state SHOULD include an `idempotencyKey` field in the request body:
+```http
+POST /mpas/v1/action
+Content-Type: application/mpas+json
+```
 
 ```json
 {
   "version": "1",
-  "type": "CoordinationActionRequest",
-  "idempotencyKey": "2f8d8bb4-392d-4b7e-8077-07c88fd4e980",
-  "actionPackage": { ... },
-  "authorizationRequirements": { ... }
+  "type": "DeliveryEnvelope",
+  "sender": "did:jwk:...proposer...",
+  "recipients": [
+    "did:jwk:...verifier...",
+    "did:jwk:...informational-recipient..."
+  ],
+  "createdAt": "2026-08-25T12:00:00.000Z",
+  "audience": "https://action-service.example.com",
+  "payload": {
+    "version": "1",
+    "type": "ActionRequest",
+    "idempotencyKey": "28ebf760-3948-493a-bc46-cc2f18e7172a",
+    "actionPackage": {
+      "version": "1",
+      "type": "ActionPackage"
+    }
+  }
 }
 ```
 
-| Field            | Required    | Description |
-| ---------------- | :---------: | ----------- |
-| `idempotencyKey` | Recommended | Opaque client-generated string, max 128 characters. UUID v4 recommended. |
+The endpoint MUST validate:
 
-Applicable request types:
-- `CoordinationActionRequest`
-- `CoordinationApprovalSubmission`
-- `CoordinationActionCancelRequest`
+If the outer object's `type` is `DeliveryEnvelope`:
+- `payload.type == "ActionRequest"`;
+- `signature keyid == DeliveryEnvelope.sender == ActionEnvelope.proposer.did` when HTTP §4.6 authentication is enforced.
 
-### 5.3 Semantics
+An Action has exactly one designated Verifier even when the envelope has multiple recipients. The designated Verifier comes from trusted endpoint or Coordination Service configuration, not from the Proposer-authored `ActionRequest` or recipient order. The configured Verifier DID MUST occur in `DeliveryEnvelope.recipients`. Other recipients do not become Verifiers or Signers by receiving the Action.
 
-- Same `idempotencyKey` + same request body → return the stored result.
-- Same `idempotencyKey` + different request body → `409 Conflict` with error code `idempotency_conflict`.
-- `idempotencyKey` and RFC 9421 signature `nonce` remain orthogonal. A retry carries the same idempotency key and a fresh nonce.
+If the outer object's `type` is `ActionRequest`:
+- `signature keyid == ActionEnvelope.proposer.did` when HTTP §4.6 authentication is enforced.
 
-### 5.4 Migration from HTTP Header
+For idempotent equivalence, the Action layer treats the complete `ActionRequest` as significant except for `idempotencyKey` and `audience`. The Action Package, including `actionId`, therefore remains significant.
 
-During the migration period:
+### 4.2 Direct Verifier Behavior
 
-1. A Coordination Service MUST accept `idempotencyKey` in the body.
-2. A Coordination Service SHOULD continue to accept `Idempotency-Key` in the HTTP header for backwards compatibility.
-3. If both are present, the body field takes precedence. If they differ, the server SHOULD return `400` with error code `idempotency_mismatch`.
-4. The HTTP header is deprecated. A future version of the HTTP Profile MAY remove it.
+A directly reachable Verifier requires its locally configured DID to occur in the envelope recipients. It MUST NOT require itself to be the only recipient. It then processes the enclosed `ActionRequest` and returns the existing HTTP §6.4 `ActionResponse` without another response wrapper.
 
-### 5.5 Non-HTTP Transports
+One configured Verifier DID per Action endpoint is the ordinary deployment model. An implementation may multiplex identities, but trusted local routing configuration must select the applicable identity before processing; the selected DID must be an envelope recipient.
 
-On non-HTTP transports (WebSocket frames, MCP tool arguments), only the body-level `idempotencyKey` applies. There is no header equivalent.
+A direct Verifier is not responsible for forwarding the envelope to other recipients unless that endpoint also implements routing. Otherwise, delivery to those recipients remains the sender's responsibility.
 
----
+A directly reachable Verifier MUST accept both `DeliveryEnvelope<ActionRequest>` and bare `ActionRequest`. Its configured endpoint identity already determines the Verifier for the bare form, so no routing field is required in that request. A Coordination Service relay rejects the bare form because it lacks recipient routing and audit metadata. A raw `ActionPackage` is not an Action endpoint request form.
 
-## 6. Security Requirements
+### 4.3 Coordination Service Relay Behavior
 
-### 6.1 Envelope Security Properties
+A Coordination Service receiving the canonical request:
 
-- Participants MAY retrieve only artifacts addressed to their authenticated DIDs.
-- Routing metadata (sender, recipients) MUST NOT grant signer eligibility or execution authority.
-- Sender-selected recipients MUST NOT override Verifier policy.
-- Underlying MPAS artifacts MUST remain unchanged and independently verifiable.
-- Push notifications (however delivered) MUST be treated only as hints.
-- Duplicate, delayed, reordered, or replayed deliveries MUST NOT cause duplicate execution.
+- resolves the designated Verifier DID from trusted deployment configuration;
+- requires that configured DID to occur in the envelope recipients;
+- authorizes every requested recipient under the applicable workflow or deployment policy;
+- creates delivery records for all authorized recipients; and
+- returns the first authenticated `ActionResponse` received from the configured Verifier through Section 5.
 
-### 6.2 Coordination Service Trust Boundary
+Before storing or exposing the Action, the Coordination Service verifies the Action Package's `executionPayloadHash` and `approvalBundle.actionEnvelopeHash` bindings. Before it creates an approval workflow from Verifier-authored `AuthorizationRequirements`, it verifies the exact Action hash and Verifier binding, rejects expired requirements, and rejects duplicate or unachievable threshold signer sets. Invalid input creates neither a workflow nor a delivery. A Proposer DID is not categorically invalid in `eligibleSigners`; whether a Proposer Approval counts remains a Verifier-policy decision under the existing profiles.
 
-The Coordination Service:
+The protocol does not define how deployment configuration is keyed. A hosted Coordination Service may use account, tenant, application, or other trusted administrative scope. It MUST NOT trust the Proposer to assign the Verifier role, choose a recipient by array position, or silently substitute an unconfigured Verifier.
 
-- MUST NOT hold participant private keys or downstream application credentials.
-- MUST NOT alter enclosed MPAS artifacts.
-- MUST NOT forge or fabricate artifacts.
-- MUST NOT use delivery metadata as authorization input.
-- SHOULD treat all push delivery as best-effort and ensure polling availability as the reliable fallback.
+The Coordination Service may use authenticated `AuthorizationRequirements` under the existing Core and HTTP coordination rules to expose approval work and route a completed package. Administrator-authorized delivery recipients are deployment-specific additions. In either case, delivery does not change Signer eligibility or Verifier authority.
 
-A compromised Coordination Service can:
-- Delay or suppress deliveries (mitigated by polling catch-up).
-- Replay deliveries (mitigated by idempotency key deduplication).
-- Read artifact contents in transit (mitigated by future end-to-end encryption, out of scope).
+### 4.4 Common Action Response
 
-A compromised Coordination Service CANNOT:
-- Forge valid Approvals (requires signer private keys).
-- Alter Action Envelopes without detection (hash binding).
-- Produce valid Execution Receipts (requires Credential Adapter keys).
-- Grant execution authority (Verifier policy is locally configured).
+A direct Verifier returns the existing `ActionResponse`, including its existing correlation fields, as defined by HTTP §6.4. This feature does not wrap or redefine that response.
 
-### 6.3 Idempotency Security
+A Coordination Service relay MUST NOT synthesize an `ActionResponse` to acknowledge that it stored or delivered the request. It durably records the workflow and deliveries, keeps the `/mpas/v1/action` submission pending for a bounded deployment-selected interval, and returns the first authenticated `ActionResponse` received from the configured Verifier. The returned message is the Verifier-authored response, not a Coordination Service status object.
 
-- `idempotencyKey` is not a security mechanism — it prevents accidental double-submission.
-- The Coordination Service SHOULD expire stored idempotency records after the action's `expiresAt` plus a retention buffer.
-- Idempotency keys are per-sender. Different senders may use the same key value without conflict.
+If that wait bound expires first, the Coordination Service returns `503 relay_timeout` with `retryable: true`. It retains the relayed Action and delivery records and MUST NOT synthesize an Action result. The profile does not fix the duration. An equivalent idempotent retry resumes waiting for the same stored Verifier response.
 
----
+If the Proposer's HTTP connection ends first, the durable workflow continues. An equivalent retry under Section 9 waits for or returns the same stored Verifier response. A WebSocket notification normally reduces the time until the Verifier polls, but notification delivery is not required for correctness. This version defines no separate relay-acceptance response; one may be considered later if relay latency commonly blocks clients for too long.
 
-## 7. Polling Compatibility
+## 5. Verifier Response Delivery Submission
 
-### 7.1 Unchanged Requirements
+`POST /mpas/v1/coordination/delivery` exists so a Verifier that retrieved a relayed `ActionRequest` through the Coordination Service poll can return its Verifier-authored `ActionResponse` to the Coordination Service. Its request body is `DeliveryEnvelope<ActionResponse>`. It is not the initial Action submission path; the Proposer uses `/mpas/v1/action` for that purpose. This version defines no arbitrary participant-to-participant payload submission through this endpoint.
 
-The existing polling endpoints (`/mpas/v1/coordination/poll`) remain mandatory and unchanged. Any push delivery mechanism is supplementary.
-
-### 7.2 Polling as Consistency Guarantee
-
-Even participants with active push delivery (however implemented) SHOULD poll periodically as a consistency check. Recommended catch-up interval: every 60 seconds for Credential Adapters, every 5 minutes for interactive signers.
-
-### 7.3 Envelope Delivery via Poll
-
-Poll responses MAY optionally wrap returned artifacts in Delivery Envelopes when the participant has opted into envelope delivery. This is controlled by an optional `envelope` field in the poll request:
+```http
+POST /mpas/v1/coordination/delivery
+Content-Type: application/mpas+json
+```
 
 ```json
 {
   "version": "1",
-  "type": "CoordinationPollRequest",
-  "did": "did:web:adapter.example",
-  "envelope": true
+  "type": "DeliveryEnvelope",
+  "sender": "did:jwk:...verifier...",
+  "recipients": [
+    "did:jwk:...proposer...",
+    "did:jwk:...maintainer..."
+  ],
+  "createdAt": "2026-08-25T12:00:00.000Z",
+  "audience": "https://coordination.example.com",
+  "payload": {
+    "version": "1",
+    "type": "ActionResponse"
+  }
 }
 ```
 
-When `envelope` is `true`, the poll response wraps each artifact in a Delivery Envelope for consistent handling across transports. When `envelope` is absent or `false`, the response format is unchanged from HTTP Profile §8.5.
+The endpoint MUST require `payload.type == "ActionResponse"`, apply HTTP §4.6, and establish the identity and workflow bindings in Section 8. The recipients MUST include the Action Proposer and SHOULD include Maintainers authorized by the authenticated `AuthorizationRequirements`. The Coordination Service rejects any additional recipient not authorized by those requirements or by administrative policy. Recipient authorization does not assign a Signer or Verifier role. The response envelope distributes the `ActionResponse`; eligible Signers receive Action review material through the existing `ApprovalRequest` and `SignerReviewSet` messages.
 
----
+The Coordination Service stores the envelope for its authorized recipients and uses a qualifying first response to complete the pending relayed `/mpas/v1/action` request.
 
-## 8. Compatibility and Migration
+Successful durable acceptance returns:
 
-### 8.1 Backwards Compatibility
+```json
+{
+  "version": "1",
+  "type": "CoordinationDeliveryResponse",
+  "accepted": true,
+  "createdAt": "2026-08-25T12:00:01.000Z"
+}
+```
 
-- Existing polling clients are unaffected. No changes to poll request/response format unless `envelope: true` is explicitly requested.
-- Existing `Idempotency-Key` header continues to work during the migration period.
-- Coordination Services that do not implement push delivery continue to conform to the HTTP Profile via polling.
+This response acknowledges Verifier response delivery to the Coordination Service; it is not an Action result. The delivery envelope has no body-level idempotency field. A Coordination Service MAY deduplicate response deliveries by authenticated sender plus the exact enclosed payload hash; otherwise repeated submissions may create repeated delivery records.
 
-### 8.2 Incremental Adoption
+## 6. Existing Coordination Poll Extension
 
-Participants adopt delivery features independently:
+This feature adds exactly one field to the existing HTTP §8.5 poll response. It does not add a poll endpoint, request type, request field, authentication rule, or separate delivery cursor.
 
-1. Participants start sending body-level `idempotencyKey` → servers accept both header and body.
-2. Coordination Service implementations add push delivery (transport of their choice) → participants subscribe using implementation-specific mechanisms.
-3. After sufficient adoption, the HTTP header is deprecated in a future profile version.
+`POST /mpas/v1/coordination/poll`, `CoordinationPollRequest`, `signature keyid == CoordinationPollRequest.did`, and the existing optional `cursor`/`nextCursor` contract remain unchanged.
 
----
+`CoordinationPollResponse` gains the new field `deliveries`:
 
-## 9. Open Questions
+```json
+{
+  "version": "1",
+  "type": "CoordinationPollResponse",
+  "deliveries": [
+    {
+      "version": "1",
+      "type": "DeliveryEnvelope",
+      "sender": "did:jwk:...sender...",
+      "recipients": ["did:jwk:...recipient..."],
+      "createdAt": "2026-08-25T12:00:00.000Z",
+      "payload": {
+        "version": "1",
+        "type": "ActionRequest"
+      }
+    }
+  ]
+}
+```
 
-1. Should the Delivery Envelope support a `priority` field for time-sensitive deliveries (e.g., expiring actions)?
-2. Is access-controlled storage sufficient for delivered artifacts, or should a future version support end-to-end encryption for recipients?
-3. How are Adapter and Signer DIDs enrolled, rotated, suspended, and revoked? (Likely a separate feature.)
-4. Should the envelope carry a `correlationId` for request/response artifact pairing, or is action identity in the payload sufficient?
+- `deliveries` is an optional array of complete `DeliveryEnvelope` objects; absence is equivalent to an empty array.
+- Every returned envelope MUST be unexpired and contain the authenticated poll DID in `recipients`.
+- `nextCursor` reflects delivery position only. `approvalRequests` and `actionUpdates` are returned in full and are not cursor-paged in version 1.
+- A service MAY cap `deliveries`. Every non-empty delivery page MUST include `nextCursor` for the last returned delivery, including the currently known final page, so the client can durably advance its checkpoint. A poll after that cursor may return no deliveries and omit `nextCursor`.
+- A Verifier may now poll for an `ActionRequest` addressed to its configured DID. This intentionally replaces the previous HTTP §8.5 statement that a Verifier never polls.
+- Existing `approvalRequests` and `actionUpdates` selection and meaning do not change.
+- Poll delivery is at least once. Repeating a cursor may return the same envelope, so the recipient uses the enclosed MPAS object's existing identity and replay rules.
 
----
+## 7. Optional WebSocket Notification Binding
 
-## 10. References
+The WebSocket carries only a notification to poll. It never carries a `DeliveryEnvelope` or another MPAS payload.
 
-- [MPAS Core Specification](../../../specs/mpas-specification.md) — §4.2 Coordination Service, §6.8 Topologies, §7.7.5 Push/Polling
-- [MPAS HTTP Profile](../../../specs/mpas-profile-http.md) — §4.5 Idempotency, §8 Coordination API, §9 Polling and Webhooks
-- [GitHub Issue #45](https://github.com/oma3dao/mpas/issues/45) — Routing/Delivery Envelope architecture
-- [GitHub Issue #20](https://github.com/oma3dao/mpas/issues/20) — Idempotency-Key body migration
-- [GitHub Issue #17](https://github.com/oma3dao/mpas/issues/17) — Demo Coordination Service validation
-- RFC 9421 — HTTP Message Signatures
+### 7.1 Session and Upgrade
+
+The participant first obtains a ticket with an HTTP §4.6-authenticated request:
+
+```http
+POST /mpas/v1/coordination/session
+```
+
+```json
+{
+  "version": "1",
+  "type": "CoordinationSessionRequest",
+  "did": "did:jwk:...participant...",
+  "audience": "https://coordination.example.com"
+}
+```
+
+The service MUST establish `signature keyid == did` before returning:
+
+```json
+{
+  "version": "1",
+  "type": "CoordinationSessionResponse",
+  "websocketUrl": "wss://coordination.example.com/mpas/v1/coordination/ws",
+  "ticket": "opaque-single-use-value",
+  "expiresAt": "2026-08-25T12:05:00.000Z"
+}
+```
+
+The ticket is opaque, unguessable, one-use, DID-bound, omitted from URLs and logs, and valid for at most five minutes. Production URLs use `wss`.
+
+The participant uses `websocketUrl` exactly as returned and performs a WebSocket `GET` upgrade with `Authorization: Bearer <ticket>`. It MUST NOT put the ticket in the URL. Success returns `101 Switching Protocols`; an invalid, expired, or used ticket returns `401`. The service atomically consumes the ticket and binds the connection to the authenticated DID. The ticket authorizes only the upgrade; after a disconnect the participant obtains a new ticket. Subsequent polls and submissions continue to use HTTP §4.6.
+
+The client retains the Coordination Service HTTPS origin used for the session request. A socket notification means to poll that origin; the client does not derive a poll origin from `websocketUrl`.
+
+### 7.2 Notification
+
+```json
+{
+  "version": "1",
+  "type": "CoordinationWorkAvailable"
+}
+```
+
+After binding every authenticated connection, including the first, the service MUST send a notification if any pollable work already exists for that DID. It SHOULD also notify after committing new pollable work. Notifications may be duplicated, coalesced, delayed, or lost; the authenticated poll remains authoritative.
+
+Heartbeat, reconnect, backoff, connection limits, and local wake-up behavior are deployment choices.
+
+## 8. Verifier-Produced ActionResponse Envelope
+
+This feature defines how a Verifier places the existing HTTP §6.4 `ActionResponse` in a delivery envelope and submits it through Section 5; it does not define another Verifier response or receipt type.
+
+A Verifier-produced response envelope has:
+
+- the authenticated Verifier DID as `DeliveryEnvelope.sender`;
+- the Proposer DID from the verified Action Envelope among the recipients;
+- the authorized Maintainer DIDs among the recipients when the Verifier wants them to receive the response; and
+- the unchanged `ActionResponse` as payload.
+
+For a coordinated Action workflow, `ActionResponse.verifier.did` is required. The Coordination Service MUST establish:
+
+```text
+signature keyid == DeliveryEnvelope.sender
+                == ActionResponse.verifier.did
+                == configured workflow Verifier DID
+```
+
+It also applies the existing Action identity and hash rules from Core §§5–6 and HTTP §§6 and 8. Only an authenticated response from the recorded designated Verifier may satisfy or advance the Action workflow; a response from another envelope recipient may be delivered but does not satisfy it.
+
+Before storing the response envelope, the Coordination Service validates every recipient beyond the Proposer against the authenticated Action `AuthorizationRequirements` or administrative policy. This authorization controls delivery only and does not alter approval eligibility or threshold evaluation.
+
+When a response would create an approval workflow, the Coordination Service first validates the requirements as described in §4.3. A failure rejects the delivery and creates neither its recipient records nor an approval workflow.
+
+The first qualifying response envelope completes the pending `/mpas/v1/action` submission and is stored as its idempotent result. Its envelope, and any later responses for the same workflow, remain available to their addressed recipients through the existing poll extension; recipients apply the normal duplicate-delivery rules.
+
+The response is submitted over authenticated HTTP, not the notification WebSocket. The Coordination Service preserves the `ActionResponse` and any `ExecutionReceipt` unchanged.
+
+## 9. Body-Level Idempotency
+
+Action-processing idempotency belongs to `ActionRequest`, including when that message is enclosed for relay. This feature also adds body-level `idempotencyKey` to the existing coordination mutation request messages. It is not added to `DeliveryEnvelope`, `ActionPackage`, or another Core artifact.
+
+Records are scoped by authenticated DID and key:
+
+- same DID, key, and equivalent request returns the stored result;
+- same DID and key with a different request returns `409 idempotency_conflict`; and
+- different DIDs may use the same key independently.
+
+Equivalence is layered. Every message carrying `idempotencyKey`, and every routing frame around it, defines its own significant fields. Version 1 uses these scopes:
+
+- `DeliveryEnvelope`: `sender`, `recipients` as a set, and the enclosed payload's equivalence contribution; transport timestamps, expiry, and audience are excluded.
+- `ActionRequest`, `CoordinationActionRequest`, `CoordinationApprovalSubmission`, and `CoordinationActionCancelRequest`: the complete message except `idempotencyKey` and `audience`.
+
+An object with no defined equivalence scope MUST NOT carry a body-level idempotency key, and an implementation MUST fail closed rather than silently hash the whole unknown object.
+
+For canonical Action submission, the Action-processing layer reads the key from the enclosed `ActionRequest`. Verifier response delivery has no body-level idempotency key because `DeliveryEnvelope` does not define one. A retry of a request that has body-level idempotency uses the same idempotency key and a fresh HTTP §4.6 nonce.
+
+For messages that define a body field, a service accepts that field during migration and SHOULD accept `Idempotency-Key` when it is absent. If both are present and differ, it returns `400 idempotency_mismatch`. Header-only use is compatibility behavior. This migration does not add an idempotency field to `DeliveryEnvelope`.
+
+## 10. Security and Compatibility Rules
+
+- HTTP §4.6 remains the authentication profile. This feature adds only the endpoint identity equalities stated above.
+- Routing metadata and notification delivery are not MPAS authorization, consistent with Core §6.8.4 and HTTP §§4.4 and 10.
+- A Coordination Service remains non-authoritative under Core §7.7 and HTTP §8.2.
+- Every requested recipient requires a workflow or deployment authorization basis. Recipient membership alone grants no MPAS role, and the Proposer does not assign the designated Verifier.
+- A Coordination Service is a service, not a protocol participant, and does not require a DID.
+- `POST /mpas/v1/coordination/workflow` is the workflow-creation endpoint for the direct-to-Verifier topology after the Verifier returns Authorization Requirements. Coordination-Service-relayed initial submission uses `/mpas/v1/action`.
+- During migration, a Coordination Service should accept `POST /mpas/v1/coordination/action` as a deprecated alias with the same request, response, authorization, idempotency scope, and workflow side effects. New clients use `/coordination/workflow`.
+- The endpoint rename does not rename the established version 1 `CoordinationActionRequest` and `CoordinationActionResponse` wire discriminants.
+- Polling remains sufficient for interoperability; WebSocket support is optional.
+- Existing `approvalRequests` and `actionUpdates` poll behavior is unchanged.
+- For a given Action Envelope hash and Signer DID, the first valid coordination decision is final. Repeating the same decision is idempotent; a different decision is a `409` conflict. A changed decision requires a new Action Envelope and workflow. The Proposer's initial `propose` Approval is not an additional-approval decision under this rule.
+- A Coordination Service SHOULD mark its non-authoritative workflow `rejected` as soon as the immutable decisions make the approval expression unreachable.
+- This feature does not define discovery or coordination across multiple Coordination Services.
+
+## 11. References
+
+- [MPAS Core Specification](../../../specs/mpas-specification.md) — §§2, 4, 6, 7.7, and 8
+- [MPAS HTTP Profile](../../../specs/mpas-profile-http.md) — §§4, 6, 8, 9, 10, 11, and 14
+- [Coordination Authentication Feature](../auth/spec.md)
+- [GitHub Issue #45](https://github.com/oma3dao/mpas/issues/45) — routing and delivery
+- [GitHub Issue #20](https://github.com/oma3dao/mpas/issues/20) — body-level idempotency
+- [GitHub Issue #17](https://github.com/oma3dao/mpas/issues/17) — request validation
+- [RFC 9421 — HTTP Message Signatures](https://www.rfc-editor.org/rfc/rfc9421)
+- [RFC 9530 — Digest Fields](https://www.rfc-editor.org/rfc/rfc9530)

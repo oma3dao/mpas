@@ -179,7 +179,8 @@ On approval submission:
 - reject if action is `cancelled` (return `404`);
 - store Approval objects unmodified;
 - decode signed Approval payload enough to identify signer DID and decision;
-- avoid double-counting duplicate signer/decision approvals.
+- accept a duplicate of the same Signer decision idempotently without double-counting;
+- reject a different later decision from the same Signer for the same Action Envelope with `409`.
 
 Signature verification is optional pre-validation only; final verification remains adapter responsibility.
 
@@ -195,10 +196,11 @@ Implement simple threshold readiness:
 - count unique eligible signer DIDs whose Approval decision matches;
 - track `approved`, `rejected`, and `pending` DIDs for progress reporting;
 - transition to `readyForResubmission` when thresholds appear satisfied.
+- transition the non-authoritative workflow to `rejected` when immutable decisions make every required path unreachable.
 
 This is a hint only.
 
-**Done when:** Tests cover awaiting state with progress, and `readyForResubmission` after threshold count is met. Progress object correctly reflects approved/rejected/pending DIDs.
+**Done when:** Tests cover awaiting, ready, and unreachable states. Progress correctly excludes every Signer who has made a final decision from `pending`.
 
 #### Task 1.6: Action Package assembly
 
@@ -275,18 +277,19 @@ Return status and basic in-memory counters:
 
 **Done when:** Fastify `inject()` test returns `200` and expected counters.
 
-#### Task 2.3: Submit action endpoint
+#### Task 2.3: Create workflow endpoint
 
 Implement:
 
 ```http
-POST /mpas/v1/coordination/action
+POST /mpas/v1/coordination/workflow
 ```
 
 Behavior:
 
+- temporarily register `/mpas/v1/coordination/action` as a deprecated alias of the same handler and idempotency scope;
 - parse `CoordinationActionRequest` (validate `actionPackage` and `authorizationRequirements` are present);
-- call `CoordinationStore.submitAction`;
+- call `CoordinationStore.createWorkflow`;
 - return `201 Created` for new workflows;
 - return `200 OK` for idempotent re-submission;
 - return `409 Conflict` for same action ID with different Action Envelope hash;

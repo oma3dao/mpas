@@ -3,7 +3,13 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { AdapterClient, AdapterUnavailableError, type ActionPackage, type AdapterResponse } from "../../src/index.js";
+import {
+  AdapterClient,
+  AdapterResponseError,
+  AdapterUnavailableError,
+  type ActionPackage,
+  type AdapterResponse,
+} from "../../src/index.js";
 
 const fixturesDir = fileURLToPath(new URL("../fixtures/", import.meta.url));
 
@@ -57,6 +63,23 @@ describe("AdapterClient", () => {
         code: "artifact_malformed",
         status: 400,
       });
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("preserves the legacy invalid-response error for malformed JSON", async () => {
+    const actionPackage = await readJson<ActionPackage>(
+      join(fixturesDir, "action-packages", "valid-create-issue-package.json"),
+    );
+    const server = await startMockAdapter((_request, response) => {
+      response.statusCode = 200;
+      response.end("not JSON");
+    });
+
+    try {
+      const client = new AdapterClient({ url: server.url });
+      await expect(client.submit(actionPackage)).rejects.toBeInstanceOf(AdapterResponseError);
     } finally {
       await server.close();
     }

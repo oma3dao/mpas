@@ -1346,15 +1346,15 @@ The Coordination Service never observes Verifier state directly — it learns ou
 | :---: | :-------------------------------------------------- | :------------------------------------------------------------------------------------ |
 | t0    | —                                                   | Proposer submits initial Action Package                                               |
 | t1    | —                                                   | Stateless: insufficient approvals → `additionalApprovalsRequired` (no ledger entry)   |
-| t2    | Proposer submits to CS → `awaitingApprovals`        | (no interaction with Verifier)                                                        |
-| t3–t4 | Signers A, B submit Approvals to CS                 | (no interaction with Verifier)                                                        |
+| t2    | Proposer submits to Coordination Service → `awaitingApprovals` | (no interaction with Verifier)                                                        |
+| t3–t4 | Signers A, B submit Approvals to Coordination Service          | (no interaction with Verifier)                                                        |
 | t5    | Threshold met → `readyForResubmission`              | (no interaction with Verifier)                                                        |
 | t6    | —                                                   | Proposer resubmits completed package (same actionId, same hash)                       |
 | t7    | —                                                   | Stateless re-verification → policy satisfied → prepare → write `executing` → transmit |
 | t8    | —                                                   | Dispatch succeeds → `resolved(executed)` — receipt issued                             |
-| t9    | Proposer relays receipt; CS may record `executed`   | —                                                                                     |
+| t9    | Proposer relays receipt; Coordination Service may record `executed` | —                                                                                     |
 
-If the Proposer never resubmits and the envelope expires, the Verifier never created a ledger entry; a late submission is the stateless deterministic rejection `expired`. If the Proposer cancels coordination, the CS records `cancelled` as a workflow convenience only; the Verifier, having no ledger entry, is unaffected.
+If the Proposer never resubmits and the envelope expires, the Verifier never created a ledger entry; a late submission is the stateless deterministic rejection `expired`. If the Proposer cancels coordination, the Coordination Service records `cancelled` as a workflow convenience only; the Verifier, having no ledger entry, is unaffected.
 
 #### 6.9.6 Future Work: Verifier-Side Cancellation
 
@@ -1522,6 +1522,10 @@ A Coordination Service is useful because it can tailor communication to each par
 #### 7.7.5 Push, Polling, and Delivery Models
 
 A Coordination Service MAY notify participants when action is required, expose polling APIs, or support both. Polling frequency, notification method, retry behavior, and delivery guarantees are deployment-specific. A Coordination Service SHOULD provide deterministic APIs for software components.
+
+Transport profiles MAY define a delivery envelope around an MPAS message or artifact. Such an envelope is routing metadata, not an Approval or execution authorization. It does not assign the recipient a Proposer, Signer, Verifier, or other MPAS role, and the enclosed object retains every verification and authorization requirement defined by this specification.
+
+The MPAS HTTP Profile defines DID-addressed routed delivery, Coordination Service relay submission, polling retrieval, and an optional notification-only WebSocket. Those transport mechanisms do not change the Action Package, Action Envelope, Approval, Authorization Requirements, Action Response, or Execution Receipt schemas.
 
 ### 7.8 Key Authorization and Identity
 

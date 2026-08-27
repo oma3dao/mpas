@@ -58,6 +58,9 @@ interface ParsedOptions {
   coordinationAuthAudiences?: string[];
   coordinationAuthClockSkewSeconds?: number;
   coordinationAuthSignatureLifetimeSeconds?: number;
+  designatedVerifierDid?: Did;
+  authorizedRecipientDids?: Did[];
+  notificationOrigin?: string;
   url?: string;
   pluginDir?: string;
   value?: string;
@@ -110,6 +113,9 @@ export async function runCli(
           port: options.coordinationPort,
           tracePath: options.tracePath,
           auth: coordinationAuthOptions(options),
+          designatedVerifierDid: options.designatedVerifierDid,
+          authorizedRecipientDids: options.authorizedRecipientDids,
+          notificationOrigin: options.notificationOrigin,
         });
         io.stdout.write(
           `${JSON.stringify({
@@ -132,6 +138,9 @@ export async function runCli(
         port: options.port,
         tracePath: options.tracePath,
         auth: coordinationAuthOptions(options),
+        designatedVerifierDid: options.designatedVerifierDid,
+        authorizedRecipientDids: options.authorizedRecipientDids,
+        notificationOrigin: options.notificationOrigin,
       });
       io.stdout.write(`${JSON.stringify({ status: "started", address: daemon.address })}\n`);
       return { exitCode: 0 };
@@ -706,6 +715,12 @@ function parseArgs(args: string[]): { positionals: string[]; options: ParsedOpti
       options.coordinationAuthClockSkewSeconds = Number(args[++index]);
     } else if (arg === "--auth-signature-lifetime-seconds") {
       options.coordinationAuthSignatureLifetimeSeconds = Number(args[++index]);
+    } else if (arg === "--designated-verifier-did") {
+      options.designatedVerifierDid = args[++index] as Did;
+    } else if (arg === "--authorized-recipient-did") {
+      (options.authorizedRecipientDids ??= []).push(args[++index] as Did);
+    } else if (arg === "--notification-origin") {
+      options.notificationOrigin = args[++index];
     } else if (arg === "--url") {
       options.url = args[++index];
     } else if (arg === "--plugin-dir") {
@@ -740,11 +755,12 @@ function requiredOptionValue(args: string[], index: number, option: string): str
 
 function usage(): string {
   const coordinationAuthFlags = "[--auth-enforcement] [--auth-audience <origin>] [--auth-clock-skew-seconds <seconds>] [--auth-signature-lifetime-seconds <seconds>]";
+  const routingFlags = "[--designated-verifier-did <did>] [--authorized-recipient-did <did>] [--notification-origin <origin>]";
   return [
     "Usage:",
-    `  mpas daemon start [--config-dir <dir>] [--credential-dir <dir>] [--adapter-key <file>] [--journal-path <file>] [--trace <file>] [--host <host>] [--port <port>] [--coordination-port <port>] ${coordinationAuthFlags}`,
+    `  mpas daemon start [--config-dir <dir>] [--credential-dir <dir>] [--adapter-key <file>] [--journal-path <file>] [--trace <file>] [--host <host>] [--port <port>] [--coordination-port <port>] ${coordinationAuthFlags} ${routingFlags}`,
     "  mpas daemon status [--config-dir <dir>] [--host <host>] [--port <port>]",
-    `  mpas coordination start [--host <host>] [--port <port>] [--trace <file>] ${coordinationAuthFlags}`,
+    `  mpas coordination start [--host <host>] [--port <port>] [--trace <file>] ${coordinationAuthFlags} ${routingFlags}`,
     "  mpas signer-server start --config <path>",
     "  mpas action pending [--config <signer-config>]",
     "  mpas action inspect <action-id> [--config <signer-config>]",

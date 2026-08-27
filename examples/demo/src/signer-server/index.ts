@@ -5,7 +5,7 @@
  * exposes review/approve/reject tools.
  *
  * This is NOT an SDK component — it is a consumer of the SDK's protocol primitives
- * (CoordinationClient, ApprovalBuilder, KeyManager, types). One instance per agent,
+ * (CoordinationServiceClient, ApprovalBuilder, KeyManager, types). One instance per agent,
  * handling approvals across all applications.
  */
 
@@ -17,9 +17,9 @@ import type { JWK } from "jose";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 
 import { KeyManager } from "@oma3/mpas/key-manager";
-import { CoordinationClient } from "@oma3/mpas/coordination-client";
+import { CoordinationServiceClient } from "@oma3/mpas/coordination-service-client";
 import { ApprovalBuilder } from "@oma3/mpas/approval-builder";
-import { computeHash, verifyHash } from "@oma3/mpas/hash";
+import { verifyJsonHash } from "@oma3/mpas/hash";
 import type {
   ActionEnvelope,
   Approval,
@@ -54,7 +54,7 @@ type ToolCallResult = CallToolResult;
 // ─── Signer Server ───────────────────────────────────────────────────────────
 
 export class SignerServer {
-  private readonly coordinationClient: CoordinationClient;
+  private readonly coordinationService: CoordinationServiceClient;
   private readonly keyManagerPromise: Promise<KeyManager>;
 
   constructor(private readonly config: SignerServerConfig) {
@@ -64,7 +64,7 @@ export class SignerServer {
       }
       return keyManager;
     });
-    this.coordinationClient = new CoordinationClient({
+    this.coordinationService = new CoordinationServiceClient({
       url: config.coordinationUrl,
       signer: this.keyManagerPromise,
     });
@@ -100,12 +100,12 @@ export class SignerServer {
 
     switch (toolName) {
       case "mpas_list_pending": {
-        const poll = await this.coordinationClient.poll(keyManager.did);
+        const poll = await this.coordinationService.pollWork();
         return textResult("Pending actions fetched.", { approvalRequests: poll.approvalRequests });
       }
       case "mpas_review_action": {
         const actionId = requiredStringArg(args, "actionId");
-        const approvalRequest = await this.findApprovalRequest(keyManager.did, actionId);
+        const approvalRequest = await this.findApprovalRequest(actionId);
         if (!approvalRequest) {
           return errorResult("APPROVAL_REQUEST_NOT_FOUND", `No pending approval request found for action: ${actionId}`, { actionId });
         }
@@ -119,7 +119,7 @@ export class SignerServer {
       case "mpas_approve":
       case "mpas_reject": {
         const actionId = requiredStringArg(args, "actionId");
-        const approvalRequest = await this.findApprovalRequest(keyManager.did, actionId);
+        const approvalRequest = await this.findApprovalRequest(actionId);
         if (!approvalRequest) {
           return errorResult("APPROVAL_REQUEST_NOT_FOUND", `No pending approval request found for action: ${actionId}`, { actionId });
         }
@@ -134,7 +134,10 @@ export class SignerServer {
           reviewSet.actionEnvelope,
           toolName === "mpas_approve" ? "approve" : "reject",
         );
-        await this.coordinationClient.submitApproval(approvalRequest.actionRef.actionEnvelopeHash, approval);
+        await this.coordinationService.submitApproval({
+          actionEnvelopeHash: approvalRequest.actionRef.actionEnvelopeHash,
+          approval,
+        });
         return textResult(toolName === "mpas_approve" ? "Approval submitted." : "Rejection submitted.", { approval });
       }
       default:
@@ -158,8 +161,8 @@ export class SignerServer {
     return server;
   }
 
-  private async findApprovalRequest(did: Did, actionId: string): Promise<ApprovalRequest | undefined> {
-    const poll = await this.coordinationClient.poll(did);
+  private async findApprovalRequest(actionId: string): Promise<ApprovalRequest | undefined> {
+    const poll = await this.coordinationService.pollWork();
     return poll.approvalRequests.find((request) => request.actionRef.actionId.value === actionId);
   }
 }
@@ -183,7 +186,7 @@ function loadKeyManager(signerKey: KeySource): Promise<KeyManager> {
 }
 
 function reviewSetIntegrityError(reviewSet: SignerReviewSet): string | undefined {
-  if (!verifyHash(reviewSet.executionPayload, reviewSet.actionEnvelope.executionPayloadHash)) {
+  if (!verifyJsonHash(reviewSet.executionPayload, reviewSet.actionEnvelope.executionPayloadHash)) {
     return "Execution Payload hash does not match the Action Envelope.";
   }
   return undefined;
