@@ -481,15 +481,22 @@ function evaluateThreshold(
   // an ingest concern — never a comparison-time concern.
   const eligibleSet = eligibleSigners.length > 0 ? new Set<string>(eligibleSigners) : null;
 
-  const found = verifiedApprovals.approvals.filter((approval) => {
-    // Never count the proposer's own approval.
-    if (approval.signerDid === proposerDid) return false;
-    // Must have the required decision.
-    if (approval.decision !== decision) return false;
+  // Count distinct Signers, not Approvals: duplicate Approvals from the same
+  // Signer MUST NOT be counted more than once for the same threshold
+  // requirement (JSON Verifier Policy Profile §6.5).
+  const found = new Set(
+    verifiedApprovals.approvals
+      .filter((approval) => {
+        // Never count the proposer's own approval.
+        if (approval.signerDid === proposerDid) return false;
+        // Must have the required decision.
+        if (approval.decision !== decision) return false;
 
-    // Check DID membership in eligible set.
-    return eligibleSet !== null && eligibleSet.has(approval.signerDid);
-  }).length;
+        // Check DID membership in eligible set.
+        return eligibleSet !== null && eligibleSet.has(approval.signerDid);
+      })
+      .map((approval) => approval.signerDid),
+  ).size;
 
   if (found >= requirement.threshold) {
     return [];
