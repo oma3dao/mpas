@@ -204,7 +204,7 @@ describe("CoordinationClient", () => {
   });
 
   it("surfaces auth, request, and outage responses as distinct errors", async () => {
-    for (const status of [400, 401, 403, 503]) {
+    for (const status of [400, 401, 403, 429, 503]) {
       const server = await startMockCoordination((_request, response) => {
         sendJson(
           response,
@@ -222,7 +222,7 @@ describe("CoordinationClient", () => {
         const rejection = client.poll("did:jwk:test" as `did:${string}`);
         if (status === 400) {
           await expect(rejection).rejects.toBeInstanceOf(CoordinationResponseError);
-        } else if (status === 503) {
+        } else if (status === 429 || status === 503) {
           await expect(rejection).rejects.toBeInstanceOf(CoordinationUnavailableError);
         } else {
           await expect(rejection).rejects.toMatchObject({
