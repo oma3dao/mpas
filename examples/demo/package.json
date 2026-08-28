@@ -18,7 +18,7 @@
   "dependencies": {
     "@modelcontextprotocol/server": "2.0.0",
     "@modelcontextprotocol/sdk": "1.30.0",
-    "@oma3/mpas": "^0.1.0-alpha.8",
+    "@oma3/mpas": "^0.1.0-alpha.9",
     "@oma3/omatrust": "^0.1.0-alpha.14",
     "ajv": "^8.17.1",
     "ethers": "^6.17.0",
