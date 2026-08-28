@@ -33,6 +33,7 @@ npm run typecheck
 npm test
 npm run build
 npm pack --dry-run
+npm pack
 ```
 
 Inspect the pack output before continuing. It must contain only the compiled
