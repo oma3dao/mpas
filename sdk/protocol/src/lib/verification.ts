@@ -4,6 +4,7 @@ import type { ActionEnvelope, ActionPackage, Approval, CanonicalApprovalPayload,
 import type { ExecutionPayload, Hash } from "../types/mpas.js";
 import type { VerificationTraceCallback } from "./trace.js";
 import { computeJsonHash } from "../utils/hash.js";
+import { strictJsonParse } from "../utils/strict-json.js";
 
 export { computeJsonHash } from "../utils/hash.js";
 
@@ -619,7 +620,7 @@ function operationNameFromPayload(payload: ExecutionPayload): string | undefined
 function decodeApprovalPayload(approval: Approval): CanonicalApprovalPayload | null {
   try {
     const [, encodedPayload] = approval.signature.value.split(".");
-    return JSON.parse(Buffer.from(encodedPayload, "base64url").toString("utf8")) as CanonicalApprovalPayload;
+    return strictJsonParse(Buffer.from(encodedPayload, "base64url").toString("utf8")) as CanonicalApprovalPayload;
   } catch {
     return null;
   }
@@ -629,5 +630,5 @@ async function verifiedApprovalPayload(approval: Approval, publicKey: JWK): Prom
   const protectedHeader = decodeProtectedHeader(approval.signature.value);
   const key = await importJWK(publicKey, protectedHeader.alg);
   const { payload } = await compactVerify(approval.signature.value, key);
-  return JSON.parse(Buffer.from(payload).toString("utf8")) as CanonicalApprovalPayload;
+  return strictJsonParse(Buffer.from(payload).toString("utf8")) as CanonicalApprovalPayload;
 }
