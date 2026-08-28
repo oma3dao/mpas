@@ -2,6 +2,7 @@ import { compactVerify, importJWK, type JWK } from "jose";
 import { canonicalize } from "json-canonicalize";
 import type { ActionEnvelope, Approval, CanonicalApprovalPayload, Decision, HashObject } from "../types/mpas.js";
 import { computeHash } from "../utils/hash.js";
+import { strictJsonParse } from "../utils/strict-json.js";
 import { KeyManager } from "./key-manager.js";
 
 export interface ApprovalBuilderConfig {
@@ -45,7 +46,7 @@ export class ApprovalBuilder {
       const keyManager = KeyManager.fromJwk(signerPublicKey);
       const key = await importJWK(keyManager.publicKey, "EdDSA");
       const verified = await compactVerify(approval.signature.value, key);
-      const payload = JSON.parse(Buffer.from(verified.payload).toString("utf8")) as CanonicalApprovalPayload;
+      const payload = strictJsonParse(Buffer.from(verified.payload).toString("utf8")) as CanonicalApprovalPayload;
 
       return (
         hashesEqual(payload.actionEnvelopeHash, approval.actionEnvelopeHash) &&

@@ -11,6 +11,7 @@ import type {
   HashObject,
   MpasHttpError,
 } from "../types/mpas.js";
+import { strictJsonParse } from "../utils/strict-json.js";
 import {
   deriveMpasAudience,
   signMpasRfc9421,
@@ -201,7 +202,7 @@ function approvalSignerDid(approval: Approval): Did {
   }
 
   try {
-    const payload = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8")) as unknown;
+    const payload = strictJsonParse(Buffer.from(parts[1], "base64url").toString("utf8"));
     const signerDid =
       typeof payload === "object" && payload !== null && !Array.isArray(payload)
         ? (payload as Record<string, unknown>).signerDid
