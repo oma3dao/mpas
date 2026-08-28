@@ -1,6 +1,9 @@
 import type {
   ActionId,
+  ActionPackage,
+  ActionRequest,
   ActionResponse,
+  AuthorizationRequirements,
   CoordinationActionResponse,
   CoordinationActionUpdate,
   CoordinationCancelResponse,
@@ -29,22 +32,48 @@ import {
  * marks the workflow `unresolvable` rather than fabricating an outcome.
  */
 
-/** The adapter surface the engine needs (satisfied by AdapterClient). */
+/** @deprecated Compatibility surface for the former AdapterClient-bound workflow. */
 export interface WorkflowAdapter {
   submit(pkg: unknown): Promise<ActionResponse>;
 }
 
-/** The coordination surface the engine needs (satisfied by CoordinationClient). */
+/** @deprecated Compatibility surface for the former CoordinationClient API. */
 export interface WorkflowCoordination {
   submitAction(pkg: unknown, authorizationRequirements: unknown): Promise<CoordinationActionResponse>;
   poll(did: string): Promise<CoordinationPollResponse>;
   cancelAction(actionId: ActionId, did: Did): Promise<CoordinationCancelResponse>;
 }
 
+/** Common Action endpoint surface required by the proposer workflow engine. */
+export interface WorkflowActionEndpoint {
+  submitActionRequest(request: ActionRequest): Promise<ActionResponse>;
+}
+
+/** Coordination Service surface required by the proposer workflow engine. */
+export interface WorkflowCoordinationService {
+  createApprovalWorkflow(input: {
+    actionPackage: ActionPackage;
+    authorizationRequirements?: AuthorizationRequirements;
+  }): Promise<CoordinationActionResponse>;
+  pollWork(): Promise<CoordinationPollResponse>;
+  cancelAction(input: { actionId: ActionId }): Promise<CoordinationCancelResponse>;
+}
+
 export interface BridgeWorkflowEngineOptions {
   store: WorkflowStore;
-  adapter: WorkflowAdapter;
-  coordination: WorkflowCoordination;
+  /**
+   * Action endpoint used for initial and completed submission.
+   *
+   * A bridge that submits through a Coordination Service must supply an
+   * implementation that adds the required Delivery Envelope.
+   */
+  actionEndpoint?: WorkflowActionEndpoint;
+  /** Coordination Service client used for approval collection and updates. */
+  coordinationService?: WorkflowCoordinationService;
+  /** @deprecated Use {@link actionEndpoint}. */
+  adapter?: WorkflowAdapter;
+  /** @deprecated Use {@link coordinationService}. */
+  coordination?: WorkflowCoordination;
   proposerDid: Did;
   /** Distinguishes workers contending for the same store. */
   workerId?: string;
@@ -64,8 +93,8 @@ const NONTERMINAL_RESULTS = new Set<ActionResponse["result"]>(["additionalApprov
 
 export class BridgeWorkflowEngine {
   private readonly store: WorkflowStore;
-  private readonly adapter: WorkflowAdapter;
-  private readonly coordination: WorkflowCoordination;
+  private readonly actionEndpoint: WorkflowActionEndpoint;
+  private readonly coordinationService: WorkflowCoordinationService;
   private readonly proposerDid: Did;
   private readonly workerId: string;
   private readonly claimLeaseMs: number;
@@ -74,8 +103,29 @@ export class BridgeWorkflowEngine {
 
   constructor(options: BridgeWorkflowEngineOptions) {
     this.store = options.store;
-    this.adapter = options.adapter;
-    this.coordination = options.coordination;
+    if (options.actionEndpoint) {
+      this.actionEndpoint = options.actionEndpoint;
+    } else if (options.adapter) {
+      this.actionEndpoint = {
+        submitActionRequest: (request) => options.adapter!.submit(request.actionPackage),
+      };
+    } else {
+      throw new Error("BridgeWorkflowEngine requires actionEndpoint.");
+    }
+    if (options.coordinationService) {
+      this.coordinationService = options.coordinationService;
+    } else if (options.coordination) {
+      this.coordinationService = {
+        createApprovalWorkflow: (input) => options.coordination!.submitAction(
+          input.actionPackage,
+          input.authorizationRequirements,
+        ),
+        pollWork: () => options.coordination!.poll(options.proposerDid),
+        cancelAction: (input) => options.coordination!.cancelAction(input.actionId, options.proposerDid),
+      };
+    } else {
+      throw new Error("BridgeWorkflowEngine requires coordinationService.");
+    }
     this.proposerDid = options.proposerDid;
     this.workerId = options.workerId ?? `worker-${process.pid}`;
     this.claimLeaseMs = options.claimLeaseMs ?? 60_000;
@@ -100,7 +150,7 @@ export class BridgeWorkflowEngine {
     this.sweepExpired();
 
     try {
-      const poll = await this.coordination.poll(this.proposerDid);
+      const poll = await this.coordinationService.pollWork();
       for (const update of poll.actionUpdates) {
         await this.applyUpdate(update);
       }
@@ -131,7 +181,7 @@ export class BridgeWorkflowEngine {
     this.notify(cancelled);
     if (coordinationStarted) {
       try {
-        await this.coordination.cancelAction({ value: actionId }, this.proposerDid);
+        await this.coordinationService.cancelAction({ actionId: { value: actionId } });
       } catch {
         // Cancellation is cooperative. The durable local terminal write is
         // authoritative for future bridge work; Coordination is best effort.
@@ -212,7 +262,7 @@ export class BridgeWorkflowEngine {
 
     let response: ActionResponse;
     try {
-      response = await this.adapter.submit(record.actionPackage);
+      response = await this.actionEndpoint.submitActionRequest(actionRequestFor(record.actionPackage));
     } catch (error) {
       this.store.saveAdapterAttempt(record.actionId, attempt("initial", "unreachable", error));
       return { kind: "deferred", record: this.mustGet(record.actionId) };
@@ -241,14 +291,17 @@ export class BridgeWorkflowEngine {
 
   private async submitToCoordination(
     record: WorkflowRecord,
-    authorizationRequirements: unknown,
+    authorizationRequirements: AuthorizationRequirements | undefined,
   ): Promise<ProposeResult> {
     try {
-      const coordination = await this.coordination.submitAction(record.actionPackage, authorizationRequirements);
+      const coordination = await this.coordinationService.createApprovalWorkflow({
+        actionPackage: record.actionPackage as ActionPackage,
+        authorizationRequirements,
+      });
       this.store.saveCoordinationReference(record.actionId, coordination.actionRef);
       if (this.mustGet(record.actionId).state === "cancelled") {
         try {
-          await this.coordination.cancelAction({ value: record.actionId }, this.proposerDid);
+          await this.coordinationService.cancelAction({ actionId: { value: record.actionId } });
         } catch {
           // Cancellation won while Coordination submission was in flight.
           // The local terminal state still prevents any later execution.
@@ -347,7 +400,7 @@ export class BridgeWorkflowEngine {
 
     let response: ActionResponse;
     try {
-      response = await this.adapter.submit(pkg);
+      response = await this.actionEndpoint.submitActionRequest(actionRequestFor(pkg));
     } catch (error) {
       this.store.saveAdapterAttempt(record.actionId, attempt("completed", "unreachable", error));
       this.store.compareAndSetState(record.actionId, "submittingToVerifier", "readyForResubmission");
@@ -477,6 +530,14 @@ function coordinationFailureResolution(error: unknown): { errorCode: string; err
   return {
     errorCode: "COORDINATION_REQUEST_REJECTED",
     errorMessage: error instanceof Error ? error.message : "The Coordination Service rejected the workflow.",
+  };
+}
+
+function actionRequestFor(actionPackage: unknown): ActionRequest {
+  return {
+    version: "1",
+    type: "ActionRequest",
+    actionPackage: actionPackage as ActionPackage,
   };
 }
 

@@ -207,6 +207,7 @@ export interface ActionReference {
   actionEnvelopeHash: HashObject;
 }
 
+/** Workflow-creation response; the historical version 1 discriminant is retained. */
 export interface CoordinationActionResponse {
   version: MpasVersion;
   type: "CoordinationActionResponse";
@@ -215,11 +216,15 @@ export interface CoordinationActionResponse {
   createdAt?: Timestamp;
 }
 
+/** Workflow-creation request; the historical version 1 discriminant is retained. */
 export interface CoordinationActionRequest {
   version: MpasVersion;
   type: "CoordinationActionRequest";
   actionPackage: ActionPackage;
   authorizationRequirements?: AuthorizationRequirements;
+  /** Body-level mutation idempotency key. */
+  idempotencyKey?: string;
+  /** Signed-request audience added by the HTTP client. */
   audience?: string;
   context?: JsonObject;
 }
@@ -228,7 +233,10 @@ export interface CoordinationPollRequest {
   version: MpasVersion;
   type: "CoordinationPollRequest";
   did: Did;
+  /** Signed-request audience added by the HTTP client. */
   audience?: string;
+  /** Optional continuation cursor from a previous poll response. */
+  cursor?: string;
 }
 
 export interface CoordinationApprovalSubmission {
@@ -236,6 +244,9 @@ export interface CoordinationApprovalSubmission {
   type: "CoordinationApprovalSubmission";
   actionEnvelopeHash: HashObject;
   approval: Approval;
+  /** Body-level mutation idempotency key. */
+  idempotencyKey?: string;
+  /** Signed-request audience added by the HTTP client. */
   audience?: string;
 }
 
@@ -244,6 +255,9 @@ export interface CoordinationActionCancelRequest {
   type: "CoordinationActionCancelRequest";
   actionId: ActionId;
   proposerDid: Did;
+  /** Body-level mutation idempotency key. */
+  idempotencyKey?: string;
+  /** Signed-request audience added by the HTTP client. */
   audience?: string;
 }
 
@@ -289,6 +303,67 @@ export interface CoordinationPollResponse {
   type: "CoordinationPollResponse";
   approvalRequests: ApprovalRequest[];
   actionUpdates: CoordinationActionUpdate[];
+  /** Complete envelopes independently addressed to the authenticated poll DID. */
+  deliveries?: DeliveryEnvelope[];
+  /** Delivery-position checkpoint to persist only after the current page is accepted. */
+  nextCursor?: string;
+}
+
+/**
+ * Transport-layer routing metadata around an MPAS message or JSON payload.
+ *
+ * Recipient membership grants delivery only; it does not assign an MPAS role or
+ * replace verification of the enclosed payload.
+ */
+export interface DeliveryEnvelope<TPayload = JsonValue> {
+  version: MpasVersion;
+  type: "DeliveryEnvelope";
+  /** DID whose provenance is recorded by this envelope. */
+  sender: Did;
+  /** Non-empty, unique DIDs with independent retrieval obligations. */
+  recipients: Did[];
+  /** MPAS Core §5 timestamp with millisecond precision and a `Z` suffix. */
+  createdAt: Timestamp;
+  /** Optional Core §5 retrieval deadline later than `createdAt`. */
+  expiresAt?: Timestamp;
+  /** Receiving service origin when this envelope is an RFC 9421-signed request body. */
+  audience?: string;
+  /** Payload interpreted only after the routing layer is removed. */
+  payload: TPayload;
+}
+
+/** Durable-acceptance acknowledgement for a Verifier response delivery. */
+export interface CoordinationDeliveryResponse {
+  version: MpasVersion;
+  type: "CoordinationDeliveryResponse";
+  accepted: true;
+  createdAt?: Timestamp;
+}
+
+/** Signed request for a one-use notification WebSocket ticket. */
+export interface CoordinationSessionRequest {
+  version: MpasVersion;
+  type: "CoordinationSessionRequest";
+  did: Did;
+  audience?: string;
+}
+
+/** Connection parameters for one notification WebSocket upgrade. */
+export interface CoordinationSessionResponse {
+  version: MpasVersion;
+  type: "CoordinationSessionResponse";
+  /** Exact URL to use for the WebSocket upgrade. */
+  websocketUrl: string;
+  /** Opaque, DID-bound ticket presented in the upgrade Authorization header. */
+  ticket: string;
+  /** Ticket expiration; the ticket is invalid after one use even before this time. */
+  expiresAt: Timestamp;
+}
+
+/** Payload-free signal that instructs the participant to perform a signed poll. */
+export interface CoordinationWorkAvailable {
+  version: MpasVersion;
+  type: "CoordinationWorkAvailable";
 }
 
 export interface CoordinationApprovalResponse {
@@ -378,6 +453,19 @@ export interface ActionDiagnostic {
 export interface ActionResponseContext {
   diagnostic?: ActionDiagnostic;
   [key: string]: unknown;
+}
+
+/** HTTP request wrapper for an MPAS Action Package. */
+export interface ActionRequest {
+  version: MpasVersion;
+  type: "ActionRequest";
+  actionPackage: ActionPackage;
+  /** Action-processing idempotency key retained inside a Delivery Envelope. */
+  idempotencyKey?: string;
+  /** Signed-request audience when this is the outer body of a bare direct request. */
+  audience?: string;
+  /** Non-authoritative request metadata. */
+  context?: JsonObject;
 }
 
 /**

@@ -1,4 +1,9 @@
-import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
+import Fastify, {
+  type FastifyInstance,
+  type FastifyReply,
+  type FastifyRequest,
+  type RouteHandlerMethod,
+} from "fastify";
 import {
   InMemoryNonceStore,
   isValidMpasAudienceOrigin,
@@ -7,8 +12,20 @@ import {
   verifyMpasRfc9421,
   type MpasAuthSuccess,
   type NonceStore,
+  type Did,
 } from "@oma3/mpas";
 import { CoordinationStore, CoordinationStoreError, decodeApprovalSignerDid } from "./store.js";
+import { CoordinationNotificationHub } from "./notifications.js";
+import {
+  effectiveIdempotencyKey,
+  validateApprovalSubmission,
+  validateCancelRequest,
+  validateCoordinationActionRequest,
+  validatePollRequest,
+  validateRelayedActionRequest,
+  validateResponseDelivery,
+  validateSessionRequest,
+} from "./validation.js";
 import { TraceLogger } from "../core/trace.js";
 import type {
   CoordinationActionRequest,
@@ -21,6 +38,11 @@ export interface CoordinationHttpEndpointOptions {
   store?: CoordinationStore;
   traceLogger?: TraceLogger;
   auth?: CoordinationAuthOptions;
+  designatedVerifierDid?: Did;
+  authorizedRecipientDids?: readonly Did[];
+  notificationOrigin?: string;
+  /** Demo relay wait bound. Production services should configure this operationally. */
+  relayResponseWaitMs?: number;
 }
 
 export interface CoordinationAuthOptions {
@@ -38,6 +60,14 @@ export function createCoordinationApiServer(options: CoordinationHttpEndpointOpt
   const store = options.store ?? new CoordinationStore();
   const trace = options.traceLogger ?? new TraceLogger("coordination");
   const rawBodies = new WeakMap<object, Buffer>();
+  const notificationHub = new CoordinationNotificationHub(app.server, (did) => store.hasOutstandingWork(did), auth.now);
+  const relayResponseWaitMs = options.relayResponseWaitMs ?? 30_000;
+  if (!Number.isFinite(relayResponseWaitMs) || relayResponseWaitMs <= 0) {
+    throw new Error("relayResponseWaitMs must be a positive number.");
+  }
+  const authorizedRecipients = new Set(options.authorizedRecipientDids ?? []);
+  if (options.designatedVerifierDid) authorizedRecipients.add(options.designatedVerifierDid);
+  app.addHook("onClose", async () => notificationHub.close());
 
   // Strict parsing: duplicate JSON member names in signed artifacts are malformed
   // per MPAS Core §5.1.2 (JSON.parse silently keeps the last value).
@@ -61,27 +91,110 @@ export function createCoordinationApiServer(options: CoordinationHttpEndpointOpt
     service: "mpas-local-coordination",
   }));
 
-  app.post("/mpas/v1/coordination/action", async (request, reply) => {
+  app.post("/mpas/v1/action", async (request, reply) => {
     try {
-      const body = request.body as CoordinationActionRequest;
       const authenticated = await authenticateRequest(request, reply, rawBodies, auth);
       if (authenticated === AUTH_FAILED) return reply;
+      if (!options.designatedVerifierDid) {
+        return reply.code(503).send({
+          version: "1",
+          type: "MpasHttpError",
+          error: { code: "policy_unavailable", message: "No designated Verifier DID is configured." },
+        });
+      }
+      const body = validateRelayedActionRequest(request.body, options.designatedVerifierDid);
+      if (authenticated !== AUTH_DISABLED && authenticated.did !== body.sender) return replyPermissionDenied(reply);
+      if (body.recipients.some((did) => !authorizedRecipients.has(did))) {
+        return replyPermissionDenied(reply);
+      }
+      const idempotencyKey = effectiveIdempotencyKey(body.payload.idempotencyKey, request.headers["idempotency-key"]);
+      store.validateRelayedAction(body, options.designatedVerifierDid);
+      if (authenticated !== AUTH_DISABLED && !(await claimNonce(auth.nonceStore, authenticated))) {
+        return replySignatureInvalid(reply);
+      }
+
+      const response = store.runIdempotent(body.sender, idempotencyKey, body, async () => {
+        const pending = store.beginRelayedAction(body, options.designatedVerifierDid!);
+        if (pending.created) notificationHub.notify(body.recipients);
+        return pending.response;
+      });
+      return await waitForRelayedResponse(response, relayResponseWaitMs);
+    } catch (error) {
+      return replyStoreError(reply, error);
+    }
+  });
+
+  app.post("/mpas/v1/coordination/delivery", async (request, reply) => {
+    try {
+      const authenticated = await authenticateRequest(request, reply, rawBodies, auth);
+      if (authenticated === AUTH_FAILED) return reply;
+      const body = validateResponseDelivery(request.body);
+      if (authenticated !== AUTH_DISABLED &&
+          (authenticated.did !== body.sender || authenticated.did !== body.payload.verifier?.did)) {
+        return replyPermissionDenied(reply);
+      }
+      store.validateResponseDelivery(body, authorizedRecipients);
+      if (authenticated !== AUTH_DISABLED && !(await claimNonce(auth.nonceStore, authenticated))) {
+        return replySignatureInvalid(reply);
+      }
+      const response = store.submitResponseDelivery(body, authorizedRecipients);
+      notificationHub.notify(body.recipients);
+      return response;
+    } catch (error) {
+      return replyStoreError(reply, error);
+    }
+  });
+
+  app.post("/mpas/v1/coordination/session", async (request, reply) => {
+    try {
+      const authenticated = await authenticateRequest(request, reply, rawBodies, auth);
+      if (authenticated === AUTH_FAILED) return reply;
+      const body = validateSessionRequest(request.body);
+      if (authenticated !== AUTH_DISABLED && authenticated.did !== body.did) return replyPermissionDenied(reply);
+      if (authenticated !== AUTH_DISABLED && !(await claimNonce(auth.nonceStore, authenticated))) {
+        return replySignatureInvalid(reply);
+      }
+      return {
+        version: "1",
+        type: "CoordinationSessionResponse",
+        ...notificationHub.issue(
+          body.did,
+          notificationWebSocketUrl(options.notificationOrigin ?? auth.audiences[0] ?? "http://127.0.0.1"),
+        ),
+      };
+    } catch (error) {
+      return replyStoreError(reply, error);
+    }
+  });
+
+  const createWorkflowHandler: RouteHandlerMethod = async (request, reply) => {
+    try {
+      const authenticated = await authenticateRequest(request, reply, rawBodies, auth);
+      if (authenticated === AUTH_FAILED) return reply;
+      const body = validateCoordinationActionRequest(request.body);
+      const idempotencyKey = effectiveIdempotencyKey(body.idempotencyKey, request.headers["idempotency-key"]);
       const proposerDid = body?.actionPackage?.actionEnvelope?.proposer?.did;
       if (authenticated !== AUTH_DISABLED && authenticated.did !== proposerDid) {
         return replyPermissionDenied(reply);
       }
 
-      store.validateSubmitAction(body);
+      store.validateCreateWorkflow(body);
       if (authenticated !== AUTH_DISABLED && !(await claimNonce(auth.nonceStore, authenticated))) {
         return replySignatureInvalid(reply);
       }
 
-      trace.emit("coordination_submit", {
-        endpoint: "/mpas/v1/coordination/action",
+      trace.emit("coordination_workflow_create", {
+        endpoint: request.routeOptions.url,
       });
 
-      const result = store.submitAction(body);
+      const result = await store.runIdempotent(
+        body.actionPackage.actionEnvelope.proposer.did,
+        idempotencyKey,
+        body,
+        () => store.createWorkflow(body),
+      );
       reply.code(result.created ? 201 : 200);
+      if (result.created) notificationHub.notify(coordinationRecipients(body));
 
       trace.emit("state_transition", {
         result: result.created ? "created" : "existing",
@@ -92,13 +205,18 @@ export function createCoordinationApiServer(options: CoordinationHttpEndpointOpt
     } catch (error) {
       return replyStoreError(reply, error);
     }
-  });
+  };
+
+  app.post("/mpas/v1/coordination/workflow", createWorkflowHandler);
+  // Temporary migration alias. Both routes share validation, idempotency,
+  // authorization, storage, and notification behavior.
+  app.post("/mpas/v1/coordination/action", createWorkflowHandler);
 
   app.post("/mpas/v1/coordination/poll", async (request, reply) => {
     try {
-      const body = request.body as CoordinationPollRequest;
       const authenticated = await authenticateRequest(request, reply, rawBodies, auth);
       if (authenticated === AUTH_FAILED) return reply;
+      const body = validatePollRequest(request.body);
       if (authenticated !== AUTH_DISABLED && authenticated.did !== body.did) {
         return replyPermissionDenied(reply);
       }
@@ -107,7 +225,7 @@ export function createCoordinationApiServer(options: CoordinationHttpEndpointOpt
         endpoint: "/mpas/v1/coordination/poll",
       });
 
-      const response = store.poll(body.did);
+      const response = store.poll(body.did, body.cursor);
 
       trace.emit("coordination_poll", {
         endpoint: "/mpas/v1/coordination/poll",
@@ -122,9 +240,10 @@ export function createCoordinationApiServer(options: CoordinationHttpEndpointOpt
 
   app.post("/mpas/v1/coordination/approval", async (request, reply) => {
     try {
-      const body = request.body as CoordinationApprovalSubmission;
       const authenticated = await authenticateRequest(request, reply, rawBodies, auth);
       if (authenticated === AUTH_FAILED) return reply;
+      const body = validateApprovalSubmission(request.body);
+      const idempotencyKey = effectiveIdempotencyKey(body.idempotencyKey, request.headers["idempotency-key"]);
       const actionEnvelopeHash = body?.actionEnvelopeHash?.value;
       const signerDid = decodeApprovalSignerDid(body?.approval);
       if (authenticated !== AUTH_DISABLED) {
@@ -148,7 +267,13 @@ export function createCoordinationApiServer(options: CoordinationHttpEndpointOpt
       // submitApproval intentionally repeats preflight after the asynchronous
       // nonce claim so a custom store cannot commit against workflow state
       // that changed while claim() was pending.
-      const response = store.submitApproval(body);
+      const response = await store.runIdempotent(
+        signerDid!,
+        idempotencyKey,
+        body,
+        () => store.submitApproval(body),
+      );
+      notificationHub.notify(store.participantsForActionHash(actionEnvelopeHash));
 
       trace.emit("approval_received", {
         endpoint: "/mpas/v1/coordination/approval",
@@ -161,6 +286,11 @@ export function createCoordinationApiServer(options: CoordinationHttpEndpointOpt
           fromState: "awaitingApprovals",
           toState: "readyForResubmission",
         });
+      } else if (response.state === "rejected") {
+        trace.emit("state_transition", {
+          fromState: "awaitingApprovals",
+          toState: "rejected",
+        });
       }
 
       return response;
@@ -171,9 +301,10 @@ export function createCoordinationApiServer(options: CoordinationHttpEndpointOpt
 
   app.post("/mpas/v1/coordination/action-cancel", async (request, reply) => {
     try {
-      const body = request.body as CoordinationActionCancelRequest;
       const authenticated = await authenticateRequest(request, reply, rawBodies, auth);
       if (authenticated === AUTH_FAILED) return reply;
+      const body = validateCancelRequest(request.body);
+      const idempotencyKey = effectiveIdempotencyKey(body.idempotencyKey, request.headers["idempotency-key"]);
       const actionId = body?.actionId?.value;
       if (authenticated !== AUTH_DISABLED) {
         const storedProposer = store.proposerForAction(actionId);
@@ -191,7 +322,13 @@ export function createCoordinationApiServer(options: CoordinationHttpEndpointOpt
         endpoint: "/mpas/v1/coordination/action-cancel",
       });
 
-      const response = store.cancelAction(body);
+      const response = await store.runIdempotent(
+        body.proposerDid,
+        idempotencyKey,
+        body,
+        () => store.cancelAction(body),
+      );
+      notificationHub.notify([body.proposerDid]);
 
       trace.emit("state_transition", {
         toState: "cancelled",
@@ -315,12 +452,66 @@ function replyStoreError(reply: FastifyReply, error: unknown) {
   if (error instanceof CoordinationStoreError) {
     reply.code(error.statusCode);
     return {
+      version: "1",
+      type: "MpasHttpError",
       error: {
         code: error.code,
         message: error.message,
+        ...(error.code === "relay_timeout" ? { retryable: true } : {}),
       },
     };
   }
 
   throw error;
+}
+
+function waitForRelayedResponse<T>(response: Promise<T>, timeoutMs: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new CoordinationStoreError(
+      503,
+      "relay_timeout",
+      "The designated Verifier did not respond within this relay wait.",
+    )), timeoutMs);
+    timer.unref();
+    void response.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
+
+function coordinationRecipients(body: CoordinationActionRequest): Did[] {
+  const requirements = body.authorizationRequirements.approvalRequirements;
+  return [...new Set<Did>([
+    body.actionPackage.actionEnvelope.proposer.did,
+    body.authorizationRequirements.verifier.did,
+    ...(requirements.anyOf ?? []).flatMap((threshold) => threshold.eligibleSigners),
+    ...(requirements.allOf ?? []).flatMap((threshold) => threshold.eligibleSigners),
+    ...(requirements.overrideSigners ?? []).map((entry) => entry.signer),
+  ])];
+}
+
+function notificationWebSocketUrl(origin: string): string {
+  let url: URL;
+  try {
+    url = new URL(origin);
+  } catch {
+    throw new CoordinationStoreError(500, "policy_unavailable", "Notification origin is not a valid URL.");
+  }
+  if (url.origin !== origin || (url.protocol !== "https:" && url.protocol !== "http:")) {
+    throw new CoordinationStoreError(500, "policy_unavailable", "Notification origin must be a canonical HTTP(S) origin.");
+  }
+  const local = url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "[::1]";
+  if (url.protocol !== "https:" && !local) {
+    throw new CoordinationStoreError(500, "policy_unavailable", "Notification origin must use HTTPS outside local development.");
+  }
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  url.pathname = "/mpas/v1/coordination/ws";
+  return url.toString();
 }

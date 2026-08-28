@@ -34,19 +34,19 @@ describe("coordination HTTP endpoint", () => {
     });
   });
 
-  it("submits an action and returns pending work through poll", async () => {
+  it("creates a workflow and returns pending work through poll", async () => {
     const app = createApp();
     const request = await coordinationActionRequest();
     const maintainerA = await fixtureKey("maintainer-a");
 
     const submit = await app.inject({
       method: "POST",
-      url: "/mpas/v1/coordination/action",
+      url: "/mpas/v1/coordination/workflow",
       payload: request,
     });
     const duplicateSubmit = await app.inject({
       method: "POST",
-      url: "/mpas/v1/coordination/action",
+      url: "/mpas/v1/coordination/workflow",
       payload: request,
     });
     const poll = await app.inject({
@@ -65,13 +65,36 @@ describe("coordination HTTP endpoint", () => {
     });
   });
 
+  it("temporarily accepts the legacy action route in the canonical workflow idempotency scope", async () => {
+    const app = createApp();
+    const request = {
+      ...await coordinationActionRequest(),
+      idempotencyKey: "workflow-migration-1",
+    };
+
+    const canonical = await app.inject({
+      method: "POST",
+      url: "/mpas/v1/coordination/workflow",
+      payload: request,
+    });
+    const legacy = await app.inject({
+      method: "POST",
+      url: "/mpas/v1/coordination/action",
+      payload: request,
+    });
+
+    expect(canonical.statusCode).toBe(201);
+    expect(legacy.statusCode).toBe(201);
+    expect(legacy.json()).toEqual(canonical.json());
+  });
+
   it("accepts approvals and returns a completed package in proposer poll", async () => {
     const app = createApp();
     const request = await coordinationActionRequest();
     const maintainerA = await fixtureKey("maintainer-a");
     const maintainerB = await fixtureKey("maintainer-b");
 
-    await app.inject({ method: "POST", url: "/mpas/v1/coordination/action", payload: request });
+    await app.inject({ method: "POST", url: "/mpas/v1/coordination/workflow", payload: request });
     for (const signer of [maintainerA, maintainerB]) {
       const approval = await signApproval(request.authorizationRequirements.actionEnvelopeHash, signer, "approve");
       const response = await app.inject({
@@ -110,14 +133,20 @@ describe("coordination HTTP endpoint", () => {
     const request = await coordinationActionRequest();
     const conflictingPackage = structuredClone(request.actionPackage);
     conflictingPackage.actionEnvelope.expiresAt = "2030-01-02T00:00:00.000Z";
+    const conflictingHash = computeJsonHash(conflictingPackage.actionEnvelope);
+    conflictingPackage.approvalBundle.actionEnvelopeHash = conflictingHash;
 
-    await app.inject({ method: "POST", url: "/mpas/v1/coordination/action", payload: request });
+    await app.inject({ method: "POST", url: "/mpas/v1/coordination/workflow", payload: request });
     const conflict = await app.inject({
       method: "POST",
-      url: "/mpas/v1/coordination/action",
+      url: "/mpas/v1/coordination/workflow",
       payload: {
         ...request,
         actionPackage: conflictingPackage,
+        authorizationRequirements: {
+          ...request.authorizationRequirements,
+          actionEnvelopeHash: conflictingHash,
+        },
       },
     });
     const missingCancel = await app.inject({

@@ -138,8 +138,9 @@ function formatEventDetail(event: TraceEvent): string {
     case "receipt_generated":
       return `receipt generated (${event.result})`;
 
+    case "coordination_workflow_create":
     case "coordination_submit":
-      return `action submitted by ${event.did ?? "unknown"}`;
+      return `workflow created by ${event.did ?? "unknown"}`;
 
     case "coordination_poll": {
       const result = event.result as string | undefined;

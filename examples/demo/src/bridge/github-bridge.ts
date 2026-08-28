@@ -19,8 +19,8 @@ import { pathToFileURL } from "node:url";
 import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
 import {
   ActionPackageBuilder,
-  AdapterClient,
-  CoordinationClient,
+  ActionEndpointClient,
+  CoordinationServiceClient,
   KeyManager,
   MemoryWorkflowStore,
   MpasProtocolServer,
@@ -31,7 +31,7 @@ import type {
   CreateTaskResult,
   MpasApplicationPlugin,
   ProposerConfig,
-  WorkflowCoordination,
+  WorkflowCoordinationService,
   WorkflowStore,
 } from "@oma3/mpas";
 import { SqliteWorkflowStore } from "./sqlite-workflow-store.js";
@@ -115,11 +115,11 @@ export class GeneratedBridge {
   constructor(config: BridgeConfig) {
     this.tools = loadTools(config.tools);
     const plugin = loadPlugin(config.plugin);
-    const adapterClient = new AdapterClient({ url: config.adapterUrl });
+    const actionEndpoint = new ActionEndpointClient({ url: config.adapterUrl });
     const keyManagerPromise = loadKeyManager(config.agentKey);
-    const coordination: WorkflowCoordination = config.coordinationUrl
-      ? new CoordinationClient({ url: config.coordinationUrl, signer: keyManagerPromise })
-      : unconfiguredCoordination();
+    const coordinationService: WorkflowCoordinationService = config.coordinationUrl
+      ? new CoordinationServiceClient({ url: config.coordinationUrl, signer: keyManagerPromise })
+      : unconfiguredCoordinationService();
     const workflow = config.workflow ?? {};
     this.store = workflow.dbPath ? new SqliteWorkflowStore(workflow.dbPath) : new MemoryWorkflowStore();
     if (!workflow.dbPath) {
@@ -145,8 +145,8 @@ export class GeneratedBridge {
               : {}),
           }).buildFromToolCall(toolName, args),
         store: this.store,
-        adapter: adapterClient,
-        coordination,
+        actionEndpoint,
+        coordinationService,
         proposerDid: keyManager.did,
         resultRetentionSeconds: workflow.resultRetentionSeconds ?? 86_400,
         ...(workflow.pollIntervalMs !== undefined ? { pollIntervalMs: workflow.pollIntervalMs } : {}),
@@ -205,12 +205,12 @@ export class GeneratedBridge {
  * Actions stay durably recorded in `created`/`awaitingApprovals` and are
  * retried by reconciliation; they cannot complete until coordination exists.
  */
-function unconfiguredCoordination(): WorkflowCoordination {
+function unconfiguredCoordinationService(): WorkflowCoordinationService {
   return {
-    submitAction() {
+    createApprovalWorkflow() {
       return Promise.reject(new Error("Coordination Service is not configured (coordination.url)."));
     },
-    poll() {
+    pollWork() {
       return Promise.resolve({
         version: "1" as const,
         type: "CoordinationPollResponse" as const,

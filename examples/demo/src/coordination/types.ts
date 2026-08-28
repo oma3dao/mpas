@@ -2,10 +2,13 @@ import type {
   ActionEnvelope,
   ActionId,
   ActionPackage,
+  ActionRequest,
+  ActionResponse,
   Approval,
   AuthorizationRequirements,
   Did,
   Hash,
+  DeliveryEnvelope,
 } from "../core/types.js";
 
 export type AdditionalApprovalRequirements = Extract<
@@ -13,7 +16,7 @@ export type AdditionalApprovalRequirements = Extract<
   { result: "additionalApprovalsRequired" }
 >;
 
-export type CoordinationState = "awaitingApprovals" | "readyForResubmission" | "cancelled" | "expired";
+export type CoordinationState = "awaitingApprovals" | "readyForResubmission" | "rejected" | "cancelled" | "expired";
 
 export interface ActionRef {
   version: "1";
@@ -55,16 +58,20 @@ export interface ActionUpdate {
   progress?: CoordinationProgress;
   actionPackage?: ActionPackage;
   cancelledAt?: string;
+  rejectedAt?: string;
 }
 
+/** Workflow-creation request using the established version 1 wire discriminant. */
 export interface CoordinationActionRequest {
   version: "1";
   type: "CoordinationActionRequest";
   actionPackage: ActionPackage;
   authorizationRequirements: AdditionalApprovalRequirements;
+  idempotencyKey?: string;
   audience?: string;
 }
 
+/** Workflow-creation response using the established version 1 wire discriminant. */
 export interface CoordinationActionResponse {
   version: "1";
   type: "CoordinationActionResponse";
@@ -78,6 +85,7 @@ export interface CoordinationPollRequest {
   type: "CoordinationPollRequest";
   did: Did;
   audience?: string;
+  cursor?: string;
 }
 
 export interface CoordinationPollResponse {
@@ -85,6 +93,8 @@ export interface CoordinationPollResponse {
   type: "CoordinationPollResponse";
   approvalRequests: ApprovalRequest[];
   actionUpdates: ActionUpdate[];
+  deliveries?: DeliveryEnvelope[];
+  nextCursor?: string;
 }
 
 export interface CoordinationApprovalSubmission {
@@ -92,6 +102,7 @@ export interface CoordinationApprovalSubmission {
   type: "CoordinationApprovalSubmission";
   actionEnvelopeHash: Hash;
   approval: Approval;
+  idempotencyKey?: string;
   audience?: string;
 }
 
@@ -109,6 +120,7 @@ export interface CoordinationActionCancelRequest {
   type: "CoordinationActionCancelRequest";
   actionId: ActionId;
   proposerDid: Did;
+  idempotencyKey?: string;
   audience?: string;
 }
 
@@ -124,3 +136,6 @@ export interface CoordinationHealthResponse {
   status: "ok";
   service: "mpas-local-coordination";
 }
+
+export type RoutedActionRequest = DeliveryEnvelope<ActionRequest>;
+export type RoutedActionResponse = DeliveryEnvelope<ActionResponse>;

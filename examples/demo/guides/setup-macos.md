@@ -165,16 +165,7 @@ The only path to write operations should be through the MPAS bridge → Credenti
 
 ### Step 7: Build MPAS
 
-Build and test the protocol SDK first. The demo consumes this local package:
-
-```sh
-cd "$HOME/Projects/mpas/sdk/protocol"
-npm ci
-npm run build
-npm test
-```
-
-Then install, build, and test the demo:
+Install, build, and test the demo. Its package lock installs the published MPAS protocol SDK:
 
 ```sh
 cd "$HOME/Projects/mpas/examples/demo"
@@ -183,7 +174,7 @@ npm run build
 npm test
 ```
 
-Expected: both test suites pass with no failures.
+Expected: the demo test suite passes with no failures.
 
 ### Step 8: Run the E2E Test
 
@@ -1282,11 +1273,6 @@ git checkout main
 7. **Build and test** (§1.1 Step 7 and 8):
 
 ```sh
-cd "$HOME/Projects/mpas/sdk/protocol"
-npm ci
-npm run build
-npm test
-
 cd "$HOME/Projects/mpas/examples/demo"
 npm ci
 npm run build
@@ -1559,8 +1545,7 @@ The operator retains: adapter key, deployment config, credentials, plugin, journ
 - [ ] macOS 11+
 - [ ] `node --version` → `v22.x` or later
 - [ ] `mpas/examples/demo`: install + generate fixtures + build + test pass
-- [ ] `sdk/protocol`: install + build + test pass
-- [ ] E2E test: 2 tests pass
+- [ ] E2E test: 8 tests pass
 - [ ] Agent harness installed and responding
 
 **Part 2 — Single-User Demo Setup:**

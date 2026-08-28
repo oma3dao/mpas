@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   CoordinationClient,
+  CoordinationServiceClient,
   CoordinationResponseError,
   CoordinationUnavailableError,
   KeyManager,
@@ -23,8 +24,8 @@ async function readJson<T>(path: string): Promise<T> {
   return JSON.parse(await readFile(path, "utf8")) as T;
 }
 
-describe("CoordinationClient", () => {
-  it("calls all coordination endpoints and parses fixture responses", async () => {
+describe("Coordination Service clients", () => {
+  it("calls all coordination endpoints through the canonical API", async () => {
     const actionPackage = await readJson<ActionPackage>(
       join(fixturesDir, "action-packages", "valid-create-issue-package.json"),
     );
@@ -41,7 +42,7 @@ describe("CoordinationClient", () => {
       const body = await readRequestBody(request);
       requests.push({ url: request.url, body: body ? JSON.parse(body) : undefined });
 
-      if (request.url === "/mpas/v1/coordination/action") {
+      if (request.url === "/mpas/v1/coordination/workflow") {
         sendJson(response, {
           version: "1",
           type: "CoordinationActionResponse",
@@ -82,26 +83,32 @@ describe("CoordinationClient", () => {
     });
 
     try {
-      const client = new CoordinationClient({ url: server.url });
+      const client = new CoordinationServiceClient({
+        url: server.url,
+        participantDid: actionPackage.actionEnvelope.proposer.did,
+      });
 
-      await expect(client.submitAction(actionPackage, authorizationRequirements)).resolves.toMatchObject({
+      await expect(client.createApprovalWorkflow({
+        actionPackage,
+        authorizationRequirements,
+      })).resolves.toMatchObject({
         actionRef: pollResponse.approvalRequests[0].actionRef,
       });
-      await expect(client.poll("did:jwk:eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6IjhzRFY3NmI4aUY3NlBJbUF3NUk5V3ZlanNfOGJTOE4xMld2SHpQYTVWdzgifQ")).resolves.toEqual(
+      await expect(client.pollWork()).resolves.toEqual(
         pollResponse,
       );
-      await expect(client.submitApproval(actionPackage.approvalBundle.actionEnvelopeHash, approval)).resolves.toMatchObject({
+      await expect(client.submitApproval({
+        actionEnvelopeHash: actionPackage.approvalBundle.actionEnvelopeHash,
+        approval,
+      })).resolves.toMatchObject({
         accepted: true,
       });
       await expect(
-        client.cancelAction(
-          actionPackage.actionEnvelope.actionId,
-          "did:jwk:eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6Ims2TzdjaVFrbXBodUVFdDFpM3lBaW1KSldlR0ttT3EzdF9mc05renphNm8ifQ",
-        ),
+        client.cancelAction({ actionId: actionPackage.actionEnvelope.actionId }),
       ).resolves.toMatchObject({ state: "cancelled" });
 
       expect(requests.map((request) => request.url)).toEqual([
-        "/mpas/v1/coordination/action",
+        "/mpas/v1/coordination/workflow",
         "/mpas/v1/coordination/poll",
         "/mpas/v1/coordination/approval",
         "/mpas/v1/coordination/action-cancel",

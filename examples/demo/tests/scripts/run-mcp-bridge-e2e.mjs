@@ -1,7 +1,5 @@
-import { resolve } from "node:path";
 import { spawn } from "node:child_process";
 
-await run("npm", ["run", "build"], resolve(process.cwd(), "..", "..", "sdk", "protocol"));
 await run("npm", ["run", "build"], process.cwd());
 await run("npx", ["vitest", "run", "tests/e2e/mcp-bridge-stack.test.ts"], process.cwd());
 

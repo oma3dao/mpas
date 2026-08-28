@@ -1,6 +1,6 @@
 {
   "name": "@oma3/mpas",
-  "version": "0.1.0-alpha.7",
+  "version": "0.1.0-alpha.9",
   "description": "MPAS protocol SDK — types, verification, policy evaluation, receipts, and protocol primitives",
   "license": "Apache-2.0",
   "type": "module",
@@ -61,6 +61,26 @@
       "import": "./dist/lib/coordination-client.js",
       "default": "./dist/lib/coordination-client.js"
     },
+    "./coordination-service-client": {
+      "types": "./dist/lib/coordination-client.d.ts",
+      "import": "./dist/lib/coordination-client.js",
+      "default": "./dist/lib/coordination-client.js"
+    },
+    "./action-endpoint-client": {
+      "types": "./dist/lib/action-endpoint-client.d.ts",
+      "import": "./dist/lib/action-endpoint-client.js",
+      "default": "./dist/lib/action-endpoint-client.js"
+    },
+    "./credential-adapter-client": {
+      "types": "./dist/lib/adapter-client.d.ts",
+      "import": "./dist/lib/adapter-client.js",
+      "default": "./dist/lib/adapter-client.js"
+    },
+    "./routing": {
+      "types": "./dist/lib/routing.d.ts",
+      "import": "./dist/lib/routing.js",
+      "default": "./dist/lib/routing.js"
+    },
     "./rfc9421": {
       "types": "./dist/lib/rfc9421.d.ts",
       "import": "./dist/lib/rfc9421.js",
@@ -70,6 +90,11 @@
       "types": "./dist/lib/approval-builder.d.ts",
       "import": "./dist/lib/approval-builder.js",
       "default": "./dist/lib/approval-builder.js"
+    },
+    "./approval-requirements": {
+      "types": "./dist/lib/approval-requirements.d.ts",
+      "import": "./dist/lib/approval-requirements.js",
+      "default": "./dist/lib/approval-requirements.js"
     },
     "./hash": {
       "types": "./dist/utils/hash.d.ts",

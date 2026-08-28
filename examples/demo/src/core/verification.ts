@@ -10,7 +10,7 @@ export {
   verifyApprovalBundle,
   verifyActionPackage,
   computeJsonHash,
-  isEnvelopeExpired,
+  isActionEnvelopeExpired,
   exceedsMaxEnvelopeValidity,
   DEFAULT_MAX_ENVELOPE_VALIDITY_MS,
 } from "@oma3/mpas";

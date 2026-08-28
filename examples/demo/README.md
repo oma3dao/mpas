@@ -122,7 +122,7 @@ Self-approval is enforced at two levels regardless of group membership:
 
 The MPAS Signer Server (`src/signer-server/`) is a standalone MCP server that enables agents to act as Signers. One instance per agent, handling approvals across all applications.
 
-It imports protocol primitives from `@oma3/mpas` (KeyManager, CoordinationClient, ApprovalBuilder, hash utilities) and exposes four MCP tools:
+It imports protocol primitives from `@oma3/mpas` (`KeyManager`, `CoordinationServiceClient`, `ApprovalBuilder`, and JSON hash utilities) and exposes four MCP tools:
 
 | Tool | Description |
 |------|-------------|
@@ -363,17 +363,25 @@ Useful commands:
 
 ```sh
 mpas daemon start
-mpas coordination start --port 7545
+mpas coordination start --port 7545 \
+  --designated-verifier-did did:jwk:...verifier... \
+  --notification-origin http://127.0.0.1:7545
 npm run test:e2e:mcp-bridge
 ```
 
 Coordination endpoints:
 
 - `GET /mpas/v1/coordination/health`
-- `POST /mpas/v1/coordination/action`
+- `POST /mpas/v1/action` — canonical Action relay; waits for the Verifier-authored `ActionResponse` up to the demo's bounded interval, then returns retryable `503 relay_timeout` without discarding the relay record
+- `POST /mpas/v1/coordination/workflow` — create an approval workflow after direct Verifier evaluation
+- `POST /mpas/v1/coordination/action` — deprecated temporary alias for `/coordination/workflow`
 - `POST /mpas/v1/coordination/poll`
 - `POST /mpas/v1/coordination/approval`
 - `POST /mpas/v1/coordination/action-cancel`
+- `POST /mpas/v1/coordination/delivery` — Verifier `DeliveryEnvelope<ActionResponse>` return path
+- `POST /mpas/v1/coordination/session` and `GET /mpas/v1/coordination/ws` — notification-only WebSocket
+
+Repeat `--authorized-recipient-did` to permit informational recipients in addition to the configured Verifier. WebSocket notifications contain no work payload; clients retrieve all work through the signed coordination poll.
 
 ## Getting Started
 

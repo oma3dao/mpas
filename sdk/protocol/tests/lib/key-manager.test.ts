@@ -33,8 +33,10 @@ describe("KeyManager", () => {
   it("signs and verifies payloads round-trip", async () => {
     const keyManager = await KeyManager.fromFile(join(fixturesDir, "keys", "proposer.json"));
     const payload = Buffer.from("mpas bridge key manager test");
-    const jws = await keyManager.sign(payload);
+    const jws = await keyManager.signCompactJws(payload);
 
+    await expect(keyManager.verifyCompactJws(jws)).resolves.toBe(true);
+    await expect(keyManager.sign(payload)).resolves.toBe(jws);
     await expect(keyManager.verify(jws)).resolves.toBe(true);
 
     const rawSignature = await keyManager.signBytes(payload);
@@ -47,7 +49,7 @@ describe("KeyManager", () => {
     const keyManager = KeyManager.fromJwk(fixture.publicJwk);
 
     expect(keyManager.did).toBe(fixture.did);
-    await expect(keyManager.sign(Buffer.from("payload"))).rejects.toThrow("private key material");
+    await expect(keyManager.signCompactJws(Buffer.from("payload"))).rejects.toThrow("private key material");
     await expect(keyManager.signBytes(Buffer.from("payload"))).rejects.toThrow("private key material");
   });
 

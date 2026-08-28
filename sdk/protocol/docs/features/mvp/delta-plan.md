@@ -28,7 +28,7 @@
 ### Modified
 
 - **`CoordinationClient`** — rewrite to match the new coordination service API:
-  - `submitAction(pkg, authReqs)` → `POST /mpas/v1/coordination/action`
+  - `submitAction(pkg, authReqs)` → `POST /mpas/v1/coordination/workflow` (`/coordination/action` remains a temporary server-side alias)
   - `poll(did)` → `POST /mpas/v1/coordination/poll` — returns `{ approvalRequests, actionUpdates }`
   - `submitApproval(actionEnvelopeHash, approval)` → `POST /mpas/v1/coordination/approval` — returns `{ accepted: boolean }`
   - `cancelAction(actionId, did)` → `POST /mpas/v1/coordination/action-cancel`

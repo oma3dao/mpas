@@ -3,6 +3,7 @@
 import { pathToFileURL } from "node:url";
 import { startCoordinationDaemon } from "./daemon.js";
 import type { CoordinationAuthOptions } from "./coordination-api-server.js";
+import type { Did } from "../core/types.js";
 
 export {
   createCoordinationApiServer,
@@ -19,6 +20,9 @@ interface ParsedArgs {
   authAudiences?: string[];
   authClockSkewSeconds?: number;
   authSignatureLifetimeSeconds?: number;
+  designatedVerifierDid?: Did;
+  authorizedRecipientDids?: Did[];
+  notificationOrigin?: string;
 }
 
 export async function runCoordinationService(args = process.argv.slice(2)): Promise<void> {
@@ -27,6 +31,9 @@ export async function runCoordinationService(args = process.argv.slice(2)): Prom
     host: options.host,
     port: options.port,
     auth: coordinationAuthOptions(options),
+    designatedVerifierDid: options.designatedVerifierDid,
+    authorizedRecipientDids: options.authorizedRecipientDids,
+    notificationOrigin: options.notificationOrigin,
   });
   console.log(JSON.stringify({ status: "started", address: daemon.address }));
 
@@ -62,6 +69,12 @@ function parseArgs(args: string[]): ParsedArgs {
       options.authClockSkewSeconds = Number(args[++index]);
     } else if (arg === "--auth-signature-lifetime-seconds") {
       options.authSignatureLifetimeSeconds = Number(args[++index]);
+    } else if (arg === "--designated-verifier-did") {
+      options.designatedVerifierDid = args[++index] as Did;
+    } else if (arg === "--authorized-recipient-did") {
+      (options.authorizedRecipientDids ??= []).push(args[++index] as Did);
+    } else if (arg === "--notification-origin") {
+      options.notificationOrigin = args[++index];
     }
   }
   return options;

@@ -17,9 +17,16 @@ interface KeyFixtureFile {
   publicJwk?: JWK;
 }
 
+/**
+ * Manages an Ed25519 JWK and its deterministic did:jwk identity.
+ *
+ * A public-only manager can verify signatures. Signing operations require the
+ * private `d` parameter to be present in the configured JWK.
+ */
 export class KeyManager {
   private constructor(private readonly jwk: JWK) {}
 
+  /** Loads a JWK or MPAS key fixture and verifies any stored DID binding. */
   static async fromFile(path: string): Promise<KeyManager> {
     const parsed = JSON.parse(await readFile(path, "utf8")) as JWK | KeyFixtureFile;
     const jwk = selectJwk(parsed);
@@ -36,21 +43,25 @@ export class KeyManager {
     return manager;
   }
 
+  /** Creates a manager from an Ed25519 public or private JWK. */
   static fromJwk(jwk: JWK): KeyManager {
     validateEd25519Jwk(jwk);
     return new KeyManager({ ...jwk, kid: jwk.kid ?? didJwkToKid(deriveDidJwk(jwk)) });
   }
 
+  /** Deterministic did:jwk derived from the minimal public JWK. */
   get did(): Did {
     return deriveDidJwk(this.jwk);
   }
 
+  /** Public JWK with private key material removed. */
   get publicKey(): JWK {
     const { d: _privateKey, ...publicJwk } = this.jwk;
     return publicJwk;
   }
 
-  async sign(payload: Uint8Array): Promise<string> {
+  /** Signs bytes and returns a compact JWS carrying the signed payload. */
+  async signCompactJws(payload: Uint8Array): Promise<string> {
     if (typeof this.jwk.d !== "string" || this.jwk.d.length === 0) {
       throw new Error("Ed25519 private key material is required for signing.");
     }
@@ -69,7 +80,8 @@ export class KeyManager {
     return signEd25519(null, Buffer.from(payload), key);
   }
 
-  async verify(jws: string): Promise<boolean> {
+  /** Verifies a compact JWS with this manager's public key. */
+  async verifyCompactJws(jws: string): Promise<boolean> {
     try {
       const key = await importJWK(this.publicKey, "EdDSA");
       const { protectedHeader } = await compactVerify(jws, key);
@@ -77,6 +89,16 @@ export class KeyManager {
     } catch {
       return false;
     }
+  }
+
+  /** @deprecated Use {@link signCompactJws}. */
+  async sign(payload: Uint8Array): Promise<string> {
+    return this.signCompactJws(payload);
+  }
+
+  /** @deprecated Use {@link verifyCompactJws}. */
+  async verify(jws: string): Promise<boolean> {
+    return this.verifyCompactJws(jws);
   }
 
   /** Verifies a raw Ed25519 signature over the supplied bytes. */

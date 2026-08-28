@@ -2,7 +2,13 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { computeHash, verifyHash, type ActionPackage } from "../../src/index.js";
+import {
+  computeHash,
+  computeJsonHash,
+  verifyHash,
+  verifyJsonHash,
+  type ActionPackage,
+} from "../../src/index.js";
 
 const fixturesDir = fileURLToPath(new URL("../fixtures/", import.meta.url));
 
@@ -19,9 +25,15 @@ describe("hash utilities", () => {
     ]) {
       const actionPackage = await readJson<ActionPackage>(join(fixturesDir, "action-packages", file));
 
-      expect(computeHash(actionPackage.executionPayload)).toEqual(actionPackage.actionEnvelope.executionPayloadHash);
-      expect(verifyHash(actionPackage.executionPayload, actionPackage.actionEnvelope.executionPayloadHash)).toBe(true);
+      expect(computeJsonHash(actionPackage.executionPayload)).toEqual(actionPackage.actionEnvelope.executionPayloadHash);
+      expect(verifyJsonHash(actionPackage.executionPayload, actionPackage.actionEnvelope.executionPayloadHash)).toBe(true);
     }
+  });
+
+  it("preserves the deprecated hash aliases", () => {
+    const value = { test: true };
+    expect(computeHash(value)).toEqual(computeJsonHash(value));
+    expect(verifyHash(value, computeJsonHash(value))).toBe(true);
   });
 
   it("returns false for mismatched or unsupported hash bindings", () => {

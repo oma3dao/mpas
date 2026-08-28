@@ -2,21 +2,26 @@ import { createHash } from "node:crypto";
 import { canonicalize } from "json-canonicalize";
 import type { HashObject } from "../types/mpas.js";
 
-export function computeHash(obj: unknown): HashObject {
+/** Computes the MPAS SHA-256 hash of a JCS-canonicalized JSON value. */
+export function computeJsonHash(value: unknown): HashObject {
   return {
     alg: "sha-256",
-    value: createHash("sha256").update(canonicalize(obj)).digest("base64url"),
+    value: createHash("sha256").update(canonicalize(value)).digest("base64url"),
   };
 }
 
-/** Alias for computeHash — used by the verification layer. */
-export const computeJsonHash = computeHash;
-
-export function verifyHash(obj: unknown, expected: HashObject): boolean {
+/** Verifies an MPAS hash against a JCS-canonicalized JSON value. */
+export function verifyJsonHash(value: unknown, expected: HashObject): boolean {
   if (expected.alg !== "sha-256") {
     return false;
   }
 
-  const actual = computeHash(obj);
+  const actual = computeJsonHash(value);
   return actual.alg === expected.alg && actual.value === expected.value;
 }
+
+/** @deprecated Use {@link computeJsonHash}. */
+export const computeHash = computeJsonHash;
+
+/** @deprecated Use {@link verifyJsonHash}. */
+export const verifyHash = verifyJsonHash;

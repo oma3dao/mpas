@@ -1,10 +1,10 @@
 import Fastify, { type FastifyInstance, type FastifyReply } from "fastify";
 import type { JWK } from "jose";
-import { strictJsonParse, validateMcpPayloadStructure } from "@oma3/mpas";
+import { parseActionRequest, parseActionRequestEnvelope, strictJsonParse, validateMcpPayloadStructure } from "@oma3/mpas";
 import { buildAuthorizationRequirements } from "../core/auth-requirements-builder.js";
 import { checkProposerAuthorization, evaluatePolicy, type PolicyConfig } from "../core/policy-engine.js";
 import { validatePayloadAgainstPlugin } from "../core/plugin-loader.js";
-import { buildAndSignReceipt } from "../core/receipt-builder.js";
+import { buildAndSignExecutionReceipt } from "../core/receipt-builder.js";
 import type {
   ActionPackage,
   ActionResponseContext,
@@ -18,7 +18,7 @@ import {
   DEFAULT_MAX_ENVELOPE_VALIDITY_MS,
   computeJsonHash,
   exceedsMaxEnvelopeValidity,
-  isEnvelopeExpired,
+  isActionEnvelopeExpired,
   parseActionPackage,
   validateActionEnvelope,
   verifyActionPackage,
@@ -86,7 +86,7 @@ export function createAdapterApiServer(options: HttpEndpointOptions): FastifyIns
 
   app.post("/mpas/v1/action", async (request, reply) => {
     // The submission body is an ActionRequest wrapping the Action Package.
-    const actionPackage = unwrapActionPackage(request.body);
+    const actionPackage = unwrapActionPackage(request.body, options.adapterDid);
 
     // Cannot parse far enough to compute actionEnvelopeHash -> 400 MpasHttpError.
     const parseResult = parseActionPackage(actionPackage);
@@ -135,7 +135,7 @@ export function createAdapterApiServer(options: HttpEndpointOptions): FastifyIns
     }
 
     // Stateless deterministic rejections (record nothing, repeatable verdict).
-    if (isEnvelopeExpired(pkg.actionEnvelope)) {
+    if (isActionEnvelopeExpired(pkg.actionEnvelope)) {
       trace.emit("verification_step", { actionId, step: "expiry_check", passed: false });
       return rejection(pkg, options, envelopeHash, "expired", "EXPIRED_ACTION_ENVELOPE", "Action Envelope is expired.");
     }
@@ -261,7 +261,11 @@ export function createAdapterApiServer(options: HttpEndpointOptions): FastifyIns
         return actionResponse(options, {
           result: "additionalApprovalsRequired",
           actionEnvelopeHash: envelopeHash,
-          authorizationRequirements: buildAuthorizationRequirements(pkg.actionEnvelope, policyResult.unsatisfiedRules, options.adapterDid),
+          authorizationRequirements: buildAuthorizationRequirements({
+            actionEnvelope: pkg.actionEnvelope,
+            unsatisfiedRules: policyResult.unsatisfiedRules,
+            verifierDid: options.adapterDid,
+          }),
         });
       }
       trace.emit("verification_step", { actionId, step: "policy_evaluation", passed: true, policyStatus: policyResult.status });
@@ -559,21 +563,34 @@ function mpasHttpError(reply: FastifyReply, status: number, code: string, messag
   });
 }
 
-function unwrapActionPackage(body: unknown): unknown {
-  if (isRecord(body) && body.type === "ActionRequest" && "actionPackage" in body) {
-    return body.actionPackage;
+function unwrapActionPackage(body: unknown, adapterDid: Did): unknown {
+  try {
+    if (isRecord(body) && body.type === "DeliveryEnvelope") {
+      const envelope = parseActionRequestEnvelope(body);
+      if (!envelope.recipients.includes(adapterDid)) {
+        throw new Error("This Verifier DID is not an envelope recipient.");
+      }
+      if (envelope.sender !== envelope.payload.actionPackage.actionEnvelope.proposer.did) {
+        throw new Error("DeliveryEnvelope.sender does not match ActionEnvelope.proposer.did.");
+      }
+      return envelope.payload.actionPackage;
+    }
+    return parseActionRequest(body).actionPackage;
+  } catch (error) {
+    const wrapped = error instanceof Error ? error : new Error(String(error));
+    (wrapped as Error & { statusCode?: number }).statusCode = 400;
+    throw wrapped;
   }
-  return body;
 }
 
 async function receiptFor(actionPackage: ActionPackage, options: HttpEndpointOptions, result: ReceiptResult) {
-  return buildAndSignReceipt(
-    actionPackage.actionEnvelope,
-    actionPackage.executionPayload,
-    { result },
-    options.adapterDid,
-    options.adapterSigningKey,
-  );
+  return buildAndSignExecutionReceipt({
+    actionEnvelope: actionPackage.actionEnvelope,
+    executionPayload: actionPackage.executionPayload,
+    result: { result },
+    verifierDid: options.adapterDid,
+    signingKey: options.adapterSigningKey,
+  });
 }
 
 function operationName(actionPackage: ActionPackage): string {

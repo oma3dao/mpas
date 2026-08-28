@@ -1,9 +1,22 @@
-import type { ActionPackage, AdapterResponse, MpasHttpError } from "../types/mpas.js";
+import type {
+  ActionPackage,
+  ActionRequest,
+  AdapterResponse,
+  DeliveryEnvelope,
+  MpasHttpError,
+} from "../types/mpas.js";
+import {
+  ActionEndpointClient,
+  ActionEndpointClientError,
+  buildActionRequest,
+  type ActionEndpointClientConfig,
+} from "./action-endpoint-client.js";
 
-export interface AdapterClientConfig {
-  url: string;
-  timeoutMs?: number;
-}
+/** Configuration for a Credential Adapter client. */
+export type CredentialAdapterClientConfig = ActionEndpointClientConfig;
+
+/** @deprecated Use {@link CredentialAdapterClientConfig}. */
+export type AdapterClientConfig = CredentialAdapterClientConfig;
 
 export class AdapterUnavailableError extends Error {
   readonly code = "ADAPTER_UNAVAILABLE";
@@ -35,26 +48,56 @@ export class AdapterRequestError extends Error {
   }
 }
 
-export class AdapterClient {
+/**
+ * Client of a Credential Adapter endpoint.
+ *
+ * Common Action submission delegates to {@link ActionEndpointClient}; this class
+ * additionally exposes adapter-specific operations such as the optional health check.
+ */
+export class CredentialAdapterClient {
   private readonly url: string;
   private readonly timeoutMs: number;
+  private readonly actionEndpoint: ActionEndpointClient;
 
-  constructor(config: AdapterClientConfig) {
+  constructor(config: CredentialAdapterClientConfig) {
     this.url = config.url.replace(/\/+$/, "");
     this.timeoutMs = config.timeoutMs ?? 30_000;
+    this.actionEndpoint = new ActionEndpointClient(config);
   }
 
+  /** Submits a bare or enveloped Action request through the common Action endpoint. */
+  async submitActionRequest(
+    request: ActionRequest | DeliveryEnvelope<ActionRequest>,
+  ): Promise<AdapterResponse> {
+    return this.actionEndpoint.submitActionRequest(request);
+  }
+
+  /**
+   * @deprecated Build an Action request with {@link buildActionRequest} and call
+   * {@link submitActionRequest}.
+   */
   async submit(pkg: ActionPackage): Promise<AdapterResponse> {
-    return this.request<AdapterResponse>("/mpas/v1/action", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/mpas+json",
-        Accept: "application/mpas+json",
-      },
-      body: JSON.stringify({ version: "1", type: "ActionRequest", actionPackage: pkg }),
-    });
+    try {
+      return await this.submitActionRequest(buildActionRequest({ actionPackage: pkg }));
+    } catch (error) {
+      if (
+        error instanceof ActionEndpointClientError &&
+        (error.message.includes("valid ActionResponse") || error.message.includes("valid JSON"))
+      ) {
+        throw new AdapterResponseError(error.message, { cause: error });
+      }
+      if (error instanceof ActionEndpointClientError && error.status !== undefined) {
+        throw new AdapterRequestError(
+          error.protocolCode ?? "server_error",
+          error.message,
+          error.status,
+        );
+      }
+      throw new AdapterUnavailableError(`Credential Adapter is unavailable at ${this.url}.`, { cause: error });
+    }
   }
 
+  /** Checks the adapter-specific, non-protocol health endpoint. */
   async healthCheck(): Promise<{ status: string }> {
     return this.request<{ status: string }>("/mpas/v1/health", {
       method: "GET",
@@ -98,3 +141,6 @@ export class AdapterClient {
     }
   }
 }
+
+/** @deprecated Use {@link CredentialAdapterClient}. */
+export class AdapterClient extends CredentialAdapterClient {}
