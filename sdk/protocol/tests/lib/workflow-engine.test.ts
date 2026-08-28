@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import type { ActionResponse, CoordinationActionUpdate } from "../../src/index.js";
+import {
+  CoordinationResponseError,
+  CoordinationUnavailableError,
+  MpasAuthError,
+  type ActionResponse,
+  type CoordinationActionUpdate,
+} from "../../src/index.js";
 import { MemoryWorkflowStore, type WorkflowStore } from "../../src/lib/workflow-store.js";
 import {
   BridgeWorkflowEngine,
@@ -165,6 +171,75 @@ describe("propose", () => {
 
     expect(outcome.kind).toBe("deferred");
     expect(store.getWorkflow(ACTION_ID)?.state).toBe("awaitingVerifierResult");
+  });
+
+  it("stops retrying when coordination rejects the proposer", async () => {
+    const adapter = fakeAdapter(response("additionalApprovalsRequired"));
+    const coordination = fakeCoordination();
+    coordination.submitAction = async (pkg: unknown) => {
+      coordination.submitted.push(pkg);
+      throw new MpasAuthError(403, "permission_denied", "Coordination request authorization failed.");
+    };
+    const { engine, store } = makeEngine({ adapter, coordination });
+
+    const outcome = await engine.propose(proposalInput());
+
+    expect(outcome.kind).toBe("deferred");
+    expect(store.getWorkflow(ACTION_ID)).toMatchObject({
+      state: "unresolvable",
+      resolution: {
+        kind: "unresolvable",
+        errorCode: "COORDINATION_AUTHORIZATION_FAILED",
+      },
+    });
+    expect(store.getWorkflow(ACTION_ID)?.coordinationRef).toBeUndefined();
+    await engine.pollOnce();
+    expect(adapter.calls).toHaveLength(1);
+    expect(coordination.submitted).toHaveLength(1);
+  });
+
+  it("treats a non-retryable coordination request rejection as terminal", async () => {
+    const adapter = fakeAdapter(response("additionalApprovalsRequired"));
+    const coordination = fakeCoordination();
+    coordination.submitAction = async () => {
+      throw new CoordinationResponseError("Coordination Service rejected the request with HTTP 400.");
+    };
+    const { engine, store } = makeEngine({ adapter, coordination });
+
+    await engine.propose(proposalInput());
+
+    expect(store.getWorkflow(ACTION_ID)?.resolution).toMatchObject({
+      kind: "unresolvable",
+      errorCode: "COORDINATION_REQUEST_REJECTED",
+    });
+  });
+
+  it("retries a transient coordination outage without resubmitting to the Verifier", async () => {
+    const adapter = fakeAdapter(response("additionalApprovalsRequired"));
+    const coordination = fakeCoordination();
+    let attempts = 0;
+    coordination.submitAction = async (pkg: unknown) => {
+      coordination.submitted.push(pkg);
+      attempts += 1;
+      if (attempts === 1) {
+        throw new CoordinationUnavailableError("Coordination Service returned HTTP 503.");
+      }
+      return {
+        version: "1",
+        type: "CoordinationActionResponse",
+        actionRef: actionRef(),
+        state: "awaitingApprovals",
+      };
+    };
+    const { engine, store } = makeEngine({ adapter, coordination });
+
+    await engine.propose(proposalInput());
+    expect(store.getWorkflow(ACTION_ID)?.state).toBe("created");
+    await engine.pollOnce();
+
+    expect(store.getWorkflow(ACTION_ID)?.state).toBe("awaitingApprovals");
+    expect(adapter.calls).toHaveLength(1);
+    expect(coordination.submitted).toHaveLength(2);
   });
 });
 

@@ -156,13 +156,21 @@ export class CoordinationClient {
       if (!response.ok) {
         if (response.status === 401 || response.status === 403) {
           const errorBody = parseMpasHttpError(text);
+          const authCode =
+            errorBody?.error.code ?? (response.status === 401 ? "signature_invalid" : "permission_denied");
+          const failure = response.status === 401 ? "authentication failed" : "authorization failed";
           throw new MpasAuthError(
             response.status,
-            errorBody?.error.code ?? (response.status === 401 ? "signature_invalid" : "permission_denied"),
-            `Coordination authentication failed with HTTP ${response.status}.`,
+            authCode,
+            `Coordination request ${failure} with HTTP ${response.status} (${authCode}).`,
           );
         }
-        if (response.status >= 500) {
+        if (
+          response.status === 408 ||
+          response.status === 425 ||
+          response.status === 429 ||
+          response.status >= 500
+        ) {
           throw new CoordinationUnavailableError(`Coordination Service returned HTTP ${response.status}.`);
         }
         throw new CoordinationResponseError(`Coordination Service rejected the request with HTTP ${response.status}.`);

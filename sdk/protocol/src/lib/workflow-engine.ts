@@ -7,6 +7,7 @@ import type {
   CoordinationPollResponse,
   Did,
 } from "../types/mpas.js";
+import { CoordinationResponseError, MpasAuthError } from "./coordination-client.js";
 import {
   TERMINAL_WORKFLOW_STATES,
   type CreateWorkflowInput,
@@ -204,6 +205,11 @@ export class BridgeWorkflowEngine {
       return { kind: "deferred", record: current ?? record };
     }
 
+    const priorResponse = asActionResponse(current.lastActionResponse);
+    if (priorResponse?.result === "additionalApprovalsRequired") {
+      return this.submitToCoordination(current, priorResponse.authorizationRequirements);
+    }
+
     let response: ActionResponse;
     try {
       response = await this.adapter.submit(record.actionPackage);
@@ -222,28 +228,7 @@ export class BridgeWorkflowEngine {
         if (response.authorizationRequirements !== undefined) {
           this.store.saveAuthorizationRequirements(record.actionId, response.authorizationRequirements);
         }
-        try {
-          const coordination = await this.coordination.submitAction(
-            record.actionPackage,
-            response.authorizationRequirements,
-          );
-          this.store.saveCoordinationReference(record.actionId, coordination.actionRef);
-          if (this.mustGet(record.actionId).state === "cancelled") {
-            try {
-              await this.coordination.cancelAction({ value: record.actionId }, this.proposerDid);
-            } catch {
-              // Cancellation won while Coordination submission was in flight.
-              // The local terminal state still prevents any later execution.
-            }
-            return { kind: "deferred", record: this.mustGet(record.actionId) };
-          }
-          this.store.compareAndSetState(record.actionId, "created", "awaitingApprovals");
-        } catch (error) {
-          // Coordination unavailable: stay `created`; reconcile retries the
-          // whole (stateless) initial submission.
-          this.store.saveAdapterAttempt(record.actionId, attempt("coordination", "unreachable", error));
-        }
-        return { kind: "deferred", record: this.mustGet(record.actionId) };
+        return this.submitToCoordination(this.mustGet(record.actionId), response.authorizationRequirements);
       }
       case "pending":
         this.store.saveLastActionResponse(record.actionId, response);
@@ -252,6 +237,37 @@ export class BridgeWorkflowEngine {
       default:
         return this.settle(record.actionId, response);
     }
+  }
+
+  private async submitToCoordination(
+    record: WorkflowRecord,
+    authorizationRequirements: unknown,
+  ): Promise<ProposeResult> {
+    try {
+      const coordination = await this.coordination.submitAction(record.actionPackage, authorizationRequirements);
+      this.store.saveCoordinationReference(record.actionId, coordination.actionRef);
+      if (this.mustGet(record.actionId).state === "cancelled") {
+        try {
+          await this.coordination.cancelAction({ value: record.actionId }, this.proposerDid);
+        } catch {
+          // Cancellation won while Coordination submission was in flight.
+          // The local terminal state still prevents any later execution.
+        }
+        return { kind: "deferred", record: this.mustGet(record.actionId) };
+      }
+      this.store.compareAndSetState(record.actionId, "created", "awaitingApprovals");
+    } catch (error) {
+      const permanent = permanentCoordinationFailure(error);
+      this.store.saveAdapterAttempt(
+        record.actionId,
+        attempt("coordination", permanent ? "rejected" : "unreachable", error),
+      );
+      if (permanent) {
+        const resolution = coordinationFailureResolution(error);
+        this.resolveUnresolvable(record.actionId, resolution.errorCode, resolution.errorMessage);
+      }
+    }
+    return { kind: "deferred", record: this.mustGet(record.actionId) };
   }
 
   private async applyUpdate(update: CoordinationActionUpdate): Promise<void> {
@@ -436,6 +452,32 @@ function proposerDidOf(record: WorkflowRecord): string | undefined {
   if (typeof proposer !== "object" || proposer === null || Array.isArray(proposer)) return undefined;
   const did = (proposer as Record<string, unknown>).did;
   return typeof did === "string" ? did : undefined;
+}
+
+function asActionResponse(value: unknown): ActionResponse | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+  const candidate = value as Partial<ActionResponse>;
+  return candidate.type === "ActionResponse" && typeof candidate.result === "string"
+    ? (candidate as ActionResponse)
+    : undefined;
+}
+
+function permanentCoordinationFailure(error: unknown): boolean {
+  return error instanceof MpasAuthError || error instanceof CoordinationResponseError;
+}
+
+function coordinationFailureResolution(error: unknown): { errorCode: string; errorMessage: string } {
+  if (error instanceof MpasAuthError) {
+    return {
+      errorCode:
+        error.status === 401 ? "COORDINATION_AUTHENTICATION_FAILED" : "COORDINATION_AUTHORIZATION_FAILED",
+      errorMessage: error.message,
+    };
+  }
+  return {
+    errorCode: "COORDINATION_REQUEST_REJECTED",
+    errorMessage: error instanceof Error ? error.message : "The Coordination Service rejected the workflow.",
+  };
 }
 
 function attempt(stage: string, outcome: string, error: unknown): unknown {
