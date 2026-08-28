@@ -79,4 +79,21 @@ describe("verifyApprovalSignature", () => {
 
     await expect(verifyApprovalSignature(approval, key.publicJwk)).resolves.toBe(false);
   });
+
+  it("rejects non-EdDSA algorithms such as HS256", async () => {
+    const key = await readJson<SigningKeyFixture>(join(fixturesDir, "test-keys", "proposer.json"));
+    const approval: Approval = {
+      version: "1",
+      type: "Approval",
+      actionEnvelopeHash: { alg: "sha-256", value: "test" },
+      decision: "approve",
+      signature: {
+        format: "jws",
+        value: "eyJhbGciOiJIUzI1NiJ9.eyJ0eXBlIjoiQXBwcm92YWxQYXlsb2FkIn0.sig",
+      },
+      createdAt: "2026-06-05T18:02:00.000Z",
+    };
+
+    await expect(verifyApprovalSignature(approval, key.publicJwk)).resolves.toBe(false);
+  });
 });

@@ -55,6 +55,7 @@ describe("KeyManager", () => {
 
   it("rejects unsupported JWKs and mismatched configured DIDs", async () => {
     expect(() => KeyManager.fromJwk({ kty: "EC", crv: "P-256", x: "x", y: "y" })).toThrow('kty "OKP"');
+    expect(() => KeyManager.fromJwk({ kty: "OKP", crv: "X25519", x: "x" })).toThrow('crv "Ed25519"');
 
     const fixture = await readJson<KeyFixture>(join(fixturesDir, "keys", "proposer.json"));
     const mismatched = { did: "did:jwk:bWlzbWF0Y2g", privateJwk: fixture.privateJwk };
