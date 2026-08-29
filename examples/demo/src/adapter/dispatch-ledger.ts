@@ -1,6 +1,6 @@
-import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, writeSync } from "node:fs";
+import { chmodSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, writeSync } from "node:fs";
 import { dirname } from "node:path";
-import type { ActionId } from "../core/types.js";
+import type { ActionId, ActionResponse } from "../core/types.js";
 
 /**
  * Dispatch Ledger (MPAS Core Action Lifecycle).
@@ -13,7 +13,8 @@ import type { ActionId } from "../core/types.js";
  *
  * A ledger entry is written only at the moment an action is authorized for
  * dispatch — immediately before transmission (write-ahead). Entries are
- * immutable: the sole permitted transition is `executing -> resolved`.
+ * immutable: the sole state transition is `executing -> resolved`. An exact
+ * terminal response may be attached once so an internal relay can recover it.
  */
 
 /** Receipt results producible by a dispatch (the only resolutions the ledger records). */
@@ -31,6 +32,8 @@ export type LedgerEvent =
       event: "resolved";
       actionId: string;
       resolution: DispatchResolution;
+      /** Exact terminal response retained for internal delivery recovery. */
+      response?: ActionResponse;
       at: string;
     };
 
@@ -43,7 +46,13 @@ interface LedgerEntry {
   envelopeHash: string;
   status: "executing" | "resolved";
   resolution?: DispatchResolution;
+  response?: ActionResponse;
   expiresAt: string;
+}
+
+export interface DispatchRecovery {
+  resolution: DispatchResolution;
+  response?: ActionResponse;
 }
 
 /**
@@ -63,8 +72,9 @@ export class FileDispatchJournal implements DispatchJournal {
 
   append(event: LedgerEvent): void {
     const line = `${JSON.stringify(event)}\n`;
-    const fd = openSync(this.path, "a");
+    const fd = openSync(this.path, "a", 0o600);
     try {
+      chmodSync(this.path, 0o600);
       writeSync(fd, line);
       // Write-ahead durability: the executing record MUST survive a crash before
       // transmission. Flushing resolved events too keeps recovery deterministic.
@@ -171,9 +181,28 @@ export class DispatchLedger {
   }
 
   /** Immutable transition executing -> resolved. Never rolls back. */
-  resolve(actionId: ActionId, resolution: DispatchResolution): void {
+  resolve(actionId: ActionId, resolution: DispatchResolution, response?: ActionResponse): void {
     const entry = this.entries.get(key(actionId));
-    if (!entry || entry.status === "resolved") {
+    if (!entry) {
+      return;
+    }
+    if (
+      response &&
+      (response.result !== resolution || response.actionEnvelopeHash?.value !== entry.envelopeHash)
+    ) {
+      throw new Error("Terminal ActionResponse does not match the dispatch ledger resolution.");
+    }
+
+    if (entry.status === "resolved") {
+      if (entry.resolution !== resolution || entry.response || !response) return;
+      this.journal.append({
+        event: "resolved",
+        actionId: key(actionId),
+        resolution,
+        response,
+        at: new Date(this.now()).toISOString(),
+      });
+      entry.response = response;
       return;
     }
 
@@ -181,10 +210,27 @@ export class DispatchLedger {
       event: "resolved",
       actionId: key(actionId),
       resolution,
+      ...(response ? { response } : {}),
       at: new Date(this.now()).toISOString(),
     });
     entry.status = "resolved";
     entry.resolution = resolution;
+    entry.response = response;
+  }
+
+  /**
+   * Returns internally recoverable terminal material for the exact Action
+   * Envelope. This does not alter the public resolved-replay rejection rule.
+   */
+  recoveryFor(actionId: ActionId, envelopeHash: string): DispatchRecovery | undefined {
+    const entry = this.entries.get(key(actionId));
+    if (!entry || entry.status !== "resolved" || entry.envelopeHash !== envelopeHash || !entry.resolution) {
+      return undefined;
+    }
+    return {
+      resolution: entry.resolution,
+      ...(entry.response ? { response: entry.response } : {}),
+    };
   }
 
   size(): number {
@@ -206,6 +252,7 @@ export class DispatchLedger {
       if (entry) {
         entry.status = "resolved";
         entry.resolution = event.resolution;
+        entry.response = event.response;
       }
     }
   }

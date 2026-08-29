@@ -8,8 +8,13 @@ import { compactVerify, importJWK, type JWK } from "jose";
 import { buildDeliveryEnvelope, type ActionPackage } from "@oma3/mpas";
 import { loadDeploymentConfigs } from "../../src/adapter/config-loader.js";
 import { FileCredentialProvider } from "../../src/adapter/credential-provider.js";
-import { createAdapterApiServer } from "../../src/adapter/adapter-api-server.js";
+import {
+  buildIndeterminateRecoveryResponse,
+  createAdapterApiServer,
+} from "../../src/adapter/adapter-api-server.js";
+import { DispatchLedger } from "../../src/adapter/dispatch-ledger.js";
 import type { Did, ExecutionReceipt, ReceiptPayload } from "../../src/core/types.js";
+import { computeJsonHash } from "../../src/core/verification.js";
 
 const fixturesDir = fileURLToPath(new URL("../fixtures/", import.meta.url));
 const slowFixtureServer = fileURLToPath(new URL("../fixtures/adapter/slow-mcp-server.mjs", import.meta.url));
@@ -39,7 +44,7 @@ async function credentialDir() {
   return dir;
 }
 
-async function makeApp(configDir?: string) {
+async function makeApp(configDir?: string, ledger?: DispatchLedger) {
   // The shared configs dir holds the mirror and live-demo applications. They
   // have distinct applicationDids, so both route cleanly — no shadowing.
   const effectiveConfigDir = configDir ?? join(fixturesDir, "configs");
@@ -58,6 +63,7 @@ async function makeApp(configDir?: string) {
     // Test fixtures are signed with a far-future expiresAt; widen the window so the
     // max-validity guard does not reject them.
     maxEnvelopeValidityMs: Number.MAX_SAFE_INTEGER,
+    ledger,
   });
   apps.push(app);
   return app;
@@ -161,9 +167,18 @@ describe("HTTP endpoint", () => {
   });
 
   it("rejects a second submission of a resolved actionId as replay", async () => {
-    const app = await makeApp(await makeAutoApproveConfigDir());
+    const ledger = new DispatchLedger();
+    const app = await makeApp(await makeAutoApproveConfigDir(), ledger);
     const first = await submitFixture(app, "valid-no-approval-required.json");
     expect(first.json()).toMatchObject({ result: "executed" });
+
+    const actionPackage = await readJson<ActionPackage>(
+      join(fixturesDir, "core", "valid-no-approval-required.json"),
+    );
+    expect(ledger.recoveryFor(
+      actionPackage.actionEnvelope.actionId,
+      computeJsonHash(actionPackage.actionEnvelope).value,
+    )?.response).toEqual(first.json());
 
     const second = await submitFixture(app, "valid-no-approval-required.json");
     expect(second.statusCode).toBe(200);
@@ -212,6 +227,29 @@ describe("HTTP endpoint", () => {
       message: "The upstream MCP server did not respond before the dispatch timeout.",
     });
     expect((await verifyReceiptPayload(body.executionReceipt)).result).toBe("indeterminate");
+  });
+
+  it("builds a signed indeterminate response for a dispatch interrupted by restart", async () => {
+    const actionPackage = await readJson<ActionPackage>(
+      join(fixturesDir, "core", "valid-no-approval-required.json"),
+    );
+    const adapter = await readJson<KeyFixture>(join(fixturesDir, "test-keys", "adapter.json"));
+
+    const response = await buildIndeterminateRecoveryResponse(actionPackage, {
+      adapterDid: adapter.did,
+      adapterSigningKey: adapter.privateJwk,
+    });
+
+    expect(response).toMatchObject({
+      result: "indeterminate",
+      verifier: { did: adapter.did },
+      error: { code: "DISPATCH_RECOVERY_INDETERMINATE" },
+      executionReceipt: { type: "ExecutionReceipt" },
+    });
+    expect(await verifyReceiptPayload(response.executionReceipt!)).toMatchObject({
+      result: "indeterminate",
+      actionEnvelopeHash: computeJsonHash(actionPackage.actionEnvelope),
+    });
   });
 
   it("resolves a definitive target error as failed", async () => {

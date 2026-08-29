@@ -74,7 +74,7 @@ mkdir -p "$MPAS_HOME/config" \
 | `plugins/` | Application plugin files referenced by deployment configs |
 | `credentials/` | Credential files (file-based tokens). `chmod 600` every file here. |
 | `keys/` | Adapter signing key (`adapter-key.json`). `chmod 600`. |
-| `journal/` | Dispatch ledger (`dispatch-ledger.jsonl`) — append-only audit log |
+| `journal/` | Dispatch ledger (`dispatch-ledger.jsonl`) — private append-only lifecycle and terminal-response log |
 | `mcp-server-configs/` | Bridge configs (proposer) and signer-server configs (maintainer) |
 | `workflows/` | Persistent workflow state databases for proposer bridges |
 
@@ -346,7 +346,7 @@ Where `<config-name>` is the filename without the `.json` extension (e.g.
 
 Fix any errors before starting the daemon.
 
-### Start the daemon
+### Start the combined local daemon
 
 In a dedicated terminal:
 
@@ -382,6 +382,37 @@ to proceed. If the OMATrust API is unreachable you will see a warning — this
 means provenance evidence could not be loaded, not that the content hash
 failed. Review the plugin carefully before answering `y`.
 
+### Receive relayed Actions from a hosted Coordination Service
+
+Add the hosted service URL when this Credential Adapter acts as its Verifier:
+
+```sh
+node dist/cli/index.js adapter start \
+  --config-dir "$MPAS_HOME/config" \
+  --credential-dir "$MPAS_HOME/credentials" \
+  --adapter-key "$MPAS_HOME/keys/adapter-key.json" \
+  --verifier-coordination-url https://api.signerset.com
+```
+
+The adapter uses its adapter key for RFC 9421 authentication. The WebSocket is notification-only: the adapter polls once when it connects, polls after each notification, and performs a 30-second recovery poll if no notification arrives. It processes addressed `DeliveryEnvelope<ActionRequest>` messages through the same Verifier path as direct submissions, then returns `DeliveryEnvelope<ActionResponse>` to the Proposer and any eligible Maintainers named by authenticated Authorization Requirements.
+
+`adapter start` runs only the Credential Adapter. It does not bind the local
+Coordination Service port. Use `coordination start` for that service alone or
+`daemon start` when a local deployment intentionally needs both processes.
+
+The durable cursor and cached response envelopes default to
+`~/.mpas/journal/verifier-coordination.json`. Override that path with
+`--verifier-coordination-state`; override the recovery interval with
+`--verifier-poll-interval-ms`. The corresponding environment variables are
+`MPAS_VERIFIER_COORDINATION_URL`, `MPAS_VERIFIER_COORDINATION_STATE`, and
+`MPAS_VERIFIER_POLL_INTERVAL_MS`.
+
+Malformed envelopes and payload types other than `ActionRequest` fail closed.
+The adapter leaves the cursor on the invalid delivery, stops its recovery timer,
+and logs a `fatal_error`; an operator must remove or quarantine that delivery at
+the Coordination Service before restarting. This prevents silently discarding a
+future message type that the installed Verifier does not understand.
+
 ---
 
 ## 8. OAuth command reference
@@ -391,8 +422,8 @@ uses OAuth (credential binding `provider: "oauth"`). Skip this section for
 file-based credentials.
 
 ```sh
-mpas daemon start
-mpas daemon status
+mpas adapter start
+mpas adapter status
 
 mpas oauth login  --application-did <did>
 mpas oauth status --application-did <did>

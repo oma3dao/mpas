@@ -362,10 +362,11 @@ Default ports:
 Useful commands:
 
 ```sh
-mpas daemon start
+mpas adapter start
 mpas coordination start --port 7545 \
   --designated-verifier-did did:jwk:...verifier... \
   --notification-origin http://127.0.0.1:7545
+mpas daemon start # combined Adapter + local Coordination Service
 npm run test:e2e:mcp-bridge
 ```
 
@@ -382,6 +383,23 @@ Coordination endpoints:
 - `POST /mpas/v1/coordination/session` and `GET /mpas/v1/coordination/ws` — notification-only WebSocket
 
 Repeat `--authorized-recipient-did` to permit informational recipients in addition to the configured Verifier. WebSocket notifications contain no work payload; clients retrieve all work through the signed coordination poll.
+
+### Run the Credential Adapter as a hosted Verifier
+
+Set the hosted Coordination Service URL when this Credential Adapter should receive relayed Actions:
+
+```sh
+mpas adapter start \
+  --verifier-coordination-url https://api.signerset.com
+```
+
+`adapter start` does not bind a local Coordination Service port. The combined `daemon start` command is reserved for local deployments that intentionally run both services and rejects hosted-Verifier options.
+
+The adapter authenticates as its configured Verifier DID, opens the notification WebSocket, and performs an authenticated delivery poll on connection and after every work-available notification. It also polls every 30 seconds as recovery for a lost notification. Cursor and response-retry state are stored in `~/.mpas/journal/verifier-coordination.json` by default. That cache preserves exact response bytes across delivery retries; the dispatch ledger independently prevents Action re-execution.
+
+The Verifier fails closed if a delivery is malformed or its payload is not an `ActionRequest`. It does not advance the affected cursor, stops background polling, and emits a `fatal_error` event. Restarting alone will encounter the same delivery; the Coordination Service operator must remove or quarantine the invalid delivery before restarting the adapter.
+
+Equivalent environment variables are `MPAS_VERIFIER_COORDINATION_URL`, `MPAS_VERIFIER_COORDINATION_STATE`, and `MPAS_VERIFIER_POLL_INTERVAL_MS`. The matching command-line options are `--verifier-coordination-url`, `--verifier-coordination-state`, and `--verifier-poll-interval-ms`.
 
 ## Getting Started
 
