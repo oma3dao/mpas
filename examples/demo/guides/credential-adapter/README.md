@@ -12,8 +12,8 @@ the design authority; this guide explains how to operate the reference demo.
 ## Commands
 
 ```sh
-mpas daemon start
-mpas daemon status
+mpas adapter start
+mpas adapter status
 
 mpas oauth login  --application-did <did>
 mpas oauth status --application-did <did>

@@ -58,6 +58,9 @@ interface ParsedOptions {
   coordinationAuthAudiences?: string[];
   coordinationAuthClockSkewSeconds?: number;
   coordinationAuthSignatureLifetimeSeconds?: number;
+  verifierCoordinationUrl?: string;
+  verifierCoordinationStatePath?: string;
+  verifierPollIntervalMs?: number;
   designatedVerifierDid?: Did;
   authorizedRecipientDids?: Did[];
   notificationOrigin?: string;
@@ -97,7 +100,38 @@ export async function runCli(
   const [domain, command, subject] = positionals;
 
   try {
+    if (domain === "adapter" && command === "start") {
+      const adapter = await startDaemon({
+        configDir: options.configDir,
+        credentialDir: options.credentialDir,
+        adapterKeyPath: options.adapterKeyPath,
+        journalPath: options.journalPath,
+        tracePath: options.tracePath,
+        host: options.host,
+        port: options.port,
+        verifierCoordinationUrl: options.verifierCoordinationUrl,
+        verifierCoordinationStatePath: options.verifierCoordinationStatePath,
+        verifierPollIntervalMs: options.verifierPollIntervalMs,
+      });
+      io.stdout.write(
+        `${JSON.stringify({
+          status: "started",
+          address: adapter.address,
+          loadedConfigs: adapter.loadedConfigs.length,
+          ...(options.verifierCoordinationUrl
+            ? { verifierCoordinationUrl: options.verifierCoordinationUrl }
+            : {}),
+        })}\n`,
+      );
+      return { exitCode: 0 };
+    }
+
     if (domain === "daemon" && command === "start") {
+      if (options.verifierCoordinationUrl) {
+        throw new Error(
+          "Hosted Verifier mode uses `mpas adapter start --verifier-coordination-url <url>`; `mpas daemon start` is the combined local Adapter and Coordination Service command.",
+        );
+      }
       const daemon = await startDaemon({
         configDir: options.configDir,
         credentialDir: options.credentialDir,
@@ -146,7 +180,7 @@ export async function runCli(
       return { exitCode: 0 };
     }
 
-    if (domain === "daemon" && command === "status") {
+    if ((domain === "adapter" || domain === "daemon") && command === "status") {
       const status = await daemonStatus({
         configDir: options.configDir,
         host: options.host,
@@ -683,6 +717,11 @@ function parseArgs(args: string[]): { positionals: string[]; options: ParsedOpti
     adapterKeyPath: process.env.MPAS_ADAPTER_KEY,
     journalPath: process.env.MPAS_JOURNAL_PATH,
     tracePath: process.env.MPAS_TRACE_PATH,
+    verifierCoordinationUrl: process.env.MPAS_VERIFIER_COORDINATION_URL,
+    verifierCoordinationStatePath: process.env.MPAS_VERIFIER_COORDINATION_STATE,
+    ...(process.env.MPAS_VERIFIER_POLL_INTERVAL_MS
+      ? { verifierPollIntervalMs: Number(process.env.MPAS_VERIFIER_POLL_INTERVAL_MS) }
+      : {}),
   };
 
   for (let index = 0; index < args.length; index += 1) {
@@ -707,6 +746,15 @@ function parseArgs(args: string[]): { positionals: string[]; options: ParsedOpti
       options.port = Number(args[++index]);
     } else if (arg === "--coordination-port") {
       options.coordinationPort = Number(args[++index]);
+    } else if (arg === "--verifier-coordination-url") {
+      options.verifierCoordinationUrl = requiredOptionValue(args, index, arg);
+      index += 1;
+    } else if (arg === "--verifier-coordination-state") {
+      options.verifierCoordinationStatePath = requiredOptionValue(args, index, arg);
+      index += 1;
+    } else if (arg === "--verifier-poll-interval-ms") {
+      options.verifierPollIntervalMs = Number(requiredOptionValue(args, index, arg));
+      index += 1;
     } else if (arg === "--auth-enforcement") {
       options.coordinationAuthEnforcement = true;
     } else if (arg === "--auth-audience") {
@@ -756,10 +804,13 @@ function requiredOptionValue(args: string[], index: number, option: string): str
 function usage(): string {
   const coordinationAuthFlags = "[--auth-enforcement] [--auth-audience <origin>] [--auth-clock-skew-seconds <seconds>] [--auth-signature-lifetime-seconds <seconds>]";
   const routingFlags = "[--designated-verifier-did <did>] [--authorized-recipient-did <did>] [--notification-origin <origin>]";
+  const verifierRelayFlags = "[--verifier-coordination-url <url>] [--verifier-coordination-state <file>] [--verifier-poll-interval-ms <milliseconds>]";
   return [
     "Usage:",
+    `  mpas adapter start [--config-dir <dir>] [--credential-dir <dir>] [--adapter-key <file>] [--journal-path <file>] [--trace <file>] [--host <host>] [--port <port>] ${verifierRelayFlags}`,
     `  mpas daemon start [--config-dir <dir>] [--credential-dir <dir>] [--adapter-key <file>] [--journal-path <file>] [--trace <file>] [--host <host>] [--port <port>] [--coordination-port <port>] ${coordinationAuthFlags} ${routingFlags}`,
-    "  mpas daemon status [--config-dir <dir>] [--host <host>] [--port <port>]",
+    "  mpas adapter status [--config-dir <dir>] [--host <host>] [--port <port>]",
+    "  mpas daemon status [--config-dir <dir>] [--host <host>] [--port <port>]  # temporary alias",
     `  mpas coordination start [--host <host>] [--port <port>] [--trace <file>] ${coordinationAuthFlags} ${routingFlags}`,
     "  mpas signer-server start --config <path>",
     "  mpas action pending [--config <signer-config>]",

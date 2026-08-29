@@ -7,6 +7,7 @@ import { validatePayloadAgainstPlugin } from "../core/plugin-loader.js";
 import { buildAndSignExecutionReceipt } from "../core/receipt-builder.js";
 import type {
   ActionPackage,
+  ActionResponse,
   ActionResponseContext,
   Did,
   ExecutionReceipt,
@@ -363,13 +364,12 @@ export function createAdapterApiServer(options: HttpEndpointOptions): FastifyIns
     const classified = classifyDispatch(dispatchResult);
     trace.emit("mcp_response", { actionId, result: classified.result, error: classified.error });
 
-    ledger.resolve(pkg.actionEnvelope.actionId, classified.result);
     const receipt = await receiptFor(pkg, options, classified.result);
 
     trace.emit("receipt_generated", { actionId, result: classified.result });
     trace.emit("dispatch", { actionId, result: classified.result });
 
-    return actionResponse(options, {
+    const response = actionResponse(options, {
       result: classified.result,
       actionEnvelopeHash: envelopeHash,
       executionReceipt: receipt,
@@ -383,6 +383,11 @@ export function createAdapterApiServer(options: HttpEndpointOptions): FastifyIns
           )
         : undefined,
     });
+    // Persist the exact terminal response before returning it. The outbound
+    // Verifier worker can then recover the same bytes after a crash without
+    // changing the public rule that a resolved HTTP replay is rejected.
+    ledger.resolve(pkg.actionEnvelope.actionId, classified.result, response);
+    return response;
   });
 
   return app;
@@ -469,16 +474,19 @@ export function policyFromLoadedConfig(loadedConfig: LoadedDeploymentConfig): Po
 }
 
 interface ActionResponseInit {
-  result: string;
+  result: ActionResponse["result"];
   actionEnvelopeHash?: Hash;
   executionReceipt?: ExecutionReceipt;
-  authorizationRequirements?: unknown;
+  authorizationRequirements?: ActionResponse["authorizationRequirements"];
   executionResult?: unknown;
   error?: { code: string; message: string };
   context?: ActionResponseContext;
 }
 
-function actionResponse(options: HttpEndpointOptions, init: ActionResponseInit) {
+function actionResponse(
+  options: Pick<HttpEndpointOptions, "adapterDid">,
+  init: ActionResponseInit,
+): ActionResponse {
   return {
     version: "1",
     type: "ActionResponse",
@@ -492,6 +500,22 @@ function actionResponse(options: HttpEndpointOptions, init: ActionResponseInit) 
     ...(init.context ? { context: init.context } : {}),
     createdAt: new Date().toISOString(),
   };
+}
+
+/** Builds the terminal response for an execution left unresolved by a process crash. */
+export async function buildIndeterminateRecoveryResponse(
+  actionPackage: ActionPackage,
+  options: Pick<HttpEndpointOptions, "adapterDid" | "adapterSigningKey">,
+): Promise<ActionResponse> {
+  return actionResponse(options, {
+    result: "indeterminate",
+    actionEnvelopeHash: computeJsonHash(actionPackage.actionEnvelope),
+    executionReceipt: await receiptFor(actionPackage, options, "indeterminate"),
+    error: {
+      code: "DISPATCH_RECOVERY_INDETERMINATE",
+      message: "The Verifier restarted before it durably recorded the dispatch outcome.",
+    },
+  });
 }
 
 function diagnosticContext(
@@ -543,7 +567,7 @@ async function rejection(
   pkg: ActionPackage,
   options: HttpEndpointOptions,
   envelopeHash: Hash,
-  result: ReceiptResult,
+  result: ActionResponse["result"] & ReceiptResult,
   code: string,
   message: string,
 ) {
@@ -583,7 +607,11 @@ function unwrapActionPackage(body: unknown, adapterDid: Did): unknown {
   }
 }
 
-async function receiptFor(actionPackage: ActionPackage, options: HttpEndpointOptions, result: ReceiptResult) {
+async function receiptFor(
+  actionPackage: ActionPackage,
+  options: Pick<HttpEndpointOptions, "adapterDid" | "adapterSigningKey">,
+  result: ReceiptResult,
+) {
   return buildAndSignExecutionReceipt({
     actionEnvelope: actionPackage.actionEnvelope,
     executionPayload: actionPackage.executionPayload,

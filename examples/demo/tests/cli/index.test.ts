@@ -55,6 +55,22 @@ afterEach(async () => {
 });
 
 describe("CLI daemon and testing commands", () => {
+  it("keeps hosted-Verifier mode out of the combined local daemon command", async () => {
+    const stdout = new MemoryWriter();
+    const stderr = new MemoryWriter();
+
+    const result = await runCli([
+      "daemon",
+      "start",
+      "--verifier-coordination-url",
+      "https://api.signerset.com",
+    ], { stdout, stderr });
+
+    expect(result.exitCode).toBe(1);
+    expect(stdout.text).toBe("");
+    expect(stderr.text).toContain("mpas adapter start");
+  });
+
   it("fails closed when coordination authentication is enabled without an audience", async () => {
     const stdout = new MemoryWriter();
     const stderr = new MemoryWriter();
@@ -69,10 +85,10 @@ describe("CLI daemon and testing commands", () => {
     expect(stderr.text).toContain("non-empty set of valid canonical audience origins");
   });
 
-  it("daemon status shows loaded configs and listen address", async () => {
+  it("adapter status shows loaded configs and listen address", async () => {
     const stdout = new MemoryWriter();
     const stderr = new MemoryWriter();
-    const result = await runCli(["daemon", "status", "--config-dir", join(fixturesDir, "configs")], { stdout, stderr });
+    const result = await runCli(["adapter", "status", "--config-dir", join(fixturesDir, "configs")], { stdout, stderr });
 
     expect(result.exitCode).toBe(0);
     expect(stderr.text).toBe("");
