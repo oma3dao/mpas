@@ -54,11 +54,12 @@ This section defines the core terms used throughout MPAS.
 | Application                | The component that executes the Action desired by the Proposer.                                                                                                                                                     |
 | Credential Adapter         | A component that is not an Application but includes a Verifier. Verifies the Action Package and uses stored or constructed credentials to instruct the Application.                                                 |
 | Coordination Channel       | Any channel used to communicate proposed actions, Execution Payloads, Action Envelopes, approvals, rejections, or Action Packages.                                                                                  |
-| Coordination Service       | An optional service that stores, routes, synchronizes, and tracks Action Envelopes and Approval Bundles.                                                                                                            |
+| Action Relay               | An optional transport service that routes addressed MPAS messages between participants without creating an approval workflow or becoming a participant.                                                             |
+| Coordination Service       | An optional workflow service that stores, synchronizes, and tracks Action Packages and Approvals for explicit approval coordination.                                                                                 |
 | Policy Engine              | A system inside the Verifier that determines whether an Action has sufficient approval to proceed.                                                                                                                  |
 | Execution Receipt          | Evidence that an approved Action was executed, failed, or resolved.                                                                                                                                                 |
 | Signature Suite            | Identifies the cryptographic or provider-specific mechanism used to approve or sign an Action Envelope.                                                                                                             |
-| Participant                | Any entity involved in the lifecycle of an Action.                                                                                                                                                                  |
+| Participant                | A protocol actor involved in the lifecycle of an Action. An Action Relay or Coordination Service does not become a participant merely by hosting transport or workflow endpoints.                                  |
 | Agent                      | An autonomous or semi-autonomous software actor that can request, review, approve, or execute Actions.                                                                                                              |
 
 **Signer Subtypes:** The Signer category broadly includes any component that contributes to authorization. Subtypes should include at least: Human Signer, Agent Signer, Organization Signer, Policy Signer, and Threshold Signer.
@@ -117,7 +118,7 @@ A typical high-level MPAS flow proceeds as follows:
 7. Verifier approves the Action Package and instructs the Application to execute based on the Execution Payload.
 8. Application returns an Execution Receipt to the Proposer.
 
-### 4.2 Coordination Service
+### 4.2 Coordination and Relay Services
 
 A Coordination Service is optional. MPAS artifacts may be exchanged over any Coordination Channel, including direct messaging, local IPC, enterprise workflow systems, smart contracts, hosted services, or manual transfer.
 
@@ -137,6 +138,8 @@ A Coordination Service may:
 * distribute Execution Receipts.
 
 Trust boundaries and security requirements for Coordination Services are defined in Section 7.7.
+
+An Action Relay is a separate optional transport role used when a Verifier or another participant cannot accept an inbound connection. It routes addressed messages but does not create or advance an approval workflow. An Action Relay and Coordination Service may be co-located, but the protocol does not require shared infrastructure and co-location grants no additional authority.
 
 ### 4.3 Credential Adapter
 
@@ -176,7 +179,7 @@ Security requirements and trust boundaries for Credential Adapters are defined i
 
 This section defines the core MPAS data structures used to represent, review, approve, verify, execute, and audit an Action.
 
-MPAS data structures are designed to be transport-neutral. They may be transmitted over HTTP, local IPC, messaging systems, smart contract calldata, files, enterprise workflow systems, or a Coordination Service.
+MPAS data structures are designed to be transport-neutral. They may be transmitted over HTTP, local IPC, messaging systems, smart contract calldata, files, enterprise workflow systems, an Action Relay, or a Coordination Service.
 
 The core MPAS data structures are:
 
@@ -1260,9 +1263,13 @@ The Proposer may post the Signer Review Set or a reference to it. Signers return
 
 #### 6.8.3 Coordination Service Coordination
 
-A Coordination Service manages MPAS workflow state and routes artifacts between participants. This is the most operationally complete topology because it can tailor communication to each participant type (web UI for humans, webhooks for agents, passkey flows for hardware signers, etc.).
+A Coordination Service manages approval workflow state and makes review work and completed Action Packages available to the appropriate participants. The Proposer explicitly creates the workflow after receiving Authorization Requirements and remains responsible for submitting the completed Action Package to the Verifier.
 
-#### 6.8.4 Common Requirements Across Topologies
+#### 6.8.4 Action Relay
+
+An Action Relay routes an addressed Action request to a configured Verifier and returns the Verifier's response. It may provide polling and work notification for participants that cannot accept inbound connections. Relay delivery does not create a Coordination Service workflow, and a relay and Coordination Service need not share an operator, origin, process, or database.
+
+#### 6.8.5 Common Requirements Across Topologies
 
 Regardless of topology:
 
@@ -1480,32 +1487,34 @@ Credential selection MUST come from trusted Credential Adapter configuration, no
 
 After authorization, the Credential Adapter constructs the application-native command from the verified Execution Payload, `actionEnvelope.target`, `actionEnvelope.executionProfile`, and trusted configuration. If it cannot safely translate the Execution Payload under the declared profile, it MUST NOT execute.
 
-### 7.7 Coordination Service
+### 7.7 Action Relay and Coordination Service
 
 #### 7.7.1 Role
 
-A **Coordination Service** is an optional workflow component that stores, routes, synchronizes, and tracks MPAS artifacts.
+An **Action Relay** is an optional addressed-delivery component. A **Coordination Service** is an optional approval-workflow component. Either service may be used without the other. Neither becomes an MPAS participant solely by performing that service role, and neither requires a DID for that role.
 
 #### 7.7.2 Trust Boundary
 
-A Coordination Service is not the source of approval authority. It MUST NOT be treated as an approval authority unless the Verifier's policy explicitly trusts it for a specific external approval or workflow role. A Coordination Service MUST NOT alter the Execution Payload, Action Envelope, or Approval objects without causing verification failure.
+Neither service is the source of approval authority. A Verifier MUST NOT treat either service as approval authority unless its policy explicitly trusts that service for a specific external role. Neither service may alter the Execution Payload, Action Envelope, or Approval objects without causing verification failure.
 
-A Coordination Service should be designed as a non-custodial coordination service. It should not hold private keys, signer credentials, application credentials, or reusable secrets.
+Both services should be non-custodial. They should not hold participant private keys, signer credentials, application credentials, or reusable secrets.
 
-Discussion that occurs in channels managed by a Coordination Service is not an Approval unless it results in a valid MPAS Approval object.
+Discussion, routing, notification, or workflow state is not an Approval unless it results in a valid MPAS Approval object.
 
 #### 7.7.3 Responsibilities
 
 A Coordination Service MAY:
 
-* store pending Actions and route Action Packages;
-* route Signer Review Sets and notify Signers;
+* store pending Actions;
+* make Signer Review Sets available and notify Signers;
 * collect Approvals and assemble Approval Bundles;
 * make collected Approvals and assembled Approval Bundles available to the Proposer;
 * distribute Execution Receipts;
 * expose status to participants;
 * provide dashboards, review screens, or audit views;
 * maintain workflow records.
+
+An Action Relay MAY store and route addressed Delivery Envelopes, expose authenticated retrieval, and notify recipients that work is available. It MUST NOT create a workflow from a Verifier response or submit a completed package produced by a Coordination Service.
 
 #### 7.7.4 Participant Reachability
 
@@ -1521,11 +1530,11 @@ A Coordination Service is useful because it can tailor communication to each par
 
 #### 7.7.5 Push, Polling, and Delivery Models
 
-A Coordination Service MAY notify participants when action is required, expose polling APIs, or support both. Polling frequency, notification method, retry behavior, and delivery guarantees are deployment-specific. A Coordination Service SHOULD provide deterministic APIs for software components.
+An Action Relay or Coordination Service MAY notify participants when action is required, expose polling APIs, or support both. Polling frequency, notification method, retry behavior, and delivery guarantees are deployment-specific. Each service SHOULD provide deterministic APIs for software components.
 
 Transport profiles MAY define a delivery envelope around an MPAS message or artifact. Such an envelope is routing metadata, not an Approval or execution authorization. It does not assign the recipient a Proposer, Signer, Verifier, or other MPAS role, and the enclosed object retains every verification and authorization requirement defined by this specification.
 
-The MPAS HTTP Profile defines DID-addressed routed delivery, Coordination Service relay submission, polling retrieval, and an optional notification-only WebSocket. Those transport mechanisms do not change the Action Package, Action Envelope, Approval, Authorization Requirements, Action Response, or Execution Receipt schemas.
+The MPAS HTTP Profile defines a separate DID-addressed Action Relay, explicit Coordination Service workflows, polling retrieval, and optional notification-only WebSockets. Those transport mechanisms do not change the Action Package, Action Envelope, Approval, Authorization Requirements, Action Response, or Execution Receipt schemas.
 
 ### 7.8 Key Authorization and Identity
 
