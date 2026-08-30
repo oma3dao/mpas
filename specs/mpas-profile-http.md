@@ -396,7 +396,7 @@ Recommended error codes:
 | `signature_invalid`            | Signature verification failed. Under §4.6, this also covers HTTP Message Signature failures including expired/future timestamps, replayed nonce, and audience mismatch. |
 | `not_supported`                | Target application, operation, signature format, or profile is unsupported. |
 | `policy_unavailable`           | Policy could not be loaded or evaluated.                                    |
-| `relay_timeout`                | An Action Relay's bounded wait for the designated Verifier expired. Retryable; the relay record survives. |
+| `timeout`                      | The endpoint could not obtain a result within its bounded wait. Retryable with the same idempotency key; the timeout itself creates and destroys no protocol state. |
 | `expired`                      | Artifact or coordination workflow expired.                                  |
 | `rate_limited`                 | Rate limit exceeded.                                                        |
 | `server_error`                 | Unexpected server error.                                                    |
@@ -590,6 +590,8 @@ The Verifier may be embedded in a native MPAS Application or in another MPAS-awa
 
 `ActionRequest` carries an MPAS Action Package. A directly reachable Verifier **MUST** accept both a bare `ActionRequest` and `DeliveryEnvelope<ActionRequest>`. An Action Relay **MUST** require the envelope because it supplies routing metadata. A raw `ActionPackage` is not a request form for this endpoint.
 
+A client **SHOULD** always send `DeliveryEnvelope<ActionRequest>`. The enveloped form is accepted by every host of this endpoint, so a client that always uses it works unchanged against a directly reachable Verifier and against an Action Relay, and can be repointed between them without a code change. The bare form remains valid but is a compatibility convenience for deployments that will only ever address a Verifier directly; a client that emits only the bare form cannot be repointed at a relay.
+
 ```json
 {
   "version": "1",
@@ -628,7 +630,9 @@ An Action Relay selects the designated Verifier DID from trusted deployment conf
 
 Before storing or exposing a relayed Action, the Action Relay **MUST** verify that the Execution Payload matches `actionEnvelope.executionPayloadHash` and that `approvalBundle.actionEnvelopeHash` matches the computed Action Envelope hash. A mismatch is `400 artifact_hash_mismatch` and creates no delivery.
 
-The relay **MUST** bound how long it holds each HTTP submission open. If the deployment-selected bound expires before a qualifying response arrives, it returns `503 relay_timeout` with `retryable: true`; it **MUST NOT** synthesize an `ActionResponse`. The relayed Action and delivery records survive. An equivalent idempotent retry resumes waiting for, or returns, the same stored Verifier response. This profile does not fix the bound's duration.
+The relay **MUST** bound how long it holds each HTTP submission open. If the deployment-selected bound expires before a qualifying response arrives, it returns `503 timeout` with `retryable: true`; it **MUST NOT** synthesize an `ActionResponse`. The relayed Action and delivery records survive. An equivalent idempotent retry resumes waiting for, or returns, the same stored Verifier response. This profile does not fix the bound's duration.
+
+A directly reachable Verifier **MAY** return `503 timeout` under the same contract when it cannot obtain a result within its own bounded wait — for example, a slow upstream Application or an unresolved asynchronous policy evaluation. The code names the condition, not the component: it does not tell a client whether it reached a Verifier directly or through a relay, and a client handles it identically in both cases by retrying with the same idempotency key. Retry safety comes from that key and from the Core §6.5.1 dispatch-ledger rules, not from the error code. Which component's wait expired is diagnostic information and belongs in `error.message`, `error.details`, or `context.diagnostic`.
 
 ### 6.4 ActionResponse
 
@@ -1741,7 +1745,7 @@ A conforming Action Relay **MUST** support:
 - `POST /mpas/v1/relay/poll`;
 - `POST /mpas/v1/relay/delivery` for `DeliveryEnvelope<ActionResponse>`;
 - rejection of already-expired envelopes before delivery creation;
-- a bounded relay wait returning retryable `503 relay_timeout` without deleting durable state;
+- a bounded relay wait returning retryable `503 timeout` without deleting durable state;
 - independent recipient obligations and delivery-position cursor checkpoints; and
 - exact response correlation without workflow creation.
 
