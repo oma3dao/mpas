@@ -151,7 +151,7 @@ describe("coordination RFC 9421 authentication", () => {
       actionId: request.actionPackage.actionEnvelope.actionId,
       proposerDid: proposer.fixture.did,
     };
-    const response = await signedInject(app, "/mpas/v1/coordination/action-cancel", cancel, proposer.signer);
+    const response = await signedInject(app, "/mpas/v1/coordination/workflow-cancel", cancel, proposer.signer);
 
     expect(response.statusCode).toBe(200);
     expect(response.json().state).toBe("cancelled");
@@ -217,7 +217,7 @@ describe("coordination RFC 9421 authentication", () => {
     };
     const mismatchedCancel = await signedInject(
       app,
-      "/mpas/v1/coordination/action-cancel",
+      "/mpas/v1/coordination/workflow-cancel",
       cancel,
       maintainerA.signer,
     );
@@ -225,7 +225,7 @@ describe("coordination RFC 9421 authentication", () => {
 
     const missingCancel = await signedInject(
       app,
-      "/mpas/v1/coordination/action-cancel",
+      "/mpas/v1/coordination/workflow-cancel",
       { ...cancel, actionId: { value: "urn:uuid:missing" } },
       proposer.signer,
     );

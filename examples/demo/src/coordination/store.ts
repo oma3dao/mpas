@@ -6,7 +6,8 @@ import type {
   ApprovalRequirements,
   AuthorizationRequirements,
   CanonicalApprovalPayload,
-  CoordinationDeliveryResponse,
+  RelayDeliveryResponse,
+  RelayPollResponse,
   Decision,
   Did,
   DeliveryEnvelope,
@@ -31,14 +32,14 @@ import type {
   SignerReviewSet,
 } from "./types.js";
 
-export class CoordinationStoreError extends Error {
+export class MpasServiceError extends Error {
   constructor(
     readonly statusCode: number,
     readonly code: string,
     message: string,
   ) {
     super(message);
-    this.name = "CoordinationStoreError";
+    this.name = "MpasServiceError";
   }
 }
 
@@ -58,8 +59,6 @@ interface StoredAction {
   updatedAt: string;
   cancelledAt?: string;
   rejectedAt?: string;
-  readyDeliveryCreated?: boolean;
-  deliveryRecipients: Did[];
 }
 
 interface StoredRelayedAction {
@@ -79,7 +78,7 @@ interface StoredDelivery {
 }
 
 export interface RoutingAuditEntry {
-  purpose: "initialAction" | "actionResponse" | "readyAction";
+  purpose: "initialAction" | "actionResponse";
   sender: Did;
   recipients: Did[];
   designatedVerifierDid: Did;
@@ -111,18 +110,24 @@ export class CoordinationStore {
   }>();
   private nextDeliverySequence = 1;
 
-  runIdempotent<T>(did: Did, key: string | undefined, request: unknown, operation: () => T | Promise<T>): Promise<T> {
+  runIdempotent<T>(
+    service: "relay" | "coordination",
+    did: Did,
+    key: string | undefined,
+    request: unknown,
+    operation: () => T | Promise<T>,
+  ): Promise<T> {
     if (!key) return Promise.resolve().then(operation);
     const now = Date.now();
     for (const [cachedScope, entry] of this.idempotency) {
       if (entry.expiresAt <= now) this.idempotency.delete(cachedScope);
     }
-    const scope = `${did}\0${key}`;
+    const scope = `${service}\0${did}\0${key}`;
     const fingerprint = computeIdempotencyFingerprint(request);
     const existing = this.idempotency.get(scope);
     if (existing) {
       if (existing.fingerprint !== fingerprint) {
-        throw new CoordinationStoreError(409, "idempotency_conflict", "Idempotency key was reused with a different request.");
+        throw new MpasServiceError(409, "idempotency_conflict", "Idempotency key was reused with a different request.");
       }
       return existing.result as Promise<T>;
     }
@@ -163,12 +168,12 @@ export class CoordinationStore {
     validateActionPackageBindings(envelope.payload.actionPackage);
     const hash = computeJsonHash(envelope.payload.actionPackage.actionEnvelope);
     const actionId = envelope.payload.actionPackage.actionEnvelope.actionId.value;
-    const existing = this.relayedActionsById.get(actionId) ?? this.actionsById.get(actionId);
+    const existing = this.relayedActionsById.get(actionId);
     if (existing && existing.actionRef.actionEnvelopeHash.value !== hash.value) {
-      throw new CoordinationStoreError(409, "ACTION_ID_CONFLICT", "Action ID already exists with a different envelope hash.");
+      throw new MpasServiceError(409, "ACTION_ID_CONFLICT", "Action ID already exists with a different envelope hash.");
     }
     if (!envelope.recipients.includes(verifierDid)) {
-      throw new CoordinationStoreError(400, "INVALID_REQUEST", "Configured Verifier DID is not an envelope recipient.");
+      throw new MpasServiceError(400, "INVALID_REQUEST", "Configured Verifier DID is not an envelope recipient.");
     }
   }
 
@@ -182,19 +187,18 @@ export class CoordinationStore {
   submitResponseDelivery(
     envelope: DeliveryEnvelope<ActionResponse>,
     administrativelyAuthorizedRecipients: Iterable<Did> = [],
-  ): CoordinationDeliveryResponse {
+  ): RelayDeliveryResponse {
     const stored = this.responseDeliveryTarget(envelope, administrativelyAuthorizedRecipients);
 
     this.storeEnvelope(envelope);
     this.recordRoutingAudit("actionResponse", envelope, stored.verifierDid);
     if (!stored.response) {
       stored.response = envelope.payload;
-      this.createApprovalWorkflowFromResponse(stored, envelope.payload);
       stored.resolve(envelope.payload);
     }
     return {
       version: "1",
-      type: "CoordinationDeliveryResponse",
+      type: "RelayDeliveryResponse",
       accepted: true,
       createdAt: new Date().toISOString(),
     };
@@ -206,26 +210,26 @@ export class CoordinationStore {
   ): StoredRelayedAction {
     const responseHash = envelope.payload.actionEnvelopeHash;
     const stored = responseHash ? this.relayedActionsByEnvelopeHash.get(responseHash.value) : undefined;
-    if (!stored) throw new CoordinationStoreError(404, "ACTION_NOT_FOUND", "Relayed action was not found.");
+    if (!stored) throw new MpasServiceError(404, "ACTION_NOT_FOUND", "Relayed action was not found.");
     if (responseHash?.alg !== stored.actionRef.actionEnvelopeHash.alg) {
-      throw new CoordinationStoreError(400, "ACTION_HASH_MISMATCH", "Action Response hash algorithm does not match the relayed Action.");
+      throw new MpasServiceError(400, "ACTION_HASH_MISMATCH", "Action Response hash algorithm does not match the relayed Action.");
     }
     if (envelope.sender !== stored.verifierDid || envelope.payload.verifier?.did !== stored.verifierDid) {
-      throw new CoordinationStoreError(403, "permission_denied", "Response sender is not the workflow's designated Verifier.");
+      throw new MpasServiceError(403, "permission_denied", "Response sender is not the relayed Action's designated Verifier.");
     }
     if (!envelope.recipients.includes(stored.envelope.payload.actionPackage.actionEnvelope.proposer.did)) {
-      throw new CoordinationStoreError(400, "INVALID_REQUEST", "Response envelope must address the Action Proposer.");
+      throw new MpasServiceError(400, "INVALID_REQUEST", "Response envelope must address the Action Proposer.");
     }
     const requirements = envelope.payload.authorizationRequirements;
     if (envelope.payload.result === "additionalApprovalsRequired" && !requirements) {
-      throw new CoordinationStoreError(
+      throw new MpasServiceError(
         400,
         "INVALID_REQUEST",
         "additionalApprovalsRequired response must include Authorization Requirements.",
       );
     }
     if (envelope.payload.result !== "additionalApprovalsRequired" && requirements) {
-      throw new CoordinationStoreError(
+      throw new MpasServiceError(
         400,
         "INVALID_REQUEST",
         "Authorization Requirements are valid only with additionalApprovalsRequired.",
@@ -238,12 +242,9 @@ export class CoordinationStore {
     const authorizedRecipients = new Set<Did>([
       stored.envelope.payload.actionPackage.actionEnvelope.proposer.did,
       ...administrativelyAuthorizedRecipients,
-      ...maintainersFrom(
-        requirements ?? this.actionsByEnvelopeHash.get(stored.actionRef.actionEnvelopeHash.value)?.authorizationRequirements,
-      ),
     ]);
     if (envelope.recipients.some((did) => !authorizedRecipients.has(did))) {
-      throw new CoordinationStoreError(403, "permission_denied", "Response envelope contains an unauthorized recipient.");
+      throw new MpasServiceError(403, "permission_denied", "Response envelope contains an unauthorized recipient.");
     }
 
     return stored;
@@ -275,7 +276,6 @@ export class CoordinationStore {
       actionRef,
       state: "awaitingApprovals",
       approvals: [],
-      deliveryRecipients: [request.authorizationRequirements.verifier.did],
       createdAt: now,
       updatedAt: now,
     };
@@ -311,7 +311,6 @@ export class CoordinationStore {
       if (status === "satisfied") {
         stored.state = "readyForResubmission";
         stored.updatedAt = new Date().toISOString();
-        this.createReadyDelivery(stored);
       } else if (status === "unreachable") {
         stored.state = "rejected";
         stored.rejectedAt = new Date().toISOString();
@@ -329,7 +328,7 @@ export class CoordinationStore {
     };
   }
 
-  poll(did: Did, cursor?: string): CoordinationPollResponse {
+  poll(did: Did): CoordinationPollResponse {
     const approvalRequests: ApprovalRequest[] = [];
     const actionUpdates: ActionUpdate[] = [];
 
@@ -348,6 +347,15 @@ export class CoordinationStore {
       }
     }
 
+    return {
+      version: "1",
+      type: "CoordinationPollResponse",
+      approvalRequests,
+      actionUpdates,
+    };
+  }
+
+  pollDeliveries(did: Did, cursor?: string): RelayPollResponse {
     const after = parseCursor(cursor);
     const deliveries = this.deliveries
       .filter((entry) => entry.sequence > after)
@@ -355,13 +363,10 @@ export class CoordinationStore {
       .filter((entry) => entry.envelope.expiresAt === undefined || Date.parse(entry.envelope.expiresAt) > Date.now())
       .slice(0, DELIVERY_PAGE_SIZE);
     const nextCursor = deliveries.length > 0 ? String(deliveries.at(-1)!.sequence) : undefined;
-
     return {
       version: "1",
-      type: "CoordinationPollResponse",
-      approvalRequests,
-      actionUpdates,
-      ...(deliveries.length > 0 ? { deliveries: deliveries.map((entry) => entry.envelope) } : {}),
+      type: "RelayPollResponse",
+      deliveries: deliveries.map((entry) => entry.envelope),
       ...(nextCursor !== undefined ? { nextCursor } : {}),
     };
   }
@@ -370,7 +375,7 @@ export class CoordinationStore {
     this.validateCancelAction(request);
     const stored = this.actionsById.get(request.actionId.value);
     if (!stored) {
-      throw new CoordinationStoreError(404, "ACTION_NOT_FOUND", "Pending action was not found.");
+      throw new MpasServiceError(404, "ACTION_NOT_FOUND", "Pending action was not found.");
     }
 
     const now = new Date().toISOString();
@@ -392,9 +397,9 @@ export class CoordinationStore {
     const actionEnvelopeHash = computeJsonHash(request.actionPackage.actionEnvelope);
     validateAuthorizationRequirements(request.authorizationRequirements, actionEnvelopeHash);
     const actionId = request.actionPackage.actionEnvelope.actionId.value;
-    const existingById = this.actionsById.get(actionId) ?? this.relayedActionsById.get(actionId);
+    const existingById = this.actionsById.get(actionId);
     if (existingById && existingById.actionRef.actionEnvelopeHash.value !== actionEnvelopeHash.value) {
-      throw new CoordinationStoreError(409, "ACTION_ID_CONFLICT", "Action ID already exists with a different envelope hash.");
+      throw new MpasServiceError(409, "ACTION_ID_CONFLICT", "Action ID already exists with a different envelope hash.");
     }
   }
 
@@ -405,22 +410,22 @@ export class CoordinationStore {
   validateCancelAction(request: CoordinationActionCancelRequest): void {
     const stored = this.actionsById.get(request.actionId.value);
     if (!stored || stored.state === "cancelled") {
-      throw new CoordinationStoreError(404, "ACTION_NOT_FOUND", "Pending action was not found.");
+      throw new MpasServiceError(404, "ACTION_NOT_FOUND", "Pending action was not found.");
     }
 
     if (stored.actionPackage.actionEnvelope.proposer.did !== request.proposerDid) {
-      throw new CoordinationStoreError(403, "NOT_PROPOSER", "Only the original proposer can cancel this action.");
+      throw new MpasServiceError(403, "NOT_PROPOSER", "Only the original proposer can cancel this action.");
     }
 
     if (this.effectiveState(stored) === "expired") {
-      throw new CoordinationStoreError(409, "ACTION_EXPIRED", "Action has expired and can no longer be cancelled.");
+      throw new MpasServiceError(409, "ACTION_EXPIRED", "Action has expired and can no longer be cancelled.");
     }
 
     if (stored.state === "readyForResubmission") {
-      throw new CoordinationStoreError(409, "ACTION_READY", "Action is already ready for resubmission.");
+      throw new MpasServiceError(409, "ACTION_READY", "Action is already ready for resubmission.");
     }
     if (stored.state === "rejected") {
-      throw new CoordinationStoreError(409, "ACTION_REJECTED", "Action approval requirements are already unreachable.");
+      throw new MpasServiceError(409, "ACTION_REJECTED", "Action approval requirements are already unreachable.");
     }
   }
 
@@ -447,13 +452,12 @@ export class CoordinationStore {
     return [...new Set<Did>([
       stored.actionPackage.actionEnvelope.proposer.did,
       stored.authorizationRequirements.verifier.did,
-      ...stored.deliveryRecipients,
       ...thresholdsFor(stored.authorizationRequirements.approvalRequirements).flatMap((threshold) => threshold.eligibleSigners),
       ...(stored.authorizationRequirements.approvalRequirements.overrideSigners ?? []).map((entry) => entry.signer),
     ])];
   }
 
-  hasOutstandingWork(did: Did): boolean {
+  hasOutstandingCoordinationWork(did: Did): boolean {
     for (const stored of this.actionsById.values()) {
       this.expireIfNeeded(stored);
       if (stored.state === "awaitingApprovals" && this.approvalRequestFor(stored, did)) return true;
@@ -461,6 +465,10 @@ export class CoordinationStore {
       // proposer update remains pollable and must not be hidden on reconnect.
       if (stored.actionPackage.actionEnvelope.proposer.did === did) return true;
     }
+    return false;
+  }
+
+  hasOutstandingRelayWork(did: Did): boolean {
     return this.deliveries.some((entry) =>
       entry.recipient === did &&
       (entry.envelope.expiresAt === undefined || Date.parse(entry.envelope.expiresAt) > Date.now()));
@@ -478,44 +486,6 @@ export class CoordinationStore {
         envelope: structuredClone(envelope) as DeliveryEnvelope,
       });
     }
-  }
-
-  private createApprovalWorkflowFromResponse(stored: StoredRelayedAction, response: ActionResponse): void {
-    if (response.result !== "additionalApprovalsRequired" ||
-        response.authorizationRequirements?.result !== "additionalApprovalsRequired") return;
-    if (this.actionsByEnvelopeHash.has(stored.actionRef.actionEnvelopeHash.value)) return;
-    const now = new Date().toISOString();
-    const action: StoredAction = {
-      actionPackage: stored.envelope.payload.actionPackage,
-      authorizationRequirements: response.authorizationRequirements,
-      actionRef: stored.actionRef,
-      state: "awaitingApprovals",
-      approvals: [],
-      deliveryRecipients: [...stored.envelope.recipients],
-      createdAt: now,
-      updatedAt: now,
-    };
-    this.actionsById.set(action.actionRef.actionId.value, action);
-    this.actionsByEnvelopeHash.set(action.actionRef.actionEnvelopeHash.value, action);
-  }
-
-  private createReadyDelivery(stored: StoredAction): void {
-    if (stored.readyDeliveryCreated) return;
-    stored.readyDeliveryCreated = true;
-    const envelope: DeliveryEnvelope<ActionRequest> = {
-      version: "1",
-      type: "DeliveryEnvelope",
-      sender: stored.actionPackage.actionEnvelope.proposer.did,
-      recipients: [...stored.deliveryRecipients],
-      createdAt: new Date().toISOString(),
-      payload: {
-        version: "1",
-        type: "ActionRequest",
-        actionPackage: buildCompletedActionPackage(stored),
-      },
-    };
-    this.storeEnvelope(envelope);
-    this.recordRoutingAudit("readyAction", envelope, stored.authorizationRequirements.verifier.did);
   }
 
   private recordRoutingAudit(
@@ -558,41 +528,41 @@ export class CoordinationStore {
   } {
     const stored = this.actionsByEnvelopeHash.get(request.actionEnvelopeHash.value);
     if (!stored || this.effectiveState(stored) === "cancelled" || this.effectiveState(stored) === "expired") {
-      throw new CoordinationStoreError(404, "ACTION_NOT_FOUND", "Pending action was not found.");
+      throw new MpasServiceError(404, "ACTION_NOT_FOUND", "Pending action was not found.");
     }
 
     if (request.approval.actionEnvelopeHash.value !== stored.actionRef.actionEnvelopeHash.value) {
-      throw new CoordinationStoreError(400, "APPROVAL_HASH_MISMATCH", "Approval is bound to a different action envelope.");
+      throw new MpasServiceError(400, "APPROVAL_HASH_MISMATCH", "Approval is bound to a different action envelope.");
     }
 
     const payload = decodeApprovalPayload(request.approval);
     if (payload?.actionEnvelopeHash.value !== stored.actionRef.actionEnvelopeHash.value) {
-      throw new CoordinationStoreError(400, "APPROVAL_HASH_MISMATCH", "Signed approval payload is bound to a different action envelope.");
+      throw new MpasServiceError(400, "APPROVAL_HASH_MISMATCH", "Signed approval payload is bound to a different action envelope.");
     }
 
     if (!payload?.signerDid) {
-      throw new CoordinationStoreError(400, "APPROVAL_SIGNER_MISSING", "Signed approval payload does not include signerDid.");
+      throw new MpasServiceError(400, "APPROVAL_SIGNER_MISSING", "Signed approval payload does not include signerDid.");
     }
 
     if (request.approval.decision !== payload.decision) {
-      throw new CoordinationStoreError(400, "APPROVAL_DECISION_MISMATCH", "Approval decision does not match its signed payload.");
+      throw new MpasServiceError(400, "APPROVAL_DECISION_MISMATCH", "Approval decision does not match its signed payload.");
     }
 
     // Self-approval prevention: the proposer of an action cannot approve their own action.
     if (payload.signerDid === stored.actionPackage.actionEnvelope.proposer.did) {
-      throw new CoordinationStoreError(403, "SELF_APPROVAL_DENIED", "The proposer of an action cannot approve their own action.");
+      throw new MpasServiceError(403, "SELF_APPROVAL_DENIED", "The proposer of an action cannot approve their own action.");
     }
 
     const prior = stored.approvals.find((entry) => entry.signerDid === payload.signerDid);
     if (prior && prior.decision !== payload.decision) {
-      throw new CoordinationStoreError(
+      throw new MpasServiceError(
         409,
         "SIGNER_DECISION_CONFLICT",
         "A Signer's first decision for an Action Envelope is final.",
       );
     }
     if (stored.state !== "awaitingApprovals" && !prior) {
-      throw new CoordinationStoreError(409, "ACTION_NOT_AWAITING_APPROVALS", "The workflow is no longer accepting new decisions.");
+      throw new MpasServiceError(409, "ACTION_NOT_AWAITING_APPROVALS", "The workflow is no longer accepting new decisions.");
     }
 
     return {
@@ -639,7 +609,7 @@ export class CoordinationStore {
 function parseCursor(cursor: string | undefined): number {
   if (cursor === undefined) return 0;
   if (!/^\d+$/.test(cursor)) {
-    throw new CoordinationStoreError(400, "INVALID_CURSOR", "Coordination cursor is invalid.");
+    throw new MpasServiceError(400, "INVALID_CURSOR", "Relay cursor is invalid.");
   }
   return Number(cursor);
 }
@@ -738,24 +708,16 @@ function thresholdsFor(requirements: ApprovalRequirements): ThresholdRequirement
   return [...(requirements.anyOf ?? []), ...(requirements.allOf ?? [])];
 }
 
-function maintainersFrom(requirements: AuthorizationRequirements | undefined): Did[] {
-  if (!requirements || !("approvalRequirements" in requirements)) return [];
-  return [...new Set<Did>([
-    ...thresholdsFor(requirements.approvalRequirements).flatMap((threshold) => threshold.eligibleSigners),
-    ...(requirements.approvalRequirements.overrideSigners ?? []).map((override) => override.signer),
-  ])];
-}
-
 function validateActionPackageBindings(actionPackage: ActionPackage): void {
   const raw = actionPackage as unknown as Record<string, unknown>;
   if (!("executionPayload" in raw) || !isRecord(raw.actionEnvelope) || !isRecord(raw.approvalBundle) ||
       !isRecord(raw.actionEnvelope.executionPayloadHash) ||
       !isRecord(raw.approvalBundle.actionEnvelopeHash)) {
-    throw new CoordinationStoreError(400, "INVALID_REQUEST", "Action Package hash bindings are malformed.");
+    throw new MpasServiceError(400, "INVALID_REQUEST", "Action Package hash bindings are malformed.");
   }
   const payloadHash = computeJsonHash(actionPackage.executionPayload);
   if (!hashesEqual(payloadHash, actionPackage.actionEnvelope.executionPayloadHash)) {
-    throw new CoordinationStoreError(
+    throw new MpasServiceError(
       400,
       "artifact_hash_mismatch",
       "Execution Payload hash does not match ActionEnvelope.executionPayloadHash.",
@@ -763,7 +725,7 @@ function validateActionPackageBindings(actionPackage: ActionPackage): void {
   }
   const actionEnvelopeHash = computeJsonHash(actionPackage.actionEnvelope);
   if (!hashesEqual(actionEnvelopeHash, actionPackage.approvalBundle.actionEnvelopeHash)) {
-    throw new CoordinationStoreError(
+    throw new MpasServiceError(
       400,
       "artifact_hash_mismatch",
       "ApprovalBundle.actionEnvelopeHash does not match the Action Envelope.",
@@ -784,17 +746,17 @@ function validateAuthorizationRequirements(
       typeof raw.verifier.did !== "string" ||
       !raw.verifier.did.startsWith("did:") ||
       !isRecord(raw.approvalRequirements)) {
-    throw new CoordinationStoreError(400, "INVALID_REQUEST", "Authorization Requirements are malformed.");
+    throw new MpasServiceError(400, "INVALID_REQUEST", "Authorization Requirements are malformed.");
   }
   for (const field of ["anyOf", "allOf"] as const) {
     const entries = raw.approvalRequirements[field];
     if (entries !== undefined && !Array.isArray(entries)) {
-      throw new CoordinationStoreError(400, "INVALID_REQUEST", `approvalRequirements.${field} must be an array.`);
+      throw new MpasServiceError(400, "INVALID_REQUEST", `approvalRequirements.${field} must be an array.`);
     }
     for (const entry of Array.isArray(entries) ? entries : []) {
       if (!isRecord(entry) || entry.type !== "threshold" || !Array.isArray(entry.eligibleSigners) ||
           entry.eligibleSigners.some((did) => typeof did !== "string" || !did.startsWith("did:"))) {
-        throw new CoordinationStoreError(400, "INVALID_REQUEST", "Authorization threshold is malformed.");
+        throw new MpasServiceError(400, "INVALID_REQUEST", "Authorization threshold is malformed.");
       }
     }
   }
@@ -803,44 +765,44 @@ function validateAuthorizationRequirements(
     !isRecord(entry) || typeof entry.signer !== "string" || !entry.signer.startsWith("did:") ||
     !Array.isArray(entry.permissions) || entry.permissions.length === 0 ||
     entry.permissions.some((permission) => typeof permission !== "string")))) {
-    throw new CoordinationStoreError(400, "INVALID_REQUEST", "Authorization override Signers are malformed.");
+    throw new MpasServiceError(400, "INVALID_REQUEST", "Authorization override Signers are malformed.");
   }
 
   if (requirements.result !== "additionalApprovalsRequired") {
-    throw new CoordinationStoreError(400, "INVALID_REQUEST", "Approval workflow requires additional-approval requirements.");
+    throw new MpasServiceError(400, "INVALID_REQUEST", "Approval workflow requires additional-approval requirements.");
   }
   if (!hashesEqual(requirements.actionEnvelopeHash, actionEnvelopeHash)) {
-    throw new CoordinationStoreError(400, "artifact_hash_mismatch", "Authorization Requirements are bound to another Action.");
+    throw new MpasServiceError(400, "artifact_hash_mismatch", "Authorization Requirements are bound to another Action.");
   }
   if (verifierDid !== undefined && requirements.verifier.did !== verifierDid) {
-    throw new CoordinationStoreError(403, "permission_denied", "Authorization Requirements came from another Verifier.");
+    throw new MpasServiceError(403, "permission_denied", "Authorization Requirements came from another Verifier.");
   }
   if (requirements.expiresAt !== undefined) {
     const expiresAt = Date.parse(requirements.expiresAt);
     if (Number.isNaN(expiresAt)) {
-      throw new CoordinationStoreError(400, "INVALID_REQUEST", "Authorization Requirements expiry is invalid.");
+      throw new MpasServiceError(400, "INVALID_REQUEST", "Authorization Requirements expiry is invalid.");
     }
     if (expiresAt <= Date.now()) {
-      throw new CoordinationStoreError(409, "expired", "Authorization Requirements are expired.");
+      throw new MpasServiceError(409, "expired", "Authorization Requirements are expired.");
     }
   }
 
   const thresholds = thresholdsFor(requirements.approvalRequirements);
   const overrides = requirements.approvalRequirements.overrideSigners ?? [];
   if (thresholds.length === 0 && overrides.length === 0) {
-    throw new CoordinationStoreError(400, "INVALID_REQUEST", "Authorization Requirements contain no approval path.");
+    throw new MpasServiceError(400, "INVALID_REQUEST", "Authorization Requirements contain no approval path.");
   }
   for (const threshold of thresholds) {
     const eligible = new Set(threshold.eligibleSigners);
     if (eligible.size !== threshold.eligibleSigners.length) {
-      throw new CoordinationStoreError(400, "INVALID_REQUEST", "Threshold eligibleSigners must be unique.");
+      throw new MpasServiceError(400, "INVALID_REQUEST", "Threshold eligibleSigners must be unique.");
     }
     if (!Number.isInteger(threshold.threshold) || threshold.threshold < 1 || threshold.threshold > eligible.size) {
-      throw new CoordinationStoreError(400, "INVALID_REQUEST", "Threshold must be achievable by its eligibleSigners.");
+      throw new MpasServiceError(400, "INVALID_REQUEST", "Threshold must be achievable by its eligibleSigners.");
     }
   }
   if (new Set(overrides.map((entry) => entry.signer)).size !== overrides.length) {
-    throw new CoordinationStoreError(400, "INVALID_REQUEST", "Override Signer DIDs must be unique.");
+    throw new MpasServiceError(400, "INVALID_REQUEST", "Override Signer DIDs must be unique.");
   }
 }
 

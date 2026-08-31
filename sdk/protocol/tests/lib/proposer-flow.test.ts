@@ -26,7 +26,7 @@ describe("proposer flow integration", () => {
     let submittedPackage: ActionPackage | undefined;
     const server = await startMockAdapter(async (request, response) => {
       expect(request.method).toBe("POST");
-      expect(request.url).toBe("/mpas/v1/action");
+      expect(request.url).toBe("/mpas/v1/verifier/action");
       submittedPackage = (JSON.parse(await readRequestBody(request)) as { actionPackage: ActionPackage }).actionPackage;
       sendJson(response, executed);
     });

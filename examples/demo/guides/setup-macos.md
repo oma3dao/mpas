@@ -945,13 +945,13 @@ After Part 3, you have two agents running: a proposer (with GitHub tools) and a 
 
 > Delete the branch `demo/branch-alpha` from `example-org/mpas-demo-repository`.
 
-The proposer bridge submits to the adapter → adapter returns `additionalApprovalsRequired` (policy requires 1 maintainer for `delete_branch_mirror`) → the tool call returns an MCP Task immediately. The `taskId` is the Action ID; `_meta["org.oma3/mpas"].authorizationState` is `authorization_required`.
+The proposer bridge submits to the Action endpoint → the Verifier returns `additionalApprovalsRequired` (policy requires 1 maintainer for `delete_branch_mirror`) → the bridge explicitly creates a Coordination Service workflow → the tool call returns an MCP Task immediately. A relay response alone never creates that workflow. The `taskId` is the Action ID; `_meta["org.oma3/mpas"].authorizationState` is `authorization_required`.
 
 **In the maintainer agent:**
 
 > Check for pending MPAS approvals and approve any delete_branch_mirror action.
 
-The maintainer calls `mpas_list_pending` → `mpas_review_action` → `mpas_approve`. The proposer bridge detects `readyForResubmission`, resubmits, and the adapter dispatches.
+The maintainer calls `mpas_list_pending` → `mpas_review_action` → `mpas_approve`. The Coordination Service returns `readyForResubmission` without routing or submitting the completed package. The proposer bridge detects that update, explicitly resubmits the package to the Action endpoint, and the adapter dispatches.
 
 **Result:** The proposer’s `tasks/get` on that Task returns the execution result. Do not call the application tool again to check progress — that would create a new Action.
 

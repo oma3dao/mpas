@@ -15,7 +15,7 @@ import { deriveMpasAudience, signMpasRfc9421, type MpasRfc9421Signer } from "./r
 
 /** Configuration for the common MPAS Action endpoint client. */
 export interface ActionEndpointClientConfig {
-  /** Base URL of a directly reachable Verifier or a Coordination Service relay. */
+  /** Base URL of a directly reachable Verifier or an Action Relay. */
   url: string;
   /** Request timeout in milliseconds. Defaults to 30 seconds. */
   timeoutMs?: number;
@@ -77,10 +77,10 @@ export function buildActionRequest(input: BuildActionRequestInput): ActionReques
 }
 
 /**
- * Client of the common MPAS `/mpas/v1/action` endpoint.
+ * Client of the logical Verifier interface at `/mpas/v1/verifier/action`.
  *
- * The endpoint may be hosted by a directly reachable Verifier or by a Coordination
- * Service relay. Both topologies accept an Action request and return the existing
+ * The endpoint may be hosted by a directly reachable Verifier or by an Action
+ * Relay. Both topologies accept an Action request and return the existing
  * Verifier-authored {@link ActionResponse}; only the accepted outer request form differs.
  */
 export class ActionEndpointClient {
@@ -100,7 +100,7 @@ export class ActionEndpointClient {
   }
 
   /**
-   * Submits a pre-built bare or enveloped Action request to `/mpas/v1/action`.
+   * Submits a pre-built bare or enveloped Action request to `/mpas/v1/verifier/action`.
    *
    * The outer body is parsed before transmission. When signing is enabled, the
    * signer DID must equal the bare request's Proposer DID or the envelope sender.
@@ -130,7 +130,7 @@ export class ActionEndpointClient {
     }
 
     const submitted = signer ? { ...canonical, audience: this.audience } : canonical;
-    const requestUrl = `${this.url}/mpas/v1/action`;
+    const requestUrl = `${this.url}/mpas/v1/verifier/action`;
     const text = JSON.stringify(submitted);
     const headers: Record<string, string> = {
       "Content-Type": "application/mpas+json",

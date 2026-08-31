@@ -58,6 +58,9 @@ coverage/
 pnpm-store/
 *.tsbuildinfo
 
+# Test build artifacts
+.signer-test-build-*/
+
 # macOS / Xcode
 .DS_Store
 DerivedData/

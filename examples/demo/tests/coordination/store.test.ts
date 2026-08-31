@@ -4,7 +4,7 @@ import { CompactSign, importJWK, type JWK } from "jose";
 import { canonicalize } from "json-canonicalize";
 import { describe, expect, it } from "vitest";
 import { buildDeliveryEnvelope } from "@oma3/mpas";
-import { CoordinationStore, CoordinationStoreError } from "../../src/coordination/store.js";
+import { CoordinationStore, MpasServiceError } from "../../src/coordination/store.js";
 import type { CoordinationActionRequest } from "../../src/coordination/types.js";
 import type { ActionPackage, Approval, Decision, Did, Hash } from "../../src/core/types.js";
 import { computeJsonHash } from "../../src/core/verification.js";
@@ -40,7 +40,7 @@ describe("CoordinationStore", () => {
     expect(outsiderPoll.approvalRequests).toHaveLength(0);
   });
 
-  it("rejects action ID conflicts with different envelope hashes", async () => {
+  it("pins Action IDs independently within relay and coordination state", async () => {
     const request = await coordinationActionRequest();
     const conflictingPackage = structuredClone(request.actionPackage);
     conflictingPackage.actionEnvelope.expiresAt = "2030-01-02T00:00:00.000Z";
@@ -54,12 +54,17 @@ describe("CoordinationStore", () => {
         ...request,
         actionPackage: conflictingPackage,
       }),
-    ).toThrowError(CoordinationStoreError);
-    expect(() => store.beginRelayedAction(buildDeliveryEnvelope({
+    ).toThrowError(MpasServiceError);
+    expect(store.beginRelayedAction(buildDeliveryEnvelope({
       sender: conflictingPackage.actionEnvelope.proposer.did,
       recipients: [adapterDid],
       payload: { version: "1", type: "ActionRequest", actionPackage: conflictingPackage },
-    }), adapterDid)).toThrowError(CoordinationStoreError);
+    }), adapterDid).created).toBe(true);
+    expect(() => store.beginRelayedAction(buildDeliveryEnvelope({
+      sender: request.actionPackage.actionEnvelope.proposer.did,
+      recipients: [adapterDid],
+      payload: { version: "1", type: "ActionRequest", actionPackage: request.actionPackage },
+    }), adapterDid)).toThrowError(MpasServiceError);
   });
 
   it("tracks approvals, ignores duplicate signer counts, and assembles a completed action package", async () => {
@@ -137,7 +142,7 @@ describe("CoordinationStore", () => {
       });
       throw new Error("changed decision unexpectedly accepted");
     } catch (error) {
-      expect(error).toBeInstanceOf(CoordinationStoreError);
+      expect(error).toBeInstanceOf(MpasServiceError);
       expect(error).toMatchObject({ statusCode: 409, code: "SIGNER_DECISION_CONFLICT" });
     }
   });
@@ -195,7 +200,7 @@ describe("CoordinationStore", () => {
 
     for (const invalid of cases) {
       const store = new CoordinationStore();
-      expect(() => store.createWorkflow(invalid)).toThrowError(CoordinationStoreError);
+      expect(() => store.createWorkflow(invalid)).toThrowError(MpasServiceError);
       expect(store.poll(invalid.actionPackage.actionEnvelope.proposer.did).actionUpdates).toHaveLength(0);
     }
   });
@@ -237,7 +242,7 @@ describe("CoordinationStore", () => {
         actionEnvelopeHash: request.authorizationRequirements.actionEnvelopeHash,
         approval: selfApproval,
       }),
-    ).toThrowError(CoordinationStoreError);
+    ).toThrowError(MpasServiceError);
   });
 
   it("cancels awaiting actions, hides them from signers, and rejects later approvals", async () => {
@@ -273,7 +278,7 @@ describe("CoordinationStore", () => {
           createdAt: "2026-06-05T18:02:00.000Z",
         },
       }),
-    ).toThrowError(CoordinationStoreError);
+    ).toThrowError(MpasServiceError);
   });
 });
 

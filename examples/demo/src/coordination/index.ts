@@ -10,7 +10,7 @@ export {
   type CoordinationAuthOptions,
   type CoordinationHttpEndpointOptions,
 } from "./coordination-api-server.js";
-export { CoordinationStore, CoordinationStoreError } from "./store.js";
+export { CoordinationStore, MpasServiceError } from "./store.js";
 export * from "./types.js";
 
 interface ParsedArgs {

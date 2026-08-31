@@ -189,9 +189,27 @@ node dist/index.js --config ./bridge-config.json
   "coordination": { "url": "http://127.0.0.1:7545" },
   "agent": { "did": "<did:jwk from key generate>", "keyFile": "/path/to/keys/proposer-key.json" },
   "target": { "applicationDid": "did:web:my-app.example" },
-  "approvalStrategy": "wait"
+  "workflow": { "dbPath": "./bridge-workflows.sqlite" }
 }
 ```
+
+For a hosted Verifier reached through an Action Relay, replace `adapter` with
+the relay-facing Action endpoint and designated Verifier:
+
+```json
+{
+  "actionEndpoint": {
+    "url": "https://api.example.com",
+    "verifierDid": "did:web:verifier.example"
+  }
+}
+```
+
+The generated bridge uses `ActionRelayClient` for that topology and keeps the
+Coordination Service client separate. If the Verifier returns
+`additionalApprovalsRequired`, the bridge explicitly creates a workflow; after
+coordination returns a completed Action Package, the bridge explicitly submits
+it to the Action endpoint again.
 
 Keys come from the demo CLI (`mpas key generate`, which mints did:jwk identities); the Credential Adapter and Coordination Service come from `examples/demo`. See `examples/demo/guides/setup-macos.md` for the full local stack walkthrough.
 

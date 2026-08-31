@@ -8,6 +8,10 @@ import type {
   DeliveryEnvelope,
   Did,
   JsonValue,
+  RelayDeliveryResponse,
+  RelayPollResponse,
+  RelaySessionResponse,
+  RelayWorkAvailable,
   Timestamp,
 } from "../types/mpas.js";
 import { computeJsonHash } from "../utils/hash.js";
@@ -182,6 +186,16 @@ export function parseActionResponseEnvelope(value: unknown): DeliveryEnvelope<Ac
   return { ...envelope, payload: parseActionResponseAt(envelope.payload, "$.payload") };
 }
 
+/** Parses the durable acknowledgement returned by `/mpas/v1/relay/delivery`. */
+export function parseRelayDeliveryResponse(value: unknown): RelayDeliveryResponse {
+  const object = requireRecord(value, "$", "RelayDeliveryResponse must be a JSON object.");
+  requireLiteral(object.version, "1", "$.version");
+  requireLiteral(object.type, "RelayDeliveryResponse", "$.type");
+  if (object.accepted !== true) throw new RoutingValidationError("Relay delivery was not accepted.", "$.accepted");
+  const createdAt = object.createdAt === undefined ? undefined : requireTimestamp(object.createdAt, "$.createdAt");
+  return { version: "1", type: "RelayDeliveryResponse", accepted: true, ...(createdAt ? { createdAt } : {}) };
+}
+
 /**
  * Parses the acknowledgement returned after a Coordination Service durably accepts
  * a Verifier response delivery. The acknowledgement is not an Action result.
@@ -226,6 +240,28 @@ export function parseCoordinationSessionResponse(value: unknown): CoordinationSe
   };
 }
 
+/** Parses an Action Relay WebSocket session response. */
+export function parseRelaySessionResponse(value: unknown): RelaySessionResponse {
+  const object = requireRecord(value, "$", "RelaySessionResponse must be a JSON object.");
+  requireLiteral(object.version, "1", "$.version");
+  requireLiteral(object.type, "RelaySessionResponse", "$.type");
+  if (typeof object.websocketUrl !== "string") throw new RoutingValidationError("websocketUrl is required.", "$.websocketUrl");
+  const websocketUrl = new URL(object.websocketUrl);
+  if (websocketUrl.protocol !== "wss:" && websocketUrl.protocol !== "ws:") {
+    throw new RoutingValidationError("websocketUrl must use ws or wss.", "$.websocketUrl");
+  }
+  if (typeof object.ticket !== "string" || object.ticket.length === 0) {
+    throw new RoutingValidationError("ticket is required.", "$.ticket");
+  }
+  return {
+    version: "1",
+    type: "RelaySessionResponse",
+    websocketUrl: object.websocketUrl,
+    ticket: object.ticket,
+    expiresAt: requireTimestamp(object.expiresAt, "$.expiresAt"),
+  };
+}
+
 /**
  * Parses the payload-free notification that instructs a participant to poll.
  *
@@ -238,14 +274,34 @@ export function parseCoordinationWorkAvailable(value: unknown): CoordinationWork
   return { version: "1", type: "CoordinationWorkAvailable" };
 }
 
-/**
- * Parses the coordination poll response container and every returned delivery envelope.
- *
- * Enclosed delivery payloads remain opaque. Existing Approval Requests and action
- * updates are retained without reimplementing their established verification rules.
- *
- * @throws {@link RoutingValidationError} If the response container or a delivery is malformed.
- */
+/** Parses the payload-free notification that instructs a participant to poll its relay. */
+export function parseRelayWorkAvailable(value: unknown): RelayWorkAvailable {
+  const object = requireRecord(value, "$", "RelayWorkAvailable must be a JSON object.");
+  requireLiteral(object.version, "1", "$.version");
+  requireLiteral(object.type, "RelayWorkAvailable", "$.type");
+  return { version: "1", type: "RelayWorkAvailable" };
+}
+
+/** Parses a relay delivery page while leaving every enclosed payload opaque. */
+export function parseRelayPollResponse(value: unknown): RelayPollResponse {
+  const object = requireRecord(value, "$", "RelayPollResponse must be a JSON object.");
+  requireLiteral(object.version, "1", "$.version");
+  requireLiteral(object.type, "RelayPollResponse", "$.type");
+  if (!Array.isArray(object.deliveries)) {
+    throw new RoutingValidationError("deliveries must be an array.", "$.deliveries");
+  }
+  if (object.nextCursor !== undefined && typeof object.nextCursor !== "string") {
+    throw new RoutingValidationError("nextCursor must be a string.", "$.nextCursor");
+  }
+  return {
+    version: "1",
+    type: "RelayPollResponse",
+    deliveries: object.deliveries.map(parseDeliveryEnvelope),
+    ...(typeof object.nextCursor === "string" ? { nextCursor: object.nextCursor } : {}),
+  };
+}
+
+/** Parses the workflow-only response returned by the Coordination Service poll. */
 export function parseCoordinationPollResponse(value: unknown): CoordinationPollResponse {
   const object = requireRecord(value, "$", "CoordinationPollResponse must be a JSON object.");
   requireLiteral(object.version, "1", "$.version");
@@ -256,21 +312,17 @@ export function parseCoordinationPollResponse(value: unknown): CoordinationPollR
   if (object.actionUpdates !== undefined && !Array.isArray(object.actionUpdates)) {
     throw new RoutingValidationError("actionUpdates must be an array when present.", "$.actionUpdates");
   }
-  const deliveries = object.deliveries === undefined
-    ? undefined
-    : Array.isArray(object.deliveries)
-      ? object.deliveries.map(parseDeliveryEnvelope)
-      : (() => { throw new RoutingValidationError("deliveries must be an array.", "$.deliveries"); })();
-  if (object.nextCursor !== undefined && typeof object.nextCursor !== "string") {
-    throw new RoutingValidationError("nextCursor must be a string.", "$.nextCursor");
+  if (object.deliveries !== undefined || object.nextCursor !== undefined) {
+    throw new RoutingValidationError(
+      "Coordination poll responses must not contain relay deliveries or relay cursors.",
+      object.deliveries !== undefined ? "$.deliveries" : "$.nextCursor",
+    );
   }
   return {
     version: "1",
     type: "CoordinationPollResponse",
     approvalRequests: object.approvalRequests as CoordinationPollResponse["approvalRequests"],
     actionUpdates: (object.actionUpdates ?? []) as CoordinationPollResponse["actionUpdates"],
-    ...(deliveries !== undefined ? { deliveries } : {}),
-    ...(typeof object.nextCursor === "string" ? { nextCursor: object.nextCursor } : {}),
   };
 }
 

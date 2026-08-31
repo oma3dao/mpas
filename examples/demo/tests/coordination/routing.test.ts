@@ -18,7 +18,7 @@ afterEach(async () => {
   apps.clear();
 });
 
-describe("Coordination Service routing", () => {
+describe("co-located Action Relay and Coordination Service", () => {
   it("relays a multi-recipient Action to the configured Verifier and returns its unchanged response", async () => {
     const pkg = await actionPackage();
     const proposer = pkg.actionEnvelope.proposer.did;
@@ -31,10 +31,10 @@ describe("Coordination Service routing", () => {
     const store = new CoordinationStore();
     const app = createApp(store);
 
-    const pending = app.inject({ method: "POST", url: "/mpas/v1/action", payload: envelope });
+    const pending = app.inject({ method: "POST", url: "/mpas/v1/verifier/action", payload: envelope });
     await new Promise((resolve) => setImmediate(resolve));
-    const verifierPoll = await poll(app, verifier);
-    const observerPoll = await poll(app, observer);
+    const verifierPoll = await relayPoll(app, verifier);
+    const observerPoll = await relayPoll(app, observer);
     expect(verifierPoll.json().deliveries).toEqual([envelope]);
     expect(observerPoll.json().deliveries).toEqual([envelope]);
 
@@ -49,7 +49,7 @@ describe("Coordination Service routing", () => {
     const responseEnvelope = buildDeliveryEnvelope({ sender: verifier, recipients: [proposer], payload: response });
     const wrongAlgorithm = await app.inject({
       method: "POST",
-      url: "/mpas/v1/coordination/delivery",
+      url: "/mpas/v1/relay/delivery",
       payload: {
         ...responseEnvelope,
         payload: { ...response, actionEnvelopeHash: { ...response.actionEnvelopeHash!, alg: "sha-512" } },
@@ -59,29 +59,30 @@ describe("Coordination Service routing", () => {
     expect(wrongAlgorithm.json().error.code).toBe("ACTION_HASH_MISMATCH");
     const delivered = await app.inject({
       method: "POST",
-      url: "/mpas/v1/coordination/delivery",
+      url: "/mpas/v1/relay/delivery",
       payload: responseEnvelope,
     });
 
     expect(delivered.statusCode).toBe(200);
-    expect(delivered.json()).toMatchObject({ type: "CoordinationDeliveryResponse", accepted: true });
+    expect(delivered.json()).toMatchObject({ type: "RelayDeliveryResponse", accepted: true });
     const actionResult = await pending;
     expect(actionResult.statusCode).toBe(200);
     expect(actionResult.json()).toEqual(response);
-    expect((await poll(app, proposer)).json().deliveries).toContainEqual(responseEnvelope);
+    expect((await relayPoll(app, proposer)).json().deliveries).toContainEqual(responseEnvelope);
+    expect((await poll(app, proposer)).json().deliveries).toBeUndefined();
     expect(store.routingAudit()).toMatchObject([
       { purpose: "initialAction", recipients: [verifier, observer], designatedVerifierDid: verifier },
       { purpose: "actionResponse", recipients: [proposer], designatedVerifierDid: verifier },
     ]);
   });
 
-  it("delivers a Verifier response to requirements-authorized Maintainers and rejects unauthorized copies", async () => {
+  it("keeps a requirements response relay-only until the client explicitly creates a workflow", async () => {
     const pkg = await actionPackage();
     const proposer = pkg.actionEnvelope.proposer.did;
     const app = createApp();
     const pending = app.inject({
       method: "POST",
-      url: "/mpas/v1/action",
+      url: "/mpas/v1/verifier/action",
       payload: buildDeliveryEnvelope({
         sender: proposer,
         recipients: [verifier],
@@ -110,28 +111,44 @@ describe("Coordination Service routing", () => {
 
     const unauthorized = await app.inject({
       method: "POST",
-      url: "/mpas/v1/coordination/delivery",
+      url: "/mpas/v1/relay/delivery",
       payload: buildDeliveryEnvelope({ sender: verifier, recipients: [proposer, unknown], payload: response }),
     });
     expect(unauthorized.statusCode).toBe(403);
     expect(unauthorized.json().error.code).toBe("permission_denied");
 
-    const responseEnvelope = buildDeliveryEnvelope({
-      sender: verifier,
-      recipients: [proposer, maintainer],
-      payload: response,
+    const signerCopy = await app.inject({
+      method: "POST",
+      url: "/mpas/v1/relay/delivery",
+      payload: buildDeliveryEnvelope({ sender: verifier, recipients: [proposer, maintainer], payload: response }),
     });
+    expect(signerCopy.statusCode).toBe(403);
+
+    const responseEnvelope = buildDeliveryEnvelope({ sender: verifier, recipients: [proposer], payload: response });
     const delivered = await app.inject({
       method: "POST",
-      url: "/mpas/v1/coordination/delivery",
+      url: "/mpas/v1/relay/delivery",
       payload: responseEnvelope,
     });
 
     expect(delivered.statusCode).toBe(200);
     expect((await pending).json()).toEqual(response);
-    const maintainerPoll = (await poll(app, maintainer)).json();
-    expect(maintainerPoll.deliveries).toContainEqual(responseEnvelope);
-    expect(maintainerPoll.approvalRequests).toHaveLength(1);
+    expect((await relayPoll(app, maintainer)).json().deliveries).toEqual([]);
+    expect((await poll(app, maintainer)).json().approvalRequests).toHaveLength(0);
+
+    const workflow = await app.inject({
+      method: "POST",
+      url: "/mpas/v1/coordination/workflow",
+      payload: {
+        version: "1",
+        type: "CoordinationActionRequest",
+        actionPackage: pkg,
+        authorizationRequirements: response.authorizationRequirements,
+      },
+    });
+    expect(workflow.statusCode).toBe(201);
+    expect((await poll(app, maintainer)).json().approvalRequests).toHaveLength(1);
+    expect((await relayPoll(app, maintainer)).json().deliveries).toEqual([]);
   });
 
   it("rejects bare relay submission, unauthorized recipients, and non-ActionResponse delivery", async () => {
@@ -142,12 +159,12 @@ describe("Coordination Service routing", () => {
     const bare = await app.inject({ method: "POST", url: "/mpas/v1/action", payload: actionRequest(pkg) });
     const unauthorized = await app.inject({
       method: "POST",
-      url: "/mpas/v1/action",
+      url: "/mpas/v1/verifier/action",
       payload: buildDeliveryEnvelope({ sender: proposer, recipients: [verifier, unknown], payload: actionRequest(pkg) }),
     });
     const wrongPayload = await app.inject({
       method: "POST",
-      url: "/mpas/v1/coordination/delivery",
+      url: "/mpas/v1/relay/delivery",
       payload: buildDeliveryEnvelope({ sender: verifier, recipients: [proposer], payload: actionRequest(pkg) }),
     });
 
@@ -166,14 +183,14 @@ describe("Coordination Service routing", () => {
     const app = createApp();
     const response = await app.inject({
       method: "POST",
-      url: "/mpas/v1/action",
+      url: "/mpas/v1/verifier/action",
       headers: { "idempotency-key": "different" },
       payload: envelope,
     });
 
     expect(response.statusCode).toBe(400);
     expect(response.json().error.code).toBe("idempotency_mismatch");
-    expect((await poll(app, verifier)).json().deliveries).toBeUndefined();
+    expect((await relayPoll(app, verifier)).json().deliveries).toEqual([]);
   });
 
   it("rejects an already expired envelope without creating a delivery", async () => {
@@ -193,11 +210,11 @@ describe("Coordination Service routing", () => {
 
     expect(response.statusCode).toBe(400);
     expect(response.json().error.code).toBe("INVALID_REQUEST");
-    expect((await poll(app, verifier)).json().deliveries).toBeUndefined();
+    expect((await relayPoll(app, verifier)).json().deliveries).toEqual([]);
 
     const expiredResponse = await app.inject({
       method: "POST",
-      url: "/mpas/v1/coordination/delivery",
+      url: "/mpas/v1/relay/delivery",
       payload: buildDeliveryEnvelope({
         sender: verifier,
         recipients: [pkg.actionEnvelope.proposer.did],
@@ -260,7 +277,7 @@ describe("Coordination Service routing", () => {
       };
       const rejected = await app.inject({
         method: "POST",
-        url: "/mpas/v1/coordination/delivery",
+        url: "/mpas/v1/relay/delivery",
         payload: buildDeliveryEnvelope({ sender: verifier, recipients: [proposer], payload: response }),
       });
       expect(rejected.statusCode).toBe(400);
@@ -268,7 +285,7 @@ describe("Coordination Service routing", () => {
     }
 
     expect((await poll(app, maintainer)).json().approvalRequests).toHaveLength(0);
-    expect((await poll(app, proposer)).json().deliveries).toBeUndefined();
+    expect((await relayPoll(app, proposer)).json().deliveries).toEqual([]);
     expect((await pending).statusCode).toBe(503);
   });
 
@@ -285,10 +302,10 @@ describe("Coordination Service routing", () => {
       payload: actionRequest(pkg),
     });
 
-    const timedOut = await app.inject({ method: "POST", url: "/mpas/v1/action", payload: firstEnvelope });
+    const timedOut = await app.inject({ method: "POST", url: "/mpas/v1/verifier/action", payload: firstEnvelope });
     expect(timedOut.statusCode).toBe(503);
-    expect(timedOut.json().error).toMatchObject({ code: "relay_timeout", retryable: true });
-    expect((await poll(app, verifier)).json().deliveries).toHaveLength(1);
+    expect(timedOut.json().error).toMatchObject({ code: "timeout", retryable: true });
+    expect((await relayPoll(app, verifier)).json().deliveries).toHaveLength(1);
 
     const retryEnvelope = {
       ...firstEnvelope,
@@ -306,12 +323,12 @@ describe("Coordination Service routing", () => {
     };
     await app.inject({
       method: "POST",
-      url: "/mpas/v1/coordination/delivery",
+      url: "/mpas/v1/relay/delivery",
       payload: buildDeliveryEnvelope({ sender: verifier, recipients: [proposer], payload: response }),
     });
 
     expect((await retry).json()).toEqual(response);
-    expect((await poll(app, verifier)).json().deliveries).toHaveLength(1);
+    expect((await relayPoll(app, verifier)).json().deliveries).toHaveLength(1);
   });
 
   it("rejects Action Package hash-binding failures before creating deliveries", async () => {
@@ -331,7 +348,7 @@ describe("Coordination Service routing", () => {
       const app = createApp();
       const response = await app.inject({
         method: "POST",
-        url: "/mpas/v1/action",
+        url: "/mpas/v1/verifier/action",
         payload: buildDeliveryEnvelope({
           sender: pkg.actionEnvelope.proposer.did,
           recipients: [verifier],
@@ -340,7 +357,7 @@ describe("Coordination Service routing", () => {
       });
       expect(response.statusCode).toBe(400);
       expect(response.json().error.code).toBe("artifact_hash_mismatch");
-      expect((await poll(app, verifier)).json().deliveries).toBeUndefined();
+      expect((await relayPoll(app, verifier)).json().deliveries).toEqual([]);
     }
   });
 
@@ -353,18 +370,18 @@ describe("Coordination Service routing", () => {
       payload: actionRequest(pkg),
     });
     const app = createApp();
-    const first = app.inject({ method: "POST", url: "/mpas/v1/action", payload: envelope });
+    const first = app.inject({ method: "POST", url: "/mpas/v1/verifier/action", payload: envelope });
     const retry = app.inject({ method: "POST", url: "/mpas/v1/action", payload: envelope });
     await new Promise((resolve) => setImmediate(resolve));
 
     const conflict = await app.inject({
       method: "POST",
-      url: "/mpas/v1/action",
+      url: "/mpas/v1/verifier/action",
       payload: { ...envelope, recipients: [verifier, observer] },
     });
     expect(conflict.statusCode).toBe(409);
     expect(conflict.json().error.code).toBe("idempotency_conflict");
-    expect((await poll(app, verifier)).json().deliveries).toHaveLength(1);
+    expect((await relayPoll(app, verifier)).json().deliveries).toHaveLength(1);
 
     const response: ActionResponse = {
       version: "1",
@@ -412,14 +429,14 @@ describe("Coordination Service routing", () => {
       }), verifier);
     }
 
-    const first = store.poll(verifier);
+    const first = store.pollDeliveries(verifier);
     expect(first.deliveries).toHaveLength(100);
     expect(first.nextCursor).toBeDefined();
-    const second = store.poll(verifier, first.nextCursor);
+    const second = store.pollDeliveries(verifier, first.nextCursor);
     expect(second.deliveries).toHaveLength(1);
     expect(second.nextCursor).toBeDefined();
-    const caughtUp = store.poll(verifier, second.nextCursor);
-    expect(caughtUp.deliveries).toBeUndefined();
+    const caughtUp = store.pollDeliveries(verifier, second.nextCursor);
+    expect(caughtUp.deliveries).toEqual([]);
     expect(caughtUp.nextCursor).toBeUndefined();
   });
 });
@@ -438,6 +455,14 @@ function createApp(store?: CoordinationStore, relayResponseWaitMs?: number) {
 
 function poll(app: ReturnType<typeof createCoordinationApiServer>, did: Did) {
   return app.inject({ method: "POST", url: "/mpas/v1/coordination/poll", payload: { version: "1", type: "CoordinationPollRequest", did } });
+}
+
+function relayPoll(app: ReturnType<typeof createCoordinationApiServer>, did: Did, cursor?: string) {
+  return app.inject({
+    method: "POST",
+    url: "/mpas/v1/relay/poll",
+    payload: { version: "1", type: "RelayPollRequest", did, ...(cursor !== undefined ? { cursor } : {}) },
+  });
 }
 
 function actionRequest(pkg: ActionPackage): ActionRequest {

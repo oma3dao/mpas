@@ -352,7 +352,7 @@ Rules:
 - When immutable Signer decisions make the requirements unreachable, state becomes `rejected`, the update includes `rejectedAt`, and no further approval request is returned.
 - A DID that is both a proposer on one action and an eligible signer on another receives both in the same response.
 - The proposer can take the `actionPackage` from an action update and submit it directly to the Credential Adapter without further assembly.
-- The service is polling-first and also implements the optional notification-only WebSocket. Approval Requests and action updates are returned in full. Addressed deliveries are capped per page, and every non-empty delivery page includes a delivery-position `nextCursor` checkpoint (HTTP Profile §8.5).
+- The Coordination Service is polling-first and also implements its optional notification-only WebSocket. Coordination polling returns Approval Requests and action updates in full and never returns relay deliveries or relay cursors. The independently exposed Action Relay uses `/relay/poll` and its own notification session and WebSocket for addressed deliveries (HTTP Profile §§8.4 and 8.5).
 - On each poll, the service checks `actionEnvelope.expiresAt` for all relevant actions and transitions expired actions to `expired` state before computing the response.
 
 ### 5.4 Submit Approval

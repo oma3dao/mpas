@@ -71,7 +71,7 @@ describe("runGenerate", () => {
     });
     expect(bridgePackage.license).toBe("Apache-2.0");
     expect(bridgePackage.scripts.build).toContain("copyFileSync('src/tools.json', 'dist/tools.json')");
-    expect(bridgePackage.dependencies["@oma3/mpas"]).toBe("0.1.0-alpha.7");
+    expect(bridgePackage.dependencies["@oma3/mpas"]).toBe("0.1.0-alpha.10");
     expect(bridgePackage.dependencies["@modelcontextprotocol/server"]).toBe("2.0.0");
     expect(bridgePackage.dependencies["@modelcontextprotocol/sdk"]).toBeUndefined();
   });

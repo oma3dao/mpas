@@ -107,7 +107,7 @@ Update `specs/mpas-profile-http.md` before changing TypeScript:
 - Preserve authenticated `AuthorizationRequirements` in the Verifier response while keeping later workflow creation explicit and independently authorized by the Coordination Service.
 - Extend the direct Proposer-to-Verifier lifecycle with the same logical Action contract through an Action Relay. Keep Coordination Service workflow creation and completed-package retrieval as explicit client operations.
 - Add `idempotency_mismatch` and `idempotency_conflict` to the error table where needed.
-- Add `relay_timeout` as the retryable transport result of the bounded Action Relay wait.
+- Add `timeout` as the retryable transport result of a bounded wait, returned by the Action Relay and available to a directly reachable Verifier.
 - Define rejection of already-expired Delivery Envelopes, recipient-list disclosure, a recommended finite recipient cap, delivery-only cursor semantics, and optional duplicate response-delivery deduplication.
 - Define first-decision-final coordination behavior and recommended unreachable-threshold detection.
 
@@ -332,7 +332,7 @@ An idempotent retry of such a request uses the same `idempotencyKey` and a new R
 - Expiration and existing cursor handling.
 - No relay hook that creates a workflow or submits a ready package. The existing Coordination Service returns `readyForResubmission` to the Proposer, which controls the next Action submission.
 - Pending-request and stored-result handling that completes the relayed `/mpas/v1/verifier/action` call with the first authenticated Verifier `ActionResponse`.
-- A deployment-configurable bounded HTTP wait returning retryable `503 relay_timeout` while retaining the pending relay record.
+- A deployment-configurable bounded HTTP wait returning retryable `503 timeout` while retaining the pending relay record.
 - Capped delivery pages whose cursor is an acknowledgement checkpoint for delivery position only.
 - Threshold-impossibility detection that moves the non-authoritative workflow to `rejected` as soon as immutable decisions make it unreachable.
 - An audit record for sender provenance, requested and decided recipients, authorization scope, time, and payload hash or MPAS reference.
@@ -345,7 +345,7 @@ An idempotent retry of such a request uses the same `idempotencyKey` and a new R
 - A direct Verifier returns its existing `ActionResponse`; an Action Relay keeps the request pending after durable relay and delivery commit and returns the first authenticated `ActionResponse` from the recorded designated Verifier.
 - An Action Relay never synthesizes `ActionResponse.result: pending` merely because it accepted or delivered the envelope.
 - If the original connection ends, an equivalent idempotent retry attaches to the existing relayed Action and waits for or returns its stored first Verifier response.
-- If the relay wait bound expires, the endpoint returns `503 relay_timeout` without synthesizing an Action result or deleting the relayed Action and deliveries.
+- If the relay wait bound expires, the endpoint returns `503 timeout` without synthesizing an Action result or deleting the relayed Action and deliveries.
 - Initial Verifier designation comes from trusted endpoint or Action Relay deployment configuration, not from Proposer-authored fields or recipient position.
 - The designated Verifier DID recorded for the relayed Action must equal the authenticated `ActionResponse.verifier.did`.
 - A Verifier response addresses the Proposer and may also address relay-administrator-authorized recipients.
@@ -447,7 +447,7 @@ An idempotent retry of such a request uses the same `idempotencyKey` and a new R
 - Delivery authorization does not modify `eligibleSigners` or threshold calculations.
 - A relayed `additionalApprovalsRequired` response creates no workflow until the client calls `/coordination/workflow`.
 - `readyForResubmission` creates no relay delivery; completed-package submission is a separate client-controlled Action mutation with a new idempotency key.
-- Relay and coordination polling, cursors, sessions, and notification types remain isolated when the services use different origins and stores.
+- Relay and coordination polling, sessions, and notification types remain isolated, and relay delivery cursors never enter coordination responses, when the services use different origins and stores.
 - Multi-recipient independent retrieval.
 - Cursor retry and duplicate delivery.
 - Expiration filtering.
@@ -480,11 +480,11 @@ An idempotent retry of such a request uses the same `idempotencyKey` and a new R
 | Proposer-relayed Authorization Requirements are not signed | Use them as authority only with authenticated Verifier provenance; otherwise require administrator confirmation of recipients. |
 | No Authorization Requirements exist for initial Verifier routing | Resolve one designated Verifier from trusted deployment configuration, require that DID to occur in the envelope recipients, and record it independently of other recipients. |
 | Administrator additions may be misconfigured | Keep them scoped by delivery purpose, audited, and distinct from Verifier-produced Signer eligibility. |
-| Optional poll field could affect strict decoders | Make `deliveries` optional and add compatibility fixtures before implementation. |
+| Reusing coordination poll for relay deliveries would couple otherwise independent services and strict decoders | Keep relay delivery polling on `/relay/poll`; coordination poll remains workflow-only. |
 
 ## 11. Non-Goals
 
-- A new delivery-poll endpoint.
+- A generic delivery-poll endpoint shared by relay and coordination.
 - A requirement for Verifiers to expose an inbound relay response-delivery endpoint; Verifiers submit outbound responses to the Action Relay.
 - Arbitrary generic payload submission through the Action Relay delivery endpoint; the initial use is Verifier `ActionResponse` return.
 - Treating an authorized delivery recipient as an intrinsic or protocol-enforced Verifier role.

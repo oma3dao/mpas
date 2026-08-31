@@ -235,8 +235,6 @@ export interface CoordinationPollRequest {
   did: Did;
   /** Signed-request audience added by the HTTP client. */
   audience?: string;
-  /** Optional continuation cursor from a previous poll response. */
-  cursor?: string;
 }
 
 export interface CoordinationApprovalSubmission {
@@ -303,10 +301,6 @@ export interface CoordinationPollResponse {
   type: "CoordinationPollResponse";
   approvalRequests: ApprovalRequest[];
   actionUpdates: CoordinationActionUpdate[];
-  /** Complete envelopes independently addressed to the authenticated poll DID. */
-  deliveries?: DeliveryEnvelope[];
-  /** Delivery-position checkpoint to persist only after the current page is accepted. */
-  nextCursor?: string;
 }
 
 /**
@@ -332,7 +326,56 @@ export interface DeliveryEnvelope<TPayload = JsonValue> {
   payload: TPayload;
 }
 
+/** Signed request for addressed messages held by an Action Relay. */
+export interface RelayPollRequest {
+  version: MpasVersion;
+  type: "RelayPollRequest";
+  did: Did;
+  cursor?: string;
+  audience?: string;
+}
+
+/** Page of complete Delivery Envelopes addressed to the authenticated DID. */
+export interface RelayPollResponse {
+  version: MpasVersion;
+  type: "RelayPollResponse";
+  deliveries: DeliveryEnvelope[];
+  /** Persist only after every delivery in this page has been durably accepted. */
+  nextCursor?: string;
+}
+
 /** Durable-acceptance acknowledgement for a Verifier response delivery. */
+export interface RelayDeliveryResponse {
+  version: MpasVersion;
+  type: "RelayDeliveryResponse";
+  accepted: true;
+  createdAt?: Timestamp;
+}
+
+/** Signed request for a one-use Action Relay notification ticket. */
+export interface RelaySessionRequest {
+  version: MpasVersion;
+  type: "RelaySessionRequest";
+  did: Did;
+  audience?: string;
+}
+
+/** Connection parameters for one Action Relay WebSocket upgrade. */
+export interface RelaySessionResponse {
+  version: MpasVersion;
+  type: "RelaySessionResponse";
+  websocketUrl: string;
+  ticket: string;
+  expiresAt: Timestamp;
+}
+
+/** Payload-free signal that instructs a participant to poll its Action Relay. */
+export interface RelayWorkAvailable {
+  version: MpasVersion;
+  type: "RelayWorkAvailable";
+}
+
+/** @deprecated Use RelayDeliveryResponse. */
 export interface CoordinationDeliveryResponse {
   version: MpasVersion;
   type: "CoordinationDeliveryResponse";

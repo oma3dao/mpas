@@ -45,9 +45,10 @@ intentionally exposed. The credential store and key files stay on that remote
 host; the proposer account has no filesystem access to them.
 
 In either topology, the proposer bridge connects **out** to the adapter over
-HTTP — the adapter does not need to reach the proposer. The Coordination Service
-follows the same rule: it must be reachable by both the proposer bridge and the
-maintainer signer server, but it holds no secrets and can run anywhere.
+HTTP — the adapter does not need to reach the proposer. An Action Relay follows
+the same outbound-client pattern for hosted Verifiers. The independent Coordination
+Service must be reachable by both the proposer bridge and maintainer signer server;
+neither service holds application credentials and either can run elsewhere.
 
 ---
 
@@ -382,7 +383,7 @@ to proceed. If the OMATrust API is unreachable you will see a warning — this
 means provenance evidence could not be loaded, not that the content hash
 failed. Review the plugin carefully before answering `y`.
 
-### Receive relayed Actions from a hosted Coordination Service
+### Receive relayed Actions from a hosted Action Relay
 
 Add the hosted service URL when this Credential Adapter acts as its Verifier:
 
@@ -391,26 +392,30 @@ node dist/cli/index.js adapter start \
   --config-dir "$MPAS_HOME/config" \
   --credential-dir "$MPAS_HOME/credentials" \
   --adapter-key "$MPAS_HOME/keys/adapter-key.json" \
-  --verifier-coordination-url https://api.signerset.com
+  --verifier-relay-url https://api.signerset.com
 ```
 
-The adapter uses its adapter key for RFC 9421 authentication. The WebSocket is notification-only: the adapter polls once when it connects, polls after each notification, and performs a 30-second recovery poll if no notification arrives. It processes addressed `DeliveryEnvelope<ActionRequest>` messages through the same Verifier path as direct submissions, then returns `DeliveryEnvelope<ActionResponse>` to the Proposer and any eligible Maintainers named by authenticated Authorization Requirements.
+The adapter uses its adapter key for RFC 9421 authentication. The WebSocket is notification-only: the adapter polls once when it connects, polls after each notification, and performs a 30-second recovery poll if no notification arrives. It processes addressed `DeliveryEnvelope<ActionRequest>` messages through the same Verifier path as direct submissions, then returns `DeliveryEnvelope<ActionResponse>` to the Proposer through the Action Relay.
 
 `adapter start` runs only the Credential Adapter. It does not bind the local
 Coordination Service port. Use `coordination start` for that service alone or
 `daemon start` when a local deployment intentionally needs both processes.
 
 The durable cursor and cached response envelopes default to
-`~/.mpas/journal/verifier-coordination.json`. Override that path with
-`--verifier-coordination-state`; override the recovery interval with
+`~/.mpas/journal/verifier-relay.json`. An existing legacy
+`verifier-coordination.json` file is still discovered and migrated. Override the path with
+`--verifier-relay-state`; override the recovery interval with
 `--verifier-poll-interval-ms`. The corresponding environment variables are
-`MPAS_VERIFIER_COORDINATION_URL`, `MPAS_VERIFIER_COORDINATION_STATE`, and
+`MPAS_VERIFIER_RELAY_URL`, `MPAS_VERIFIER_RELAY_STATE`, and
 `MPAS_VERIFIER_POLL_INTERVAL_MS`.
+
+The former `MPAS_VERIFIER_COORDINATION_*` names and
+`--verifier-coordination-*` flags remain compatibility aliases.
 
 Malformed envelopes and payload types other than `ActionRequest` fail closed.
 The adapter leaves the cursor on the invalid delivery, stops its recovery timer,
 and logs a `fatal_error`; an operator must remove or quarantine that delivery at
-the Coordination Service before restarting. This prevents silently discarding a
+the Action Relay before restarting. This prevents silently discarding a
 future message type that the installed Verifier does not understand.
 
 ---

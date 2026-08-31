@@ -67,7 +67,7 @@ describe("Coordination Service clients", () => {
         sendJson(response, pollResponse);
         return;
       }
-      if (request.url === "/mpas/v1/coordination/action-cancel") {
+      if (request.url === "/mpas/v1/coordination/workflow-cancel") {
         sendJson(response, {
           version: "1",
           type: "CoordinationActionCancelResponse",
@@ -111,7 +111,7 @@ describe("Coordination Service clients", () => {
         "/mpas/v1/coordination/workflow",
         "/mpas/v1/coordination/poll",
         "/mpas/v1/coordination/approval",
-        "/mpas/v1/coordination/action-cancel",
+        "/mpas/v1/coordination/workflow-cancel",
       ]);
       expect(
         requests.every(
@@ -170,7 +170,7 @@ describe("Coordination Service clients", () => {
         sendJson(response, pollResponse);
       } else if (endpointPath === "/mpas/v1/coordination/approval") {
         sendJson(response, { version: "1", type: "CoordinationApprovalSubmissionResponse", accepted: true });
-      } else if (endpointPath === "/mpas/v1/coordination/action-cancel") {
+      } else if (endpointPath === "/mpas/v1/coordination/workflow-cancel") {
         sendJson(response, {
           version: "1",
           type: "CoordinationActionCancelResponse",
@@ -196,7 +196,7 @@ describe("Coordination Service clients", () => {
         `${prefix}/mpas/v1/coordination/action`,
         `${prefix}/mpas/v1/coordination/poll`,
         `${prefix}/mpas/v1/coordination/approval`,
-        `${prefix}/mpas/v1/coordination/action-cancel`,
+        `${prefix}/mpas/v1/coordination/workflow-cancel`,
       ]);
     } finally {
       await server.close();

@@ -1,4 +1,4 @@
-import Fastify, { type FastifyInstance, type FastifyReply } from "fastify";
+import Fastify, { type FastifyInstance, type FastifyReply, type RouteHandlerMethod } from "fastify";
 import type { JWK } from "jose";
 import { parseActionRequest, parseActionRequestEnvelope, strictJsonParse, validateMcpPayloadStructure } from "@oma3/mpas";
 import { buildAuthorizationRequirements } from "../core/auth-requirements-builder.js";
@@ -85,14 +85,15 @@ export function createAdapterApiServer(options: HttpEndpointOptions): FastifyIns
     })),
   }));
 
-  app.post("/mpas/v1/action", async (request, reply) => {
+  const actionHandler: RouteHandlerMethod = async (request, reply) => {
+    const endpoint = request.routeOptions.url;
     // The submission body is an ActionRequest wrapping the Action Package.
     const actionPackage = unwrapActionPackage(request.body, options.adapterDid);
 
     // Cannot parse far enough to compute actionEnvelopeHash -> 400 MpasHttpError.
     const parseResult = parseActionPackage(actionPackage);
     if (!parseResult.ok) {
-      trace.emit("incoming_action", { endpoint: "/mpas/v1/action", result: "parse_error", error: parseResult.error.message });
+      trace.emit("incoming_action", { endpoint, result: "parse_error", error: parseResult.error.message });
       return mpasHttpError(reply, 400, "artifact_malformed", parseResult.error.message);
     }
 
@@ -102,7 +103,7 @@ export function createAdapterApiServer(options: HttpEndpointOptions): FastifyIns
 
     trace.emit("incoming_action", {
       actionId,
-      endpoint: "/mpas/v1/action",
+      endpoint,
       did: pkg.actionEnvelope.proposer.did,
       applicationDid: pkg.actionEnvelope.target.applicationDid,
       actionEnvelopeHash: envelopeHash.value,
@@ -388,7 +389,9 @@ export function createAdapterApiServer(options: HttpEndpointOptions): FastifyIns
     // changing the public rule that a resolved HTTP replay is rejected.
     ledger.resolve(pkg.actionEnvelope.actionId, classified.result, response);
     return response;
-  });
+  };
+  app.post("/mpas/v1/verifier/action", actionHandler);
+  app.post("/mpas/v1/action", actionHandler);
 
   return app;
 }

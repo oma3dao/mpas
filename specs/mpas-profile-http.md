@@ -345,7 +345,7 @@ This is a deterministic MPAS protocol rejection, not an HTTP authorization failu
 |            `400 Bad Request` | Invalid HTTP request shape, invalid JSON, missing required HTTP-level fields.                                |
 |           `401 Unauthorized` | HTTP authentication missing or invalid.                                                                      |
 |              `403 Forbidden` | Authenticated caller is not allowed to use the endpoint or see the requested coordination state.             |
-|              `404 Not Found` | Requested coordination object, action, approval request, or cursor was not found or not visible to caller.   |
+|              `404 Not Found` | Requested coordination object, action, approval request, or relay cursor was not found or not visible to caller. |
 |               `409 Conflict` | Idempotency conflict, duplicate submission conflict, or same `actionId` with different `actionEnvelopeHash`. |
 |                   `410 Gone` | Resource expired or no longer available under retention policy.                                              |
 | `415 Unsupported Media Type` | Unsupported content type.                                                                                    |
@@ -1173,9 +1173,11 @@ The participant uses `websocketUrl` exactly as returned and supplies `Authorizat
 During migration, an implementation **MAY**:
 
 - accept `/mpas/v1/action` as the §6 alias;
-- accept `/mpas/v1/coordination/delivery` as an alias of `/mpas/v1/relay/delivery`;
-- include optional `deliveries` in `/mpas/v1/coordination/poll`; and
-- use the coordination session and WebSocket to notify either workflow or relay work.
+- accept `/mpas/v1/coordination/delivery` as an alias of `/mpas/v1/relay/delivery`.
+
+These aliases do not combine the services. Relay deliveries are available only from
+`/mpas/v1/relay/poll`, and relay notifications use only the relay session and
+WebSocket. Coordination polling and notifications contain workflow work only.
 
 Each compatibility binding **MUST** share the canonical operation's storage, authorization, correlation, cursor, nonce, and idempotency behavior. It **MUST NOT** create a second mutation. New clients use the separated endpoints.
 
@@ -1290,7 +1292,6 @@ Fields:
 | `type`    |   Yes    | MUST be `CoordinationPollRequest`.                          |
 | `did`      |   Yes    | DID of the participant polling for work or status updates. Required in request schema v1. On a signed request, signature `keyid` **MUST** equal this field before processing or the server rejects with `403`; the response is scoped to that agreed DID. |
 | `audience` | Conditional | Configured service URL origin (§4.6.3). Required whenever the request carries an MPAS signature; MAY be omitted only on an unsigned request to an unenforcing service. |
-| `cursor`   | Optional | Reserved compatibility field. Canonical relay delivery pagination uses `RelayPollRequest.cursor`. |
 
 Response:
 
@@ -1366,7 +1367,7 @@ Rules:
 - When state is `rejected`, the action update includes `rejectedAt`. This records when the Coordination Service's non-authoritative workflow view became rejected.
 - An action update MUST NOT contain an `expiredAt` field. When and how an implementation marks a workflow expired is internal bookkeeping and is not part of the wire protocol.
 - The existing `approvalRequests` and `actionUpdates` arrays may be empty.
-Addressed Delivery Envelopes are retrieved from `/mpas/v1/relay/poll`, not this workflow poll. A migration implementation may continue returning the former optional `deliveries` field as described in §8.3.3; new clients do not depend on it.
+Addressed Delivery Envelopes are retrieved from `/mpas/v1/relay/poll`, never from this workflow poll.
 
 ### 8.6 POST /mpas/v1/coordination/approval
 
@@ -1749,7 +1750,7 @@ A conforming Action Relay **MUST** support:
 - independent recipient obligations and delivery-position cursor checkpoints; and
 - exact response correlation without workflow creation.
 
-During migration it **SHOULD** support the compatibility bindings in §8.3.3.
+During migration it **SHOULD** support the compatibility endpoint aliases in §8.3.3.
 
 ### 11.4 Coordination Service Conformance
 

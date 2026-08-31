@@ -46,11 +46,12 @@ Evaluate JSON policy configurations per the MPAS Policy Profile:
 - `ActionPackageBuilder` — construct Action Packages from tool calls
 - `ApprovalBuilder` — construct and sign Approval objects
 
-### Protocol Clients (`lib/action-endpoint-client.ts`, `lib/adapter-client.ts`, `lib/coordination-client.ts`)
+### Protocol Clients (`lib/action-endpoint-client.ts`, `lib/action-relay-client.ts`, `lib/adapter-client.ts`, `lib/coordination-client.ts`)
 
-- `ActionEndpointClient` — common signed client for a Verifier or Coordination Service `/action` endpoint
+- `ActionEndpointClient` — common signed client for a Verifier or Action Relay `/verifier/action` endpoint
+- `ActionRelayClient` — participant-bound relay Action submission, delivery polling, response delivery, and notifications
 - `CredentialAdapterClient` — common Action submission plus adapter-specific operations such as health checks
-- `CoordinationServiceClient` — client of Coordination Service workflow, polling, delivery, and notification endpoints
+- `CoordinationServiceClient` — client of Coordination Service workflow, approval, polling, cancellation, and notifications
 
 Deprecated `AdapterClient` and `CoordinationClient` compatibility names remain for
 the published alpha API. New integrations should use the canonical names above.
@@ -130,10 +131,10 @@ import { KeyManager } from "@oma3/mpas/key-manager";
 The routing API supports two Action topologies with the same Verifier-authored
 `ActionResponse`:
 
-| Topology | Request accepted by `/mpas/v1/action` | Client behavior |
+| Topology | Request accepted by `/mpas/v1/verifier/action` | Client behavior |
 |---|---|---|
 | Direct Verifier | Bare `ActionRequest` or `DeliveryEnvelope<ActionRequest>` | The Verifier processes and returns its response directly. |
-| Coordination Service relay | `DeliveryEnvelope<ActionRequest>` | The call waits for the designated Verifier's first response. |
+| Action Relay | `DeliveryEnvelope<ActionRequest>` | The call waits for the designated Verifier's first response. |
 
 Here, Verifier covers both a native MPAS Application and a Credential Adapter.
 Credential Adapter terminology is used only for adapter-specific behavior.
@@ -177,7 +178,7 @@ The client adds the HTTP audience to the outer request body and creates a fresh
 RFC 9421 nonce. If a transport retry is needed, reuse the same body-level
 `idempotencyKey` and Action content; the client generates a new signature and nonce.
 
-### Submit the same envelope to a Verifier or Coordination Service
+### Submit an envelope through an Action Relay
 
 Wrap that same `ActionRequest` in a Delivery Envelope when routing metadata is
 needed. The configured Verifier DID must occur in the recipient list, but it does
@@ -185,7 +186,7 @@ not have to be the only recipient:
 
 ```typescript
 import {
-  ActionEndpointClient,
+  ActionRelayClient,
   buildActionRequest,
   buildDeliveryEnvelope,
   type ActionPackage,
@@ -199,10 +200,8 @@ declare const proposerSigner: MpasRfc9421Signer;
 const verifierDid = "did:jwk:...verifier..." as Did;
 const auditRecipientDid = "did:jwk:...audit..." as Did;
 
-// This URL may identify either a directly reachable Verifier or
-// a Coordination Service Action relay.
-const actionEndpoint = new ActionEndpointClient({
-  url: "https://coordination.example.com",
+const relay = new ActionRelayClient({
+  url: "https://relay.example.com",
   signer: proposerSigner,
 });
 
@@ -215,11 +214,11 @@ const envelope = buildDeliveryEnvelope({
   recipients: [verifierDid, auditRecipientDid],
   payload: request,
 });
-const response = await actionEndpoint.submitActionRequest(envelope);
+const response = await relay.submitAction(envelope);
 ```
 
 A directly reachable Verifier is not automatically responsible for forwarding the
-envelope to the other recipients. A Coordination Service creates independent
+envelope to the other recipients. An Action Relay creates independent
 delivery obligations for every recipient authorized by its policy.
 
 For an idempotent retry, keep the same sender, recipient set, and Action content.
@@ -227,8 +226,8 @@ The envelope may be rebuilt with fresh `createdAt`, `expiresAt`, and `audience`
 metadata; those transport fields do not change equivalence. The first accepted
 envelope remains authoritative, so rebuilding does not extend its stored expiry.
 
-When a direct Verifier returns `additionalApprovalsRequired`, submit that Action
-Package and the Verifier's requirements through the established coordination workflow:
+When a direct or relayed Verifier returns `additionalApprovalsRequired`, explicitly
+submit that Action Package and the Verifier's requirements through the coordination workflow:
 
 ```typescript
 import { CoordinationServiceClient } from "@oma3/mpas";
@@ -247,8 +246,8 @@ if (response.result === "additionalApprovalsRequired" &&
 }
 ```
 
-This direct-Verifier-then-coordinate path is distinct from submitting the initial
-Action Envelope to a Coordination Service through `ActionEndpointClient`.
+The Action endpoint and Coordination Service are independent. Receiving the relay
+response never creates a workflow; the explicit call above does.
 `createApprovalWorkflow` uses `/mpas/v1/coordination/workflow`. The deprecated
 `submitAction` method uses the temporary `/mpas/v1/coordination/action` alias for
 migration compatibility; `submitActionForCoordination` is a deprecated source-level
@@ -325,7 +324,7 @@ layer, while the Verifier retains control of Action processing and response reci
 
 ```typescript
 import {
-  CoordinationServiceClient,
+  ActionRelayClient,
   KeyManager,
   buildDeliveryEnvelope,
   parseActionRequestEnvelope,
@@ -335,26 +334,25 @@ import {
 } from "@oma3/mpas";
 
 const verifierSigner = await KeyManager.fromFile("./verifier-key.json");
-const coordination = new CoordinationServiceClient({
-  url: "https://coordination.example.com",
+const relay = new ActionRelayClient({
+  url: "https://relay.example.com",
   signer: verifierSigner,
 });
 
 declare function processAction(request: ActionRequest): Promise<ActionResponse>;
-declare function responseRecipients(response: ActionResponse): Did[];
 declare function saveCursor(cursor: string | undefined): Promise<void>;
 
-const page = await coordination.pollWork();
-for (const delivery of page.deliveries ?? []) {
+const page = await relay.pollDeliveries();
+for (const delivery of page.deliveries) {
   if (typeof delivery.payload !== "object" ||
       delivery.payload === null ||
       Array.isArray(delivery.payload) ||
       delivery.payload.type !== "ActionRequest") continue;
   const incoming = parseActionRequestEnvelope(delivery);
   const response = await processAction(incoming.payload);
-  await coordination.submitActionResponseDelivery(buildDeliveryEnvelope({
+  await relay.submitActionResponse(buildDeliveryEnvelope({
     sender: verifierSigner.did,
-    recipients: responseRecipients(response),
+    recipients: [incoming.payload.actionPackage.actionEnvelope.proposer.did],
     payload: response,
   }));
 }
@@ -363,7 +361,7 @@ for (const delivery of page.deliveries ?? []) {
 await saveCursor(page.nextCursor);
 ```
 
-The Coordination Service authorizes every requested response recipient. The SDK
+The Action Relay authorizes every requested response recipient. The SDK
 does not impose deployment recipient policy.
 
 For continuous short polling, use `runPollLoop`. Its cursor advances only after
@@ -371,29 +369,29 @@ For continuous short polling, use `runPollLoop`. Its cursor advances only after
 
 ### WebSocket work notifications
 
-WebSockets carry `CoordinationWorkAvailable`, never an MPAS payload. A native or
+Action Relay WebSockets carry `RelayWorkAvailable`, never an MPAS payload. A native or
 server-side socket adapter must use the exact returned URL and apply the supplied
 `Authorization` header to the HTTP upgrade. For example, with the `ws` package:
 
 ```typescript
 import WebSocket from "ws";
 import {
-  CoordinationServiceClient,
+  ActionRelayClient,
   KeyManager,
-  type CoordinationWebSocket,
+  type ActionRelayWebSocket,
 } from "@oma3/mpas";
 
 const participantSigner = await KeyManager.fromFile("./participant-key.json");
-const coordination = new CoordinationServiceClient({
-  url: "https://coordination.example.com",
+const relay = new ActionRelayClient({
+  url: "https://relay.example.com",
   signer: participantSigner,
   webSocketFactory: ({ url, headers }) =>
-    new WebSocket(url, { headers: { ...headers } }) as unknown as CoordinationWebSocket,
+    new WebSocket(url, { headers: { ...headers } }) as unknown as ActionRelayWebSocket,
 });
 
 declare function processPollPage(page: unknown): Promise<void>;
 
-const connection = await coordination.connectNotificationsAndPoll({
+const connection = await relay.connectNotificationsAndPoll({
   onPage: async (page) => {
     await processPollPage(page);
   },
@@ -417,14 +415,17 @@ session managed by their deployment.
 |---|---|
 | `buildActionRequest` | Build and validate the inner Action HTTP message. |
 | `ActionEndpointClient.submitActionRequest` | Submit a pre-built bare or enveloped Action request. |
+| `ActionRelayClient.submitAction` | Submit a canonical enveloped Action and receive the Verifier response. |
+| `ActionRelayClient.pollDeliveries` | Retrieve relay-only Delivery Envelopes. |
+| `ActionRelayClient.submitActionResponse` | Submit a Verifier response envelope to the relay. |
 | `buildDeliveryEnvelope` | Build and validate routing metadata without interpreting payload semantics. |
 | `parseDeliveryEnvelope` | Parse only the outer routing layer. |
 | `parseActionRequest` | Parse the Action HTTP wrapper without replacing full package verification. |
 | `parseActionRequestEnvelope` | Parse an envelope followed by its `ActionRequest` payload. |
 | `parseActionResponse` | Parse the Action response discriminants. |
 | `parseActionResponseEnvelope` | Parse an envelope followed by its `ActionResponse` payload. |
-| `parseCoordinationPollResponse` | Parse a poll page and its outer delivery envelopes. |
-| `parseCoordinationDeliveryResponse` | Parse a durable-delivery acknowledgement. |
+| `parseRelayPollResponse` | Parse a relay delivery page and its outer envelopes. |
+| `parseRelayDeliveryResponse` | Parse a durable relay-delivery acknowledgement. |
 | `parseCoordinationSessionResponse` | Parse notification session connection parameters. |
 | `parseCoordinationWorkAvailable` | Parse the payload-free WebSocket frame. |
 | `hasDeliveryEnvelopeRecipient` | Test explicit recipient membership. |
@@ -434,8 +435,7 @@ session managed by their deployment.
 | `computeIdempotencyFingerprint` | Compute request equivalence without the idempotency key itself. |
 | `evaluateApprovalRequirements` | Evaluate immutable Signer decisions as satisfied, pending, or unreachable coordination state. |
 | `CoordinationServiceClient.createApprovalWorkflow` | Create an approval workflow after direct Verifier evaluation. |
-| `CoordinationServiceClient.pollWork` | Retrieve Approval Requests, action updates, and addressed deliveries. |
-| `CoordinationServiceClient.submitActionResponseDelivery` | Submit a pre-built Verifier response envelope. |
+| `CoordinationServiceClient.pollWork` | Retrieve Approval Requests and action updates. |
 | `CoordinationServiceClient.submitApproval` | Submit a body-idempotent Signer Approval. |
 | `CoordinationServiceClient.cancelAction` | Cancel a pending workflow with body idempotency. |
 | `CoordinationServiceClient.createNotificationSession` | Obtain a one-use WebSocket upgrade ticket. |
@@ -465,6 +465,7 @@ Each module is available as a direct import for consumers that want to avoid pul
 | `@oma3/mpas/coordination-service-client` | Coordination Service client |
 | `@oma3/mpas/coordination-client` | Deprecated Coordination Service client import |
 | `@oma3/mpas/action-endpoint-client` | Common Action endpoint client |
+| `@oma3/mpas/action-relay-client` | Action Relay client |
 | `@oma3/mpas/credential-adapter-client` | Credential Adapter-specific client |
 | `@oma3/mpas/routing` | Delivery Envelope and idempotency helpers |
 | `@oma3/mpas/approval-builder` | Approval construction |

@@ -176,7 +176,7 @@ A direct Verifier returns the existing `ActionResponse`, including its existing 
 
 An Action Relay MUST NOT synthesize an `ActionResponse` to acknowledge that it stored or delivered the request. It durably records the relayed Action and deliveries, keeps the `/mpas/v1/verifier/action` submission pending for a bounded deployment-selected interval, and returns the first authenticated `ActionResponse` received from the configured Verifier. The returned message is the Verifier-authored response, not a relay status object.
 
-If that wait bound expires first, the Action Relay returns `503 relay_timeout` with `retryable: true`. It retains the relayed Action and delivery records and MUST NOT synthesize an Action result. The profile does not fix the duration. An equivalent idempotent retry resumes waiting for the same stored Verifier response.
+If that wait bound expires first, the Action Relay returns `503 timeout` with `retryable: true`. It retains the relayed Action and delivery records and MUST NOT synthesize an Action result. The profile does not fix the duration. An equivalent idempotent retry resumes waiting for the same stored Verifier response.
 
 If the Proposer's HTTP connection ends first, the durable relayed Action continues. An equivalent retry under Section 9 waits for or returns the same stored Verifier response. A WebSocket notification normally reduces the time until the Verifier polls, but notification delivery is not required for correctness. This version defines no separate relay-acceptance response; one may be considered later if relay latency commonly blocks clients for too long.
 
@@ -226,7 +226,7 @@ This response acknowledges Verifier response delivery to the Action Relay; it is
 
 ## 6. Relay Poll
 
-The Action Relay exposes `POST /mpas/v1/relay/poll` with `RelayPollRequest` and `RelayPollResponse`. The request uses the same signed DID, optional cursor, and cursor-retry pattern as HTTP §8.5, but its response contains relay deliveries only. Coordination `approvalRequests` and `actionUpdates` remain on `/mpas/v1/coordination/poll`.
+The Action Relay exposes `POST /mpas/v1/relay/poll` with `RelayPollRequest` and `RelayPollResponse`. The request uses a signed DID and the relay-specific optional cursor and retry pattern. Its response contains relay deliveries only. Coordination `approvalRequests` and `actionUpdates` remain on `/mpas/v1/coordination/poll`, which never returns relay deliveries or relay cursors.
 
 ```json
 {

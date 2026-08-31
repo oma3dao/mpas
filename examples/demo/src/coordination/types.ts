@@ -9,6 +9,7 @@ import type {
   Did,
   Hash,
   DeliveryEnvelope,
+  RelayPollResponse,
 } from "../core/types.js";
 
 export type AdditionalApprovalRequirements = Extract<
@@ -85,7 +86,6 @@ export interface CoordinationPollRequest {
   type: "CoordinationPollRequest";
   did: Did;
   audience?: string;
-  cursor?: string;
 }
 
 export interface CoordinationPollResponse {
@@ -93,9 +93,9 @@ export interface CoordinationPollResponse {
   type: "CoordinationPollResponse";
   approvalRequests: ApprovalRequest[];
   actionUpdates: ActionUpdate[];
-  deliveries?: DeliveryEnvelope[];
-  nextCursor?: string;
 }
+
+export type { RelayPollResponse };
 
 export interface CoordinationApprovalSubmission {
   version: "1";
