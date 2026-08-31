@@ -50,6 +50,12 @@ describe("generateBridge", () => {
     expect(source).toContain('from "./sqlite-workflow-store.js"');
     expect(source).toContain("MemoryWorkflowStore");
     expect(source).toContain("signer: keyManagerPromise");
+    expect(source).toContain("new ActionRelayClient({ url: config.url, signer: keyManagerPromise })");
+    expect(source).toContain("client.submitAction(buildDeliveryEnvelope({");
+    expect(source).toContain("new Set([config.verifierDid, ...(config.additionalRecipients ?? [])])");
+    expect(source).toContain("coordinationService,");
+    expect(source).toContain('either "actionEndpoint.url" or "adapter.url"');
+    expect(source).toContain('actionEndpoint.verifierDid');
     // The background workflow loop starts with the server.
     expect(source).toContain("await bridge.start();");
     expect(source).not.toContain("mpas_wait_for_action_result");

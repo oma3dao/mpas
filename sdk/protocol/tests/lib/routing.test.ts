@@ -156,9 +156,20 @@ describe("routing helpers", () => {
       version: "1",
       type: "CoordinationPollResponse",
       approvalRequests: [],
+      actionUpdates: [],
+    })).toEqual({
+      version: "1",
+      type: "CoordinationPollResponse",
+      approvalRequests: [],
+      actionUpdates: [],
+    });
+    expect(() => parseCoordinationPollResponse({
+      version: "1",
+      type: "CoordinationPollResponse",
+      approvalRequests: [],
+      actionUpdates: [],
       deliveries: [],
-      nextCursor: "10",
-    })).toMatchObject({ actionUpdates: [], nextCursor: "10" });
+    })).toThrow("must not contain relay deliveries");
     expect(parseCoordinationSessionResponse({
       version: "1",
       type: "CoordinationSessionResponse",

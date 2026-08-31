@@ -8,7 +8,7 @@
 
 **MCP protocol version:** `2026-07-28`
 
-**Depends on:** [MPAS Core Specification v0.2](./mpas-specification.md), [MPAS MCP Execution Profile](./mpas-profile-mcp.md), and the official MCP extension `io.modelcontextprotocol/tasks`
+**Depends on:** [MPAS Core Specification v0.2](./mpas-specification.md), [MPAS HTTP Profile](./mpas-profile-http.md), [MPAS MCP Execution Profile](./mpas-profile-mcp.md), and the official MCP extension `io.modelcontextprotocol/tasks`
 
 **Feature records:** [Official MCP Tasks integration](../docs/features/mcp-tasks/spec.md), [temporary conventional-client compatibility](../docs/features/mcp-client-compatibility/spec.md)
 
@@ -253,6 +253,19 @@ Task observation and MPAS progression are independent. The bridge MUST
 continue background Coordination polling, completed-package resubmission,
 startup reconciliation, and retry of transient adapter or Coordination
 failures until the Action expires or reaches a terminal state.
+
+The bridge configures a logical Verifier Action endpoint independently from an
+optional Coordination Service. The Verifier endpoint may be direct or hosted
+by an Action Relay; that topology MUST NOT change the MCP client-facing Task
+contract or the bridge's interpretation of `ActionResponse`.
+
+After `additionalApprovalsRequired`, the bridge explicitly calls
+`/mpas/v1/coordination/workflow` when Coordination is configured. It MUST NOT
+assume that an Action Relay created that workflow. When Coordination returns a
+completed Action Package in `readyForResubmission`, the bridge explicitly
+submits it to the same logical Verifier endpoint used for the initial Action.
+The Coordination Service does not perform that submission on the bridge's
+behalf.
 
 `ttlMs` is measured from Task creation and mirrors actual retention:
 

@@ -46,7 +46,7 @@ This profile does not define:
 - credential selection or secret-storage rules;
 - application-native execution payload schemas;
 - signer UX or clear-signing rendering rules;
-- Coordination Server behavior;
+- Coordination Service or Action Relay behavior;
 - OPA/Rego, Cedar, OpenFGA, IAM, XACML, or smart-contract policy syntax;
 - a normative test vector package;
 - nondeterministic or LLM-based authorization.
@@ -96,7 +96,7 @@ All matching entries within an action's array apply. The Verifier evaluates all 
 
 The `signerGroups` object defines reusable groups of eligible Signers. Approval requirements may refer to signer groups instead of repeating the same list of Signer DIDs in every policy.
 
-Signer groups are policy configuration. They MUST come from trusted Verifier configuration or trusted external systems, not from the Proposer, Execution Payload, Action Envelope context, or Coordination Server metadata.
+Signer groups are policy configuration. They MUST come from trusted Verifier configuration or trusted external systems, not from the Proposer, Execution Payload, Action Envelope context, Coordination Service metadata, or Action Relay metadata.
 
 ### 4.5 Default Requirement
 

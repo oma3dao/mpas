@@ -58,8 +58,8 @@ interface ParsedOptions {
   coordinationAuthAudiences?: string[];
   coordinationAuthClockSkewSeconds?: number;
   coordinationAuthSignatureLifetimeSeconds?: number;
-  verifierCoordinationUrl?: string;
-  verifierCoordinationStatePath?: string;
+  verifierRelayUrl?: string;
+  verifierRelayStatePath?: string;
   verifierPollIntervalMs?: number;
   designatedVerifierDid?: Did;
   authorizedRecipientDids?: Did[];
@@ -109,8 +109,8 @@ export async function runCli(
         tracePath: options.tracePath,
         host: options.host,
         port: options.port,
-        verifierCoordinationUrl: options.verifierCoordinationUrl,
-        verifierCoordinationStatePath: options.verifierCoordinationStatePath,
+        verifierRelayUrl: options.verifierRelayUrl,
+        verifierRelayStatePath: options.verifierRelayStatePath,
         verifierPollIntervalMs: options.verifierPollIntervalMs,
       });
       io.stdout.write(
@@ -118,8 +118,8 @@ export async function runCli(
           status: "started",
           address: adapter.address,
           loadedConfigs: adapter.loadedConfigs.length,
-          ...(options.verifierCoordinationUrl
-            ? { verifierCoordinationUrl: options.verifierCoordinationUrl }
+          ...(options.verifierRelayUrl
+            ? { verifierRelayUrl: options.verifierRelayUrl }
             : {}),
         })}\n`,
       );
@@ -127,9 +127,9 @@ export async function runCli(
     }
 
     if (domain === "daemon" && command === "start") {
-      if (options.verifierCoordinationUrl) {
+      if (options.verifierRelayUrl) {
         throw new Error(
-          "Hosted Verifier mode uses `mpas adapter start --verifier-coordination-url <url>`; `mpas daemon start` is the combined local Adapter and Coordination Service command.",
+          "Hosted Verifier mode uses `mpas adapter start --verifier-relay-url <url>`; `mpas daemon start` is the combined local Adapter and Coordination Service command.",
         );
       }
       const daemon = await startDaemon({
@@ -635,7 +635,7 @@ export async function validateConfig(name: string, options: Pick<ParsedOptions, 
 
 async function submitAction(path: string, url: string): Promise<unknown> {
   const actionPackage = JSON.parse(await readFile(path, "utf8")) as unknown;
-  const response = await fetch(`${url.replace(/\/$/, "")}/mpas/v1/action`, {
+  const response = await fetch(`${url.replace(/\/$/, "")}/mpas/v1/verifier/action`, {
     method: "POST",
     headers: {
       "content-type": "application/mpas+json",
@@ -717,8 +717,8 @@ function parseArgs(args: string[]): { positionals: string[]; options: ParsedOpti
     adapterKeyPath: process.env.MPAS_ADAPTER_KEY,
     journalPath: process.env.MPAS_JOURNAL_PATH,
     tracePath: process.env.MPAS_TRACE_PATH,
-    verifierCoordinationUrl: process.env.MPAS_VERIFIER_COORDINATION_URL,
-    verifierCoordinationStatePath: process.env.MPAS_VERIFIER_COORDINATION_STATE,
+    verifierRelayUrl: process.env.MPAS_VERIFIER_RELAY_URL ?? process.env.MPAS_VERIFIER_COORDINATION_URL,
+    verifierRelayStatePath: process.env.MPAS_VERIFIER_RELAY_STATE ?? process.env.MPAS_VERIFIER_COORDINATION_STATE,
     ...(process.env.MPAS_VERIFIER_POLL_INTERVAL_MS
       ? { verifierPollIntervalMs: Number(process.env.MPAS_VERIFIER_POLL_INTERVAL_MS) }
       : {}),
@@ -746,11 +746,11 @@ function parseArgs(args: string[]): { positionals: string[]; options: ParsedOpti
       options.port = Number(args[++index]);
     } else if (arg === "--coordination-port") {
       options.coordinationPort = Number(args[++index]);
-    } else if (arg === "--verifier-coordination-url") {
-      options.verifierCoordinationUrl = requiredOptionValue(args, index, arg);
+    } else if (arg === "--verifier-relay-url" || arg === "--verifier-coordination-url") {
+      options.verifierRelayUrl = requiredOptionValue(args, index, arg);
       index += 1;
-    } else if (arg === "--verifier-coordination-state") {
-      options.verifierCoordinationStatePath = requiredOptionValue(args, index, arg);
+    } else if (arg === "--verifier-relay-state" || arg === "--verifier-coordination-state") {
+      options.verifierRelayStatePath = requiredOptionValue(args, index, arg);
       index += 1;
     } else if (arg === "--verifier-poll-interval-ms") {
       options.verifierPollIntervalMs = Number(requiredOptionValue(args, index, arg));
@@ -804,7 +804,7 @@ function requiredOptionValue(args: string[], index: number, option: string): str
 function usage(): string {
   const coordinationAuthFlags = "[--auth-enforcement] [--auth-audience <origin>] [--auth-clock-skew-seconds <seconds>] [--auth-signature-lifetime-seconds <seconds>]";
   const routingFlags = "[--designated-verifier-did <did>] [--authorized-recipient-did <did>] [--notification-origin <origin>]";
-  const verifierRelayFlags = "[--verifier-coordination-url <url>] [--verifier-coordination-state <file>] [--verifier-poll-interval-ms <milliseconds>]";
+  const verifierRelayFlags = "[--verifier-relay-url <url>] [--verifier-relay-state <file>] [--verifier-poll-interval-ms <milliseconds>]";
   return [
     "Usage:",
     `  mpas adapter start [--config-dir <dir>] [--credential-dir <dir>] [--adapter-key <file>] [--journal-path <file>] [--trace <file>] [--host <host>] [--port <port>] ${verifierRelayFlags}`,

@@ -15,8 +15,8 @@ afterEach(async () => {
   apps.clear();
 });
 
-describe("Coordination WebSocket notification", () => {
-  it("uses a one-use DID-bound ticket and notifies immediately when pollable work exists", async () => {
+describe("Relay and Coordination WebSocket notifications", () => {
+  it("uses a one-use relay-bound ticket and notifies immediately when relay work exists", async () => {
     const pkg = JSON.parse(await readFile(`${fixtures}/core/insufficient-approvals.json`, "utf8")) as ActionPackage;
     const store = new CoordinationStore();
     store.beginRelayedAction(buildDeliveryEnvelope({
@@ -30,23 +30,23 @@ describe("Coordination WebSocket notification", () => {
 
     const session = await app.inject({
       method: "POST",
-      url: "/mpas/v1/coordination/session",
-      payload: { version: "1", type: "CoordinationSessionRequest", did: verifier },
+      url: "/mpas/v1/relay/session",
+      payload: { version: "1", type: "RelaySessionRequest", did: verifier },
     });
     const ticket = session.json().ticket as string;
-    const wsUrl = `${address.replace(/^http/, "ws")}/mpas/v1/coordination/ws`;
+    const wsUrl = `${address.replace(/^http/, "ws")}/mpas/v1/relay/ws`;
     const first = new WebSocket(wsUrl, { headers: { Authorization: `Bearer ${ticket}` } });
     const frame = await new Promise<string>((resolve, reject) => {
       first.on("message", (data: Buffer) => resolve(data.toString("utf8")));
       first.on("error", reject);
     });
-    expect(JSON.parse(frame)).toEqual({ version: "1", type: "CoordinationWorkAvailable" });
+    expect(JSON.parse(frame)).toEqual({ version: "1", type: "RelayWorkAvailable" });
     first.close();
 
     const reconnectSession = await app.inject({
       method: "POST",
-      url: "/mpas/v1/coordination/session",
-      payload: { version: "1", type: "CoordinationSessionRequest", did: verifier },
+      url: "/mpas/v1/relay/session",
+      payload: { version: "1", type: "RelaySessionRequest", did: verifier },
     });
     const reconnect = new WebSocket(wsUrl, {
       headers: { Authorization: `Bearer ${reconnectSession.json().ticket as string}` },
@@ -55,7 +55,7 @@ describe("Coordination WebSocket notification", () => {
       reconnect.on("message", (data: Buffer) => resolve(data.toString("utf8")));
       reconnect.on("error", reject);
     });
-    expect(JSON.parse(reconnectFrame)).toEqual({ version: "1", type: "CoordinationWorkAvailable" });
+    expect(JSON.parse(reconnectFrame)).toEqual({ version: "1", type: "RelayWorkAvailable" });
     reconnect.close();
 
     const status = await new Promise<number>((resolve, reject) => {
@@ -65,6 +65,22 @@ describe("Coordination WebSocket notification", () => {
       replay.on("error", () => undefined);
     });
     expect(status).toBe(401);
+  });
+
+  it("does not accept a relay ticket on the coordination WebSocket", async () => {
+    const app = createCoordinationApiServer();
+    apps.add(app);
+    const address = await app.listen({ host: "127.0.0.1", port: 0 });
+    const session = await app.inject({
+      method: "POST",
+      url: "/mpas/v1/relay/session",
+      payload: { version: "1", type: "RelaySessionRequest", did: verifier },
+    });
+
+    await expect(upgradeStatus(
+      `${address.replace(/^http/, "ws")}/mpas/v1/coordination/ws`,
+      session.json().ticket as string,
+    )).resolves.toBe(401);
   });
 
   it("rejects missing, unknown, and expired tickets", async () => {

@@ -342,7 +342,7 @@ function bridgePackageJson(appName: string): object {
     },
     dependencies: {
       "@modelcontextprotocol/server": "2.0.0",
-      "@oma3/mpas": "0.1.0-alpha.7",
+      "@oma3/mpas": "0.1.0-alpha.10",
     },
     devDependencies: {
       "@types/node": "^22.15.29",
@@ -387,7 +387,7 @@ npm run build
 node dist/index.js --config <path-to-bridge-config.json>
 \`\`\`
 
-The bridge config format matches the MPAS demo proposer bridge (plugin path, adapter URL, agent key, coordination URL, and workflow storage). The server auto-detects MCP 2026-07-28 Tasks clients and conventional MCP clients that need the MPAS wait-tool compatibility surface. All application tool calls are routed through MPAS: the bridge signs an Action Package and submits it to the configured Credential Adapter; nothing is proxied directly to the upstream server.
+The bridge config format matches the MPAS demo proposer bridge (plugin path, direct Adapter URL or relay Action endpoint plus designated Verifier, agent key, independent Coordination Service URL, and workflow storage). The server auto-detects MCP 2026-07-28 Tasks clients and conventional MCP clients that need the MPAS wait-tool compatibility surface. All application tool calls are routed through MPAS: the bridge signs an Action Package and submits it through the configured Action endpoint; nothing is proxied directly to the upstream server. When additional approvals are required, the bridge explicitly creates a coordination workflow and explicitly resubmits the completed Action Package to the Action endpoint.
 
 One bridge serves exactly one MCP client or agent identity and holds one private key for one proposer DID. Do not share a bridge process or key across independent clients; deploy a separate bridge instance and key for each agent.
 

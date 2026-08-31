@@ -8,22 +8,22 @@ import {
   type ActionPackage,
   type ActionRequest,
   type ActionResponse,
-  type CoordinationDeliveryResponse,
-  type CoordinationNotificationConnection,
-  type CoordinationPollResponse,
-  type CoordinationWebSocket,
+  type RelayDeliveryResponse,
+  type RelayNotificationConnection,
+  type RelayPollResponse,
+  type ActionRelayWebSocket,
   type DeliveryEnvelope,
   type Did,
 } from "@oma3/mpas";
 import { startDaemon } from "../../src/adapter/daemon.js";
 import type {
-  VerifierCoordinationClient,
-  VerifierCoordinationState,
-  VerifierCoordinationStateStore,
-} from "../../src/adapter/verifier-coordination-worker.js";
+  VerifierRelayClient,
+  VerifierRelayState,
+  VerifierRelayStateStore,
+} from "../../src/adapter/verifier-relay-worker.js";
 
 const fixtures = fileURLToPath(new URL("../fixtures/", import.meta.url));
-const coordinationUrl = "https://coordination.example";
+const relayUrl = "https://relay.example";
 
 describe("Credential Adapter hosted-Verifier integration", () => {
   it("polls, processes through Fastify, journals, and delivers the Verifier response", async () => {
@@ -75,10 +75,10 @@ describe("Credential Adapter hosted-Verifier integration", () => {
       maxEnvelopeValidityMs: Number.MAX_SAFE_INTEGER,
       trustContext: null,
       confirmPluginUse: async () => true,
-      verifierCoordinationUrl: coordinationUrl,
-      verifierCoordinationClient: client,
-      verifierCoordinationStateStore: stateStore,
-      verifierCoordinationEventSink: (event) => events.push(event.event),
+      verifierRelayUrl: relayUrl,
+      verifierRelayClient: client,
+      verifierRelayStateStore: stateStore,
+      verifierRelayEventSink: (event) => events.push(event.event),
     });
 
     try {
@@ -108,25 +108,25 @@ describe("Credential Adapter hosted-Verifier integration", () => {
   });
 });
 
-class MemoryStateStore implements VerifierCoordinationStateStore {
-  state?: VerifierCoordinationState;
+class MemoryStateStore implements VerifierRelayStateStore {
+  state?: VerifierRelayState;
 
-  async load(identity: { coordinationUrl: string; verifierDid: Did }): Promise<VerifierCoordinationState> {
+  async load(identity: { relayUrl: string; verifierDid: Did }): Promise<VerifierRelayState> {
     return {
       version: "1",
-      type: "MpasVerifierCoordinationState",
-      coordinationUrl: identity.coordinationUrl,
+      type: "MpasVerifierRelayState",
+      relayUrl: identity.relayUrl,
       verifierDid: identity.verifierDid,
       responses: {},
     };
   }
 
-  async save(state: VerifierCoordinationState): Promise<void> {
+  async save(state: VerifierRelayState): Promise<void> {
     this.state = structuredClone(state);
   }
 }
 
-class FakeSocket implements CoordinationWebSocket {
+class FakeSocket implements ActionRelayWebSocket {
   readonly close = vi.fn(() => this.emit("close"));
   private readonly listeners = new Map<string, Set<(event: unknown) => void>>();
 
@@ -145,47 +145,43 @@ class FakeSocket implements CoordinationWebSocket {
   }
 }
 
-class FakeCoordinationClient implements VerifierCoordinationClient {
+class FakeCoordinationClient implements VerifierRelayClient {
   readonly socket = new FakeSocket();
   readonly submissions: DeliveryEnvelope<ActionResponse>[] = [];
 
   constructor(private readonly delivery: DeliveryEnvelope<ActionRequest>) {}
 
-  async pollWork(options: { cursor?: string } = {}): Promise<CoordinationPollResponse> {
+  async pollDeliveries(options: { cursor?: string } = {}): Promise<RelayPollResponse> {
     return options.cursor
       ? {
           version: "1",
-          type: "CoordinationPollResponse",
-          approvalRequests: [],
-          actionUpdates: [],
+          type: "RelayPollResponse",
           deliveries: [],
           nextCursor: options.cursor,
         }
       : {
           version: "1",
-          type: "CoordinationPollResponse",
-          approvalRequests: [],
-          actionUpdates: [],
+          type: "RelayPollResponse",
           deliveries: [this.delivery as unknown as DeliveryEnvelope],
           nextCursor: "cursor-1",
         };
   }
 
-  async submitActionResponseDelivery(
+  async submitActionResponse(
     envelope: DeliveryEnvelope<ActionResponse>,
-  ): Promise<CoordinationDeliveryResponse> {
+  ): Promise<RelayDeliveryResponse> {
     this.submissions.push(structuredClone(envelope));
-    return { version: "1", type: "CoordinationDeliveryResponse", accepted: true };
+    return { version: "1", type: "RelayDeliveryResponse", accepted: true };
   }
 
   async connectWorkNotifications(input: {
     onWorkAvailable: () => void | Promise<void>;
-  }): Promise<CoordinationNotificationConnection> {
+  }): Promise<RelayNotificationConnection> {
     void input;
     return {
       socket: this.socket,
-      coordinationUrl,
-      audience: coordinationUrl,
+      relayUrl,
+      audience: relayUrl,
       did: this.delivery.recipients[0]!,
     };
   }

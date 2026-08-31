@@ -33,7 +33,7 @@ describe("AdapterClient", () => {
       const expected = await readJson<AdapterResponse>(join(fixturesDir, "responses", file));
       const server = await startMockAdapter(async (request, response) => {
         expect(request.method).toBe("POST");
-        expect(request.url).toBe("/mpas/v1/action");
+        expect(request.url).toBe("/mpas/v1/verifier/action");
         await readRequestBody(request);
         sendJson(response, expected, 200);
       });

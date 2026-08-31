@@ -14,7 +14,7 @@ import {
   type NonceStore,
   type Did,
 } from "@oma3/mpas";
-import { CoordinationStore, CoordinationStoreError, decodeApprovalSignerDid } from "./store.js";
+import { CoordinationStore, MpasServiceError, decodeApprovalSignerDid } from "./store.js";
 import { CoordinationNotificationHub } from "./notifications.js";
 import {
   effectiveIdempotencyKey,
@@ -22,6 +22,8 @@ import {
   validateCancelRequest,
   validateCoordinationActionRequest,
   validatePollRequest,
+  validateRelayPollRequest,
+  validateRelaySessionRequest,
   validateRelayedActionRequest,
   validateResponseDelivery,
   validateSessionRequest,
@@ -60,14 +62,33 @@ export function createCoordinationApiServer(options: CoordinationHttpEndpointOpt
   const store = options.store ?? new CoordinationStore();
   const trace = options.traceLogger ?? new TraceLogger("coordination");
   const rawBodies = new WeakMap<object, Buffer>();
-  const notificationHub = new CoordinationNotificationHub(app.server, (did) => store.hasOutstandingWork(did), auth.now);
+  const coordinationNotificationHub = new CoordinationNotificationHub(
+    app.server,
+    (did) => store.hasOutstandingCoordinationWork(did),
+    auth.now,
+  );
+  const relayNotificationHub = new CoordinationNotificationHub(
+    app.server,
+    (did) => store.hasOutstandingRelayWork(did),
+    auth.now,
+    "/mpas/v1/relay/ws",
+    "RelayWorkAvailable",
+  );
+  app.server.on("upgrade", (request, socket) => {
+    const path = new URL(request.url ?? "/", "http://localhost").pathname;
+    if (path === "/mpas/v1/relay/ws" || path === "/mpas/v1/coordination/ws") return;
+    socket.write("HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n");
+    socket.destroy();
+  });
   const relayResponseWaitMs = options.relayResponseWaitMs ?? 30_000;
   if (!Number.isFinite(relayResponseWaitMs) || relayResponseWaitMs <= 0) {
     throw new Error("relayResponseWaitMs must be a positive number.");
   }
   const authorizedRecipients = new Set(options.authorizedRecipientDids ?? []);
   if (options.designatedVerifierDid) authorizedRecipients.add(options.designatedVerifierDid);
-  app.addHook("onClose", async () => notificationHub.close());
+  app.addHook("onClose", async () => {
+    await Promise.all([coordinationNotificationHub.close(), relayNotificationHub.close()]);
+  });
 
   // Strict parsing: duplicate JSON member names in signed artifacts are malformed
   // per MPAS Core §5.1.2 (JSON.parse silently keeps the last value).
@@ -91,7 +112,7 @@ export function createCoordinationApiServer(options: CoordinationHttpEndpointOpt
     service: "mpas-local-coordination",
   }));
 
-  app.post("/mpas/v1/action", async (request, reply) => {
+  const relayActionHandler: RouteHandlerMethod = async (request, reply) => {
     try {
       const authenticated = await authenticateRequest(request, reply, rawBodies, auth);
       if (authenticated === AUTH_FAILED) return reply;
@@ -113,18 +134,20 @@ export function createCoordinationApiServer(options: CoordinationHttpEndpointOpt
         return replySignatureInvalid(reply);
       }
 
-      const response = store.runIdempotent(body.sender, idempotencyKey, body, async () => {
+      const response = store.runIdempotent("relay", body.sender, idempotencyKey, body, async () => {
         const pending = store.beginRelayedAction(body, options.designatedVerifierDid!);
-        if (pending.created) notificationHub.notify(body.recipients);
+        if (pending.created) relayNotificationHub.notify(body.recipients);
         return pending.response;
       });
       return await waitForRelayedResponse(response, relayResponseWaitMs);
     } catch (error) {
       return replyStoreError(reply, error);
     }
-  });
+  };
+  app.post("/mpas/v1/verifier/action", relayActionHandler);
+  app.post("/mpas/v1/action", relayActionHandler);
 
-  app.post("/mpas/v1/coordination/delivery", async (request, reply) => {
+  const relayDeliveryHandler: RouteHandlerMethod = async (request, reply) => {
     try {
       const authenticated = await authenticateRequest(request, reply, rawBodies, auth);
       if (authenticated === AUTH_FAILED) return reply;
@@ -138,8 +161,47 @@ export function createCoordinationApiServer(options: CoordinationHttpEndpointOpt
         return replySignatureInvalid(reply);
       }
       const response = store.submitResponseDelivery(body, authorizedRecipients);
-      notificationHub.notify(body.recipients);
+      relayNotificationHub.notify(body.recipients);
       return response;
+    } catch (error) {
+      return replyStoreError(reply, error);
+    }
+  };
+  app.post("/mpas/v1/relay/delivery", relayDeliveryHandler);
+  app.post("/mpas/v1/coordination/delivery", relayDeliveryHandler);
+
+  app.post("/mpas/v1/relay/poll", async (request, reply) => {
+    try {
+      const authenticated = await authenticateRequest(request, reply, rawBodies, auth);
+      if (authenticated === AUTH_FAILED) return reply;
+      const body = validateRelayPollRequest(request.body);
+      if (authenticated !== AUTH_DISABLED && authenticated.did !== body.did) return replyPermissionDenied(reply);
+      return store.pollDeliveries(body.did, body.cursor);
+    } catch (error) {
+      return replyStoreError(reply, error);
+    }
+  });
+
+  app.post("/mpas/v1/relay/session", async (request, reply) => {
+    try {
+      const authenticated = await authenticateRequest(request, reply, rawBodies, auth);
+      if (authenticated === AUTH_FAILED) return reply;
+      const body = validateRelaySessionRequest(request.body);
+      if (authenticated !== AUTH_DISABLED && authenticated.did !== body.did) return replyPermissionDenied(reply);
+      if (authenticated !== AUTH_DISABLED && !(await claimNonce(auth.nonceStore, authenticated))) {
+        return replySignatureInvalid(reply);
+      }
+      return {
+        version: "1",
+        type: "RelaySessionResponse",
+        ...relayNotificationHub.issue(
+          body.did,
+          notificationWebSocketUrl(
+            options.notificationOrigin ?? auth.audiences[0] ?? "http://127.0.0.1",
+            "/mpas/v1/relay/ws",
+          ),
+        ),
+      };
     } catch (error) {
       return replyStoreError(reply, error);
     }
@@ -157,9 +219,12 @@ export function createCoordinationApiServer(options: CoordinationHttpEndpointOpt
       return {
         version: "1",
         type: "CoordinationSessionResponse",
-        ...notificationHub.issue(
+        ...coordinationNotificationHub.issue(
           body.did,
-          notificationWebSocketUrl(options.notificationOrigin ?? auth.audiences[0] ?? "http://127.0.0.1"),
+          notificationWebSocketUrl(
+            options.notificationOrigin ?? auth.audiences[0] ?? "http://127.0.0.1",
+            "/mpas/v1/coordination/ws",
+          ),
         ),
       };
     } catch (error) {
@@ -188,13 +253,14 @@ export function createCoordinationApiServer(options: CoordinationHttpEndpointOpt
       });
 
       const result = await store.runIdempotent(
+        "coordination",
         body.actionPackage.actionEnvelope.proposer.did,
         idempotencyKey,
         body,
         () => store.createWorkflow(body),
       );
       reply.code(result.created ? 201 : 200);
-      if (result.created) notificationHub.notify(coordinationRecipients(body));
+      if (result.created) coordinationNotificationHub.notify(coordinationRecipients(body));
 
       trace.emit("state_transition", {
         result: result.created ? "created" : "existing",
@@ -225,7 +291,7 @@ export function createCoordinationApiServer(options: CoordinationHttpEndpointOpt
         endpoint: "/mpas/v1/coordination/poll",
       });
 
-      const response = store.poll(body.did, body.cursor);
+      const response = store.poll(body.did);
 
       trace.emit("coordination_poll", {
         endpoint: "/mpas/v1/coordination/poll",
@@ -268,12 +334,13 @@ export function createCoordinationApiServer(options: CoordinationHttpEndpointOpt
       // nonce claim so a custom store cannot commit against workflow state
       // that changed while claim() was pending.
       const response = await store.runIdempotent(
+        "coordination",
         signerDid!,
         idempotencyKey,
         body,
         () => store.submitApproval(body),
       );
-      notificationHub.notify(store.participantsForActionHash(actionEnvelopeHash));
+      coordinationNotificationHub.notify(store.participantsForActionHash(actionEnvelopeHash));
 
       trace.emit("approval_received", {
         endpoint: "/mpas/v1/coordination/approval",
@@ -299,7 +366,7 @@ export function createCoordinationApiServer(options: CoordinationHttpEndpointOpt
     }
   });
 
-  app.post("/mpas/v1/coordination/action-cancel", async (request, reply) => {
+  const cancelWorkflowHandler: RouteHandlerMethod = async (request, reply) => {
     try {
       const authenticated = await authenticateRequest(request, reply, rawBodies, auth);
       if (authenticated === AUTH_FAILED) return reply;
@@ -319,16 +386,17 @@ export function createCoordinationApiServer(options: CoordinationHttpEndpointOpt
       }
 
       trace.emit("action_cancelled", {
-        endpoint: "/mpas/v1/coordination/action-cancel",
+        endpoint: "/mpas/v1/coordination/workflow-cancel",
       });
 
       const response = await store.runIdempotent(
+        "coordination",
         body.proposerDid,
         idempotencyKey,
         body,
         () => store.cancelAction(body),
       );
-      notificationHub.notify([body.proposerDid]);
+      coordinationNotificationHub.notify([body.proposerDid]);
 
       trace.emit("state_transition", {
         toState: "cancelled",
@@ -338,7 +406,9 @@ export function createCoordinationApiServer(options: CoordinationHttpEndpointOpt
     } catch (error) {
       return replyStoreError(reply, error);
     }
-  });
+  };
+  app.post("/mpas/v1/coordination/workflow-cancel", cancelWorkflowHandler);
+  app.post("/mpas/v1/coordination/action-cancel", cancelWorkflowHandler);
 
   return app;
 }
@@ -449,7 +519,7 @@ function replyPermissionDenied(reply: FastifyReply): FastifyReply {
 }
 
 function replyStoreError(reply: FastifyReply, error: unknown) {
-  if (error instanceof CoordinationStoreError) {
+  if (error instanceof MpasServiceError) {
     reply.code(error.statusCode);
     return {
       version: "1",
@@ -457,7 +527,7 @@ function replyStoreError(reply: FastifyReply, error: unknown) {
       error: {
         code: error.code,
         message: error.message,
-        ...(error.code === "relay_timeout" ? { retryable: true } : {}),
+        ...(error.code === "timeout" ? { retryable: true } : {}),
       },
     };
   }
@@ -467,9 +537,9 @@ function replyStoreError(reply: FastifyReply, error: unknown) {
 
 function waitForRelayedResponse<T>(response: Promise<T>, timeoutMs: number): Promise<T> {
   return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new CoordinationStoreError(
+    const timer = setTimeout(() => reject(new MpasServiceError(
       503,
-      "relay_timeout",
+      "timeout",
       "The designated Verifier did not respond within this relay wait.",
     )), timeoutMs);
     timer.unref();
@@ -490,28 +560,27 @@ function coordinationRecipients(body: CoordinationActionRequest): Did[] {
   const requirements = body.authorizationRequirements.approvalRequirements;
   return [...new Set<Did>([
     body.actionPackage.actionEnvelope.proposer.did,
-    body.authorizationRequirements.verifier.did,
     ...(requirements.anyOf ?? []).flatMap((threshold) => threshold.eligibleSigners),
     ...(requirements.allOf ?? []).flatMap((threshold) => threshold.eligibleSigners),
     ...(requirements.overrideSigners ?? []).map((entry) => entry.signer),
   ])];
 }
 
-function notificationWebSocketUrl(origin: string): string {
+function notificationWebSocketUrl(origin: string, path: "/mpas/v1/relay/ws" | "/mpas/v1/coordination/ws"): string {
   let url: URL;
   try {
     url = new URL(origin);
   } catch {
-    throw new CoordinationStoreError(500, "policy_unavailable", "Notification origin is not a valid URL.");
+    throw new MpasServiceError(500, "policy_unavailable", "Notification origin is not a valid URL.");
   }
   if (url.origin !== origin || (url.protocol !== "https:" && url.protocol !== "http:")) {
-    throw new CoordinationStoreError(500, "policy_unavailable", "Notification origin must be a canonical HTTP(S) origin.");
+    throw new MpasServiceError(500, "policy_unavailable", "Notification origin must be a canonical HTTP(S) origin.");
   }
   const local = url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "[::1]";
   if (url.protocol !== "https:" && !local) {
-    throw new CoordinationStoreError(500, "policy_unavailable", "Notification origin must use HTTPS outside local development.");
+    throw new MpasServiceError(500, "policy_unavailable", "Notification origin must use HTTPS outside local development.");
   }
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-  url.pathname = "/mpas/v1/coordination/ws";
+  url.pathname = path;
   return url.toString();
 }

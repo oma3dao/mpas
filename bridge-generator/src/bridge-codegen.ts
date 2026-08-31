@@ -26,6 +26,8 @@ import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
 import {
   ActionPackageBuilder,
   ActionEndpointClient,
+  ActionRelayClient,
+  buildDeliveryEnvelope,
   CoordinationServiceClient,
   KeyManager,
   MemoryWorkflowStore,
@@ -34,10 +36,13 @@ import {
 } from "@oma3/mpas";
 import type {
   BridgeUpstreamTool,
+  ActionRequest,
   CreateTaskResult,
+  Did,
   MpasApplicationPlugin,
   ProposerConfig,
   WorkflowCoordinationService,
+  WorkflowActionEndpoint,
   WorkflowStore,
 } from "@oma3/mpas";
 import { SqliteWorkflowStore } from "./sqlite-workflow-store.js";
@@ -60,7 +65,14 @@ interface WorkflowConfig {
 }
 
 interface BridgeConfig extends Omit<ProposerConfig, "approvalStrategy" | "approvalTimeoutMs"> {
+  actionEndpoint?: RelayActionEndpointConfig;
   workflow?: WorkflowConfig;
+}
+
+interface RelayActionEndpointConfig {
+  url: string;
+  verifierDid: Did;
+  additionalRecipients?: Did[];
 }
 
 interface CliConfig {
@@ -68,6 +80,11 @@ interface CliConfig {
   plugin?: string;
   adapter?: {
     url?: string;
+  };
+  actionEndpoint?: {
+    url?: string;
+    verifierDid?: string;
+    additionalRecipients?: string[];
   };
   coordination?: {
     url?: string;
@@ -105,8 +122,10 @@ export class GeneratedBridge {
 
   constructor(config: BridgeConfig) {
     const plugin = loadPlugin(config.plugin);
-    const actionEndpoint = new ActionEndpointClient({ url: config.adapterUrl });
     const keyManagerPromise = loadKeyManager(config.agentKey);
+    const actionEndpoint: WorkflowActionEndpoint = config.actionEndpoint
+      ? relayActionEndpoint(config.actionEndpoint, keyManagerPromise)
+      : new ActionEndpointClient({ url: config.adapterUrl });
     const coordinationService: WorkflowCoordinationService = config.coordinationUrl
       ? new CoordinationServiceClient({ url: config.coordinationUrl, signer: keyManagerPromise })
       : unconfiguredCoordinationService();
@@ -214,6 +233,24 @@ function unconfiguredCoordinationService(): WorkflowCoordinationService {
   };
 }
 
+function relayActionEndpoint(
+  config: RelayActionEndpointConfig,
+  keyManagerPromise: Promise<KeyManager>,
+): WorkflowActionEndpoint {
+  const client = new ActionRelayClient({ url: config.url, signer: keyManagerPromise });
+  const recipients = [...new Set([config.verifierDid, ...(config.additionalRecipients ?? [])])];
+  return {
+    async submitActionRequest(request: ActionRequest) {
+      const keyManager = await keyManagerPromise;
+      return client.submitAction(buildDeliveryEnvelope({
+        sender: keyManager.did,
+        recipients,
+        payload: request,
+      }));
+    },
+  };
+}
+
 export async function createBridgeFromConfig(configPath: string): Promise<GeneratedBridge> {
   const absoluteConfigPath = resolve(configPath);
   const configDir = dirname(absoluteConfigPath);
@@ -246,9 +283,14 @@ function toBridgeConfig(config: CliConfig, configDir: string): BridgeConfig {
   const pluginPath = resolve(configDir, config.plugin);
   const plugin = loadPlugin(pluginPath);
   const adapterUrl = config.adapter?.url ?? config.adapterUrl;
+  const actionEndpointUrl = config.actionEndpoint?.url;
+  const verifierDid = config.actionEndpoint?.verifierDid;
   const agentKey = config.agent?.keyFile ?? config.agentKey;
-  if (!adapterUrl) {
-    throw new Error('Proposer bridge config requires "adapter.url".');
+  if (!adapterUrl && !actionEndpointUrl) {
+    throw new Error('Proposer bridge config requires either "actionEndpoint.url" or "adapter.url".');
+  }
+  if (actionEndpointUrl && !verifierDid) {
+    throw new Error('Relay action endpoint config requires "actionEndpoint.verifierDid".');
   }
   if (!agentKey) {
     throw new Error('Proposer bridge config requires "agent.keyFile".');
@@ -262,7 +304,16 @@ function toBridgeConfig(config: CliConfig, configDir: string): BridgeConfig {
   return {
     plugin: pluginPath,
     applicationDid: (config.target?.applicationDid ?? config.applicationDid ?? plugin.applicationDid) as BridgeConfig["applicationDid"],
-    adapterUrl,
+    adapterUrl: adapterUrl ?? actionEndpointUrl!,
+    ...(actionEndpointUrl && verifierDid
+      ? {
+          actionEndpoint: {
+            url: actionEndpointUrl,
+            verifierDid: verifierDid as Did,
+            additionalRecipients: (config.actionEndpoint?.additionalRecipients ?? []) as Did[],
+          },
+        }
+      : {}),
     agentKey: resolve(configDir, agentKey),
     coordinationUrl: config.coordination?.url,
     executionProfile: (config.executionProfile ?? {

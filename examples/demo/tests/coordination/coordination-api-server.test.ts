@@ -151,7 +151,7 @@ describe("coordination HTTP endpoint", () => {
     });
     const missingCancel = await app.inject({
       method: "POST",
-      url: "/mpas/v1/coordination/action-cancel",
+      url: "/mpas/v1/coordination/workflow-cancel",
       payload: {
         version: "1",
         type: "CoordinationActionCancelRequest",

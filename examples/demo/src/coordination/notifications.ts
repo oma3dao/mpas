@@ -19,13 +19,11 @@ export class CoordinationNotificationHub {
     server: Server,
     private readonly hasOutstandingWork: (did: Did) => boolean,
     private readonly now: () => Date = () => new Date(),
+    private readonly path = "/mpas/v1/coordination/ws",
+    private readonly notificationType: "CoordinationWorkAvailable" | "RelayWorkAvailable" = "CoordinationWorkAvailable",
   ) {
     server.on("upgrade", (request, socket, head) => {
-      if (new URL(request.url ?? "/", "http://localhost").pathname !== "/mpas/v1/coordination/ws") {
-        socket.write("HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n");
-        socket.destroy();
-        return;
-      }
+      if (new URL(request.url ?? "/", "http://localhost").pathname !== this.path) return;
       this.handleUpgrade(request.headers.authorization, request, socket, head);
     });
   }
@@ -45,7 +43,7 @@ export class CoordinationNotificationHub {
   }
 
   notify(dids: Iterable<Did>): void {
-    const frame = JSON.stringify({ version: "1", type: "CoordinationWorkAvailable" });
+    const frame = JSON.stringify({ version: "1", type: this.notificationType });
     for (const did of new Set(dids)) {
       for (const socket of this.connections.get(did) ?? []) {
         if (socket.readyState === WebSocket.OPEN) socket.send(frame);

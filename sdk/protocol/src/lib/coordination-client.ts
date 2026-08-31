@@ -15,21 +15,26 @@ import type {
   DeliveryEnvelope,
   Did,
   HashObject,
-  MpasHttpError,
 } from "../types/mpas.js";
 import { strictJsonParse } from "../utils/strict-json.js";
 import {
   parseActionResponseEnvelope,
-  parseCoordinationDeliveryResponse,
   parseCoordinationPollResponse,
   parseCoordinationSessionResponse,
   parseCoordinationWorkAvailable,
+  parseRelayDeliveryResponse,
 } from "./routing.js";
 import {
-  deriveMpasAudience,
-  signMpasRfc9421,
-  type MpasRfc9421Signer,
-} from "./rfc9421.js";
+  MpasAuthError,
+  MpasHttpTransport,
+  waitForPollInterval,
+  websocketMessageData,
+  type MpasWebSocket,
+  type MpasWebSocketFactory,
+} from "./client-transport.js";
+import type { MpasRfc9421Signer } from "./rfc9421.js";
+
+export { MpasAuthError };
 
 /** Configuration for an MPAS Coordination Service client. */
 export interface CoordinationServiceClientConfig {
@@ -50,12 +55,8 @@ export interface CoordinationServiceClientConfig {
 /** @deprecated Use {@link CoordinationServiceClientConfig}. */
 export type CoordinationClientConfig = CoordinationServiceClientConfig;
 
-/** Minimal socket surface required by the notification client. */
-export interface CoordinationWebSocket {
-  close(code?: number, reason?: string): void;
-  addEventListener(type: "message" | "close" | "error", listener: (event: unknown) => void): void;
-  removeEventListener?(type: "message" | "close" | "error", listener: (event: unknown) => void): void;
-}
+/** Socket shape used by Coordination Service notification connections. */
+export type CoordinationWebSocket = MpasWebSocket;
 
 /**
  * Opens a WebSocket with the URL and authorization header returned by the session endpoint.
@@ -64,24 +65,15 @@ export interface CoordinationWebSocket {
  * HTTP upgrade. The bearer ticket must not be placed in the URL. Browser WebSocket
  * APIs that cannot set an upgrade authorization header require a native or server adapter.
  */
-export type CoordinationWebSocketFactory = (options: {
-  /** WebSocket URL returned by the Coordination Service. */
-  url: string;
-  /** Opaque single-use ticket, exposed for adapters that accept it separately. */
-  ticket: string;
-  /** Required authorization header for the WebSocket upgrade. */
-  headers: Readonly<Record<"Authorization", string>>;
-}) => CoordinationWebSocket | PromiseLike<CoordinationWebSocket>;
+export type CoordinationWebSocketFactory = MpasWebSocketFactory;
 
-/** Options for repeated, cursor-aware coordination polling. */
+/** Options for repeated coordination polling. */
 export interface CoordinationServicePollLoopOptions {
-  /** Cursor from a previously accepted page. */
-  cursor?: string;
   /** Delay between completed polls. Defaults to 30 seconds. */
   intervalMs?: number;
   /** Cancels the loop and any wait before its next poll. */
   signal?: AbortSignal;
-  /** Called before the loop advances to `nextCursor`. */
+  /** Called for each workflow poll response. */
   onPage: (page: CoordinationPollResponse) => void | Promise<void>;
   /** Optional recoverable-error handler. Without it, polling stops on the first error. */
   onError?: (error: unknown) => void | Promise<void>;
@@ -89,9 +81,7 @@ export interface CoordinationServicePollLoopOptions {
 
 /** Options for polling whenever a WebSocket work notification arrives. */
 export interface CoordinationServiceNotificationPollingOptions {
-  /** Cursor from a previously accepted page. */
-  cursor?: string;
-  /** Called before the connection advances its cursor. */
+  /** Called after each coordination notification triggers a workflow poll. */
   onPage: (page: CoordinationPollResponse) => void | Promise<void>;
   /** Optional handler for poll failures triggered by a notification. */
   onError?: (error: unknown) => void | Promise<void>;
@@ -111,12 +101,6 @@ export interface CreateApprovalWorkflowInput {
 
 /** @deprecated Use {@link CreateApprovalWorkflowInput}. */
 export type SubmitActionForCoordinationInput = CreateApprovalWorkflowInput;
-
-/** Options for retrieving the next page of work for this client's participant. */
-export interface PollCoordinationWorkOptions {
-  /** Cursor from a previously accepted page. */
-  cursor?: string;
-}
 
 /** Input for submitting a Signer Approval to an existing workflow. */
 export interface SubmitCoordinationApprovalInput {
@@ -154,27 +138,6 @@ export interface CoordinationNotificationConnection {
   did: Did;
 }
 
-/** Notification connection that also exposes its last accepted poll cursor. */
-export interface CoordinationNotificationPollConnection extends CoordinationNotificationConnection {
-  /** Returns the cursor only after the corresponding page callback has completed. */
-  getCursor(): string | undefined;
-}
-
-/** Authentication or endpoint-identity failure returned with HTTP 401 or 403. */
-export class MpasAuthError extends Error {
-  readonly code = "MPAS_AUTH_ERROR";
-
-  constructor(
-    readonly status: 401 | 403,
-    readonly authCode: string,
-    message: string,
-    options?: ErrorOptions,
-  ) {
-    super(message, options);
-    this.name = "MpasAuthError";
-  }
-}
-
 /** Network, timeout, or Coordination Service 5xx failure that may be retried. */
 export class CoordinationUnavailableError extends Error {
   readonly code = "COORDINATION_UNAVAILABLE";
@@ -204,19 +167,40 @@ export class CoordinationResponseError extends Error {
 export class CoordinationServiceClient {
   private readonly url: string;
   private readonly audience: string;
-  private readonly timeoutMs: number;
-  private readonly signer?: Promise<MpasRfc9421Signer>;
-  private readonly signatureLifetimeSeconds?: number;
+  private readonly transport: MpasHttpTransport;
   private readonly webSocketFactory?: CoordinationWebSocketFactory;
   private readonly participantDid?: Did;
 
   /** Creates a client bound to one Coordination Service origin and participant signer. */
   constructor(config: CoordinationServiceClientConfig) {
-    this.audience = deriveMpasAudience(config.url);
     this.url = config.url.replace(/\/+$/, "");
-    this.timeoutMs = config.timeoutMs ?? 30_000;
-    this.signer = config.signer ? Promise.resolve(config.signer) : undefined;
-    this.signatureLifetimeSeconds = config.signatureLifetimeSeconds;
+    this.transport = new MpasHttpTransport({
+      ...config,
+      errors: {
+        identityMismatch: (requiredDid, signerDid) => new CoordinationResponseError(
+          `Coordination request identity ${requiredDid} does not match signer DID ${signerDid}.`,
+        ),
+        authentication: (status, code) => {
+          const failure = status === 401 ? "authentication failed" : "authorization failed";
+          return new MpasAuthError(
+            status,
+            code,
+            `Coordination request ${failure} with HTTP ${status} (${code}).`,
+          );
+        },
+        unavailable: ({ status, cause }) => status === undefined
+          ? new CoordinationUnavailableError(`Coordination Service is unavailable at ${this.url}.`, { cause })
+          : new CoordinationUnavailableError(`Coordination Service returned HTTP ${status}.`),
+        rejected: (status) => new CoordinationResponseError(
+          `Coordination Service rejected the request with HTTP ${status}.`,
+        ),
+        invalidJson: (cause) => new CoordinationResponseError(
+          "Coordination response was not valid JSON.",
+          { cause },
+        ),
+      },
+    });
+    this.audience = this.transport.audience;
     this.webSocketFactory = config.webSocketFactory;
     this.participantDid = config.participantDid;
   }
@@ -225,8 +209,8 @@ export class CoordinationServiceClient {
    * Creates an approval workflow from a Verifier-evaluated Action Package and its
    * Authorization Requirements at `/mpas/v1/coordination/workflow`.
    *
-   * Use `ActionEndpointClient.submitActionRequest` when the Coordination Service
-   * receives the initial enveloped Action through the common Action endpoint.
+   * Call this explicitly after a direct or relayed Verifier returns
+   * `additionalApprovalsRequired`; receiving that response never creates a workflow.
    */
   async createApprovalWorkflow(
     input: CreateApprovalWorkflowInput,
@@ -276,33 +260,31 @@ export class CoordinationServiceClient {
   }
 
   /**
-   * Retrieves all work addressed to a participant through the existing coordination poll.
-   *
-   * The result may include Approval Requests, action updates, and Delivery Envelopes.
-   * Reusing a cursor can return the same delivery page, so payload processing must be
-   * idempotent under the enclosed MPAS object's identity rules.
+   * Retrieves Approval Requests and action updates addressed to this participant.
+   * Addressed Delivery Envelopes are retrieved with `ActionRelayClient.pollDeliveries`.
    */
-  async pollWork(options: PollCoordinationWorkOptions = {}): Promise<CoordinationPollResponse> {
+  async pollWork(): Promise<CoordinationPollResponse> {
     const did = await this.resolveParticipantDid();
-    return this.pollWorkForDid(did, options.cursor);
+    return this.pollWorkForDid(did);
   }
 
   /** @deprecated Use {@link pollWork} with a participant-bound client. */
-  async poll(did: Did, cursor?: string): Promise<CoordinationPollResponse> {
-    return this.pollWorkForDid(did, cursor);
+  async poll(did: Did): Promise<CoordinationPollResponse> {
+    return this.pollWorkForDid(did);
   }
 
-  private async pollWorkForDid(did: Did, cursor?: string): Promise<CoordinationPollResponse> {
+  private async pollWorkForDid(did: Did): Promise<CoordinationPollResponse> {
     const response = parseCoordinationPollResponse(await this.post<unknown>(
       "/mpas/v1/coordination/poll",
-      { version: "1", type: "CoordinationPollRequest", did, ...(cursor !== undefined ? { cursor } : {}) },
+      { version: "1", type: "CoordinationPollRequest", did },
       did,
     ));
     return response;
   }
 
   /**
-   * Sends a Verifier-authored Action response envelope to `/mpas/v1/coordination/delivery`.
+   * @deprecated Use `ActionRelayClient.submitActionResponse`. This method calls the
+   * temporary `/mpas/v1/coordination/delivery` compatibility alias.
    *
    * The returned value acknowledges Coordination Service acceptance only. It is not
    * the Action result.
@@ -311,9 +293,15 @@ export class CoordinationServiceClient {
     envelope: DeliveryEnvelope<ActionResponse>,
   ): Promise<CoordinationDeliveryResponse> {
     const parsed = parseActionResponseEnvelope(envelope);
-    return parseCoordinationDeliveryResponse(
+    const accepted = parseRelayDeliveryResponse(
       await this.post<unknown>("/mpas/v1/coordination/delivery", parsed, parsed.sender),
     );
+    return {
+      version: "1",
+      type: "CoordinationDeliveryResponse",
+      accepted: true,
+      ...(accepted.createdAt !== undefined ? { createdAt: accepted.createdAt } : {}),
+    };
   }
 
   /**
@@ -359,7 +347,10 @@ export class CoordinationServiceClient {
     });
     socket.addEventListener("message", (event) => {
       void Promise.resolve().then(async () => {
-        const data = messageData(event);
+        const data = websocketMessageData(
+          event,
+          () => new CoordinationResponseError("WebSocket message data was not UTF-8 text."),
+        );
         await input.onWorkAvailable(parseCoordinationWorkAvailable(JSON.parse(data)));
       }).catch(() => socket.close(1003, "invalid MPAS notification"));
     });
@@ -369,22 +360,19 @@ export class CoordinationServiceClient {
   /**
    * Opens a notification connection and performs a signed poll after each notification.
    *
-   * Notifications are serialized. The cursor advances only after `onPage` resolves,
-   * so a failed callback can safely retry the same page.
+   * Notifications are serialized so workflow processing for one participant does not overlap.
    */
   async connectNotificationsAndPoll(
     options: CoordinationServiceNotificationPollingOptions,
-  ): Promise<CoordinationNotificationPollConnection> {
-    let cursor = options.cursor;
+  ): Promise<CoordinationNotificationConnection> {
     let pending = Promise.resolve();
     const did = await this.resolveParticipantDid();
     const context = await this.connectWorkNotifications({
       onWorkAvailable: () => {
         pending = pending.then(async () => {
           try {
-            const page = await this.pollWorkForDid(did, cursor);
+            const page = await this.pollWorkForDid(did);
             await options.onPage(page);
-            cursor = page.nextCursor ?? cursor;
           } catch (error) {
             if (!options.onError) throw error;
             await options.onError(error);
@@ -393,30 +381,28 @@ export class CoordinationServiceClient {
         return pending;
       },
     });
-    return { ...context, getCursor: () => cursor };
+    return context;
   }
 
   /**
    * Runs cancellable short polling for participants that do not use WebSockets.
    *
-   * The cursor advances only after `onPage` resolves. An `onError` handler makes poll
-   * failures recoverable; without one, the loop rejects on the first failure.
+   * An `onError` handler makes poll failures recoverable; without one, the loop rejects
+   * on the first failure.
    */
   async runPollLoop(options: CoordinationServicePollLoopOptions): Promise<void> {
     const did = await this.resolveParticipantDid();
-    let cursor = options.cursor;
     const intervalMs = options.intervalMs ?? 30_000;
     while (!options.signal?.aborted) {
       try {
-        const page = await this.pollWorkForDid(did, cursor);
+        const page = await this.pollWorkForDid(did);
         await options.onPage(page);
-        cursor = page.nextCursor ?? cursor;
       } catch (error) {
         if (options.signal?.aborted) return;
         if (!options.onError) throw error;
         await options.onError(error);
       }
-      await waitForInterval(intervalMs, options.signal);
+      await waitForPollInterval(intervalMs, options.signal);
     }
   }
 
@@ -467,7 +453,7 @@ export class CoordinationServiceClient {
     const idempotencyKey = canonical ? inputOrActionId.idempotencyKey : legacyIdempotencyKey;
     const did = canonical ? await this.resolveParticipantDid() : legacyDid as Did;
     return this.post<CoordinationCancelResponse>(
-      "/mpas/v1/coordination/action-cancel",
+      "/mpas/v1/coordination/workflow-cancel",
       {
         version: "1",
         type: "CoordinationActionCancelRequest",
@@ -480,7 +466,7 @@ export class CoordinationServiceClient {
   }
 
   private async resolveParticipantDid(): Promise<Did> {
-    const signer = this.signer ? await this.signer : undefined;
+    const signer = await this.transport.resolveSigner();
     const did = this.participantDid ?? signer?.did;
     if (!did) {
       throw new CoordinationResponseError(
@@ -496,123 +482,12 @@ export class CoordinationServiceClient {
   }
 
   private async post<T>(path: string, payload: object, requiredDid: Did): Promise<T> {
-    const signer = this.signer ? await this.signer : undefined;
-    if (signer && signer.did !== requiredDid) {
-      throw new CoordinationResponseError(
-        `Coordination request identity ${requiredDid} does not match signer DID ${signer.did}.`,
-      );
-    }
-
-    const bodyObject = signer ? { ...payload, audience: this.audience } : payload;
-    const body = JSON.stringify(bodyObject);
-    const requestUrl = `${this.url}${path}`;
-    const requestPath = new URL(requestUrl).pathname;
-    const headers: Record<string, string> = {
-      "Content-Type": "application/mpas+json",
-      Accept: "application/mpas+json",
-    };
-
-    if (signer) {
-      Object.assign(
-        headers,
-        await signMpasRfc9421({
-          method: "POST",
-          path: requestPath,
-          body: Buffer.from(body),
-          signer,
-          ...(this.signatureLifetimeSeconds !== undefined
-            ? { lifetimeSeconds: this.signatureLifetimeSeconds }
-            : {}),
-        }),
-      );
-    }
-
-    return this.request<T>(requestUrl, { method: "POST", headers, body });
-  }
-
-  private async request<T>(url: string, init: RequestInit): Promise<T> {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
-
-    try {
-      const response = await fetch(url, {
-        ...init,
-        signal: controller.signal,
-      });
-      const text = await response.text();
-
-      if (!response.ok) {
-        if (response.status === 401 || response.status === 403) {
-          const errorBody = parseMpasHttpError(text);
-          const authCode =
-            errorBody?.error.code ?? (response.status === 401 ? "signature_invalid" : "permission_denied");
-          const failure = response.status === 401 ? "authentication failed" : "authorization failed";
-          throw new MpasAuthError(
-            response.status,
-            authCode,
-            `Coordination request ${failure} with HTTP ${response.status} (${authCode}).`,
-          );
-        }
-        if (
-          response.status === 408 ||
-          response.status === 425 ||
-          response.status === 429 ||
-          response.status >= 500
-        ) {
-          throw new CoordinationUnavailableError(`Coordination Service returned HTTP ${response.status}.`);
-        }
-        throw new CoordinationResponseError(`Coordination Service rejected the request with HTTP ${response.status}.`);
-      }
-
-      if (text.length === 0) {
-        return undefined as T;
-      }
-
-      return JSON.parse(text) as T;
-    } catch (error) {
-      if (error instanceof SyntaxError) {
-        throw new CoordinationResponseError("Coordination response was not valid JSON.", { cause: error });
-      }
-
-      if (
-        error instanceof MpasAuthError ||
-        error instanceof CoordinationUnavailableError ||
-        error instanceof CoordinationResponseError
-      ) {
-        throw error;
-      }
-
-      throw new CoordinationUnavailableError(`Coordination Service is unavailable at ${this.url}.`, {
-        cause: error,
-      });
-    } finally {
-      clearTimeout(timeout);
-    }
+    return this.transport.post<T>(path, payload, requiredDid);
   }
 }
 
 /** @deprecated Use {@link CoordinationServiceClient}. */
 export class CoordinationClient extends CoordinationServiceClient {}
-
-function messageData(event: unknown): string {
-  const data = typeof event === "object" && event !== null ? (event as { data?: unknown }).data : undefined;
-  if (typeof data === "string") return data;
-  if (data instanceof Buffer) return data.toString("utf8");
-  if (data instanceof ArrayBuffer) return Buffer.from(data).toString("utf8");
-  throw new CoordinationResponseError("WebSocket message data was not UTF-8 text.");
-}
-
-async function waitForInterval(intervalMs: number, signal?: AbortSignal): Promise<void> {
-  if (intervalMs < 0 || !Number.isFinite(intervalMs)) throw new Error("intervalMs must be a non-negative number.");
-  if (signal?.aborted) return;
-  await new Promise<void>((resolve) => {
-    const timeout = setTimeout(resolve, intervalMs);
-    signal?.addEventListener("abort", () => {
-      clearTimeout(timeout);
-      resolve();
-    }, { once: true });
-  });
-}
 
 function approvalSignerDid(approval: Approval): Did {
   const parts = approval.signature.value.split(".");
@@ -632,17 +507,5 @@ function approvalSignerDid(approval: Approval): Did {
     return signerDid as Did;
   } catch (error) {
     throw new Error("Approval does not contain a decodable compact JWS signer DID.", { cause: error });
-  }
-}
-
-function parseMpasHttpError(text: string): MpasHttpError | undefined {
-  if (text.length === 0) return undefined;
-  try {
-    const parsed = JSON.parse(text) as Partial<MpasHttpError>;
-    return parsed.type === "MpasHttpError" && typeof parsed.error?.code === "string"
-      ? (parsed as MpasHttpError)
-      : undefined;
-  } catch {
-    return undefined;
   }
 }

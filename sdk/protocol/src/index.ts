@@ -10,6 +10,7 @@ export * from "./utils/strict-json.js";
 // Protocol primitives — Proposer side
 export * from "./lib/action-package-builder.js";
 export * from "./lib/action-endpoint-client.js";
+export * from "./lib/action-relay-client.js";
 export * from "./lib/adapter-client.js";
 export * from "./lib/approval-builder.js";
 export * from "./lib/approval-requirements.js";

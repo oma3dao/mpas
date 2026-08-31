@@ -1,6 +1,6 @@
 {
   "name": "@oma3/mpas",
-  "version": "0.1.0-alpha.9",
+  "version": "0.1.0-alpha.10",
   "description": "MPAS protocol SDK — types, verification, policy evaluation, receipts, and protocol primitives",
   "license": "Apache-2.0",
   "type": "module",
@@ -70,6 +70,11 @@
       "types": "./dist/lib/action-endpoint-client.d.ts",
       "import": "./dist/lib/action-endpoint-client.js",
       "default": "./dist/lib/action-endpoint-client.js"
+    },
+    "./action-relay-client": {
+      "types": "./dist/lib/action-relay-client.d.ts",
+      "import": "./dist/lib/action-relay-client.js",
+      "default": "./dist/lib/action-relay-client.js"
     },
     "./credential-adapter-client": {
       "types": "./dist/lib/adapter-client.d.ts",

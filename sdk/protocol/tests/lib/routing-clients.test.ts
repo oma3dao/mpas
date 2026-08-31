@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   ActionEndpointClient,
   ActionEndpointClientError,
+  ActionRelayClient,
   CoordinationServiceClient,
   buildDeliveryEnvelope,
   parseActionRequestEnvelope,
@@ -25,6 +26,7 @@ describe("routing clients", () => {
   it("submits the same canonical Action envelope and parses ActionResponse", async () => {
     let submitted: unknown;
     const server = await mockServer(async (request, response) => {
+      expect(request.url).toBe("/mpas/v1/verifier/action");
       submitted = JSON.parse(await body(request));
       json(response, actionResponse());
     });
@@ -33,6 +35,45 @@ describe("routing clients", () => {
 
     await expect(client.submitActionRequest(envelope)).resolves.toEqual(actionResponse());
     expect(submitted).toMatchObject({ type: "DeliveryEnvelope", payload: { type: "ActionRequest" } });
+  });
+
+  it("submits only an enveloped Action through the Action Relay client", async () => {
+    let submitted: unknown;
+    const server = await mockServer(async (request, response) => {
+      expect(request.url).toBe("/mpas/v1/verifier/action");
+      submitted = JSON.parse(await body(request));
+      json(response, actionResponse());
+    });
+    const client = new ActionRelayClient({ url: server.url, participantDid: proposer });
+    const envelope = buildDeliveryEnvelope({ sender: proposer, recipients: [verifier], payload: actionRequest() });
+
+    await expect(client.submitAction(envelope)).resolves.toEqual(actionResponse());
+    expect(submitted).toMatchObject({ type: "DeliveryEnvelope", sender: proposer });
+  });
+
+  it("keeps Action Relay submission failures in the relay error surface", async () => {
+    const malformed = await mockServer((_request, response) => {
+      response.statusCode = 200;
+      response.end("not JSON");
+    });
+    const unavailable = await mockServer((_request, response) => {
+      response.statusCode = 503;
+      json(response, {
+        version: "1",
+        type: "MpasHttpError",
+        error: { code: "timeout", message: "Timed out.", retryable: true },
+      });
+    });
+    const envelope = buildDeliveryEnvelope({ sender: proposer, recipients: [verifier], payload: actionRequest() });
+
+    await expect(new ActionRelayClient({
+      url: malformed.url,
+      participantDid: proposer,
+    }).submitAction(envelope)).rejects.toMatchObject({ name: "ActionRelayResponseError" });
+    await expect(new ActionRelayClient({
+      url: unavailable.url,
+      participantDid: proposer,
+    }).submitAction(envelope)).rejects.toMatchObject({ name: "ActionRelayUnavailableError" });
   });
 
   it("reports a malformed Action endpoint response as a response error", async () => {
@@ -48,26 +89,27 @@ describe("routing clients", () => {
     } satisfies Partial<ActionEndpointClientError>);
   });
 
-  it("polls Verifier deliveries, invokes the existing handler, and returns the response envelope", async () => {
+  it("polls and returns Verifier deliveries through the Action Relay client", async () => {
     const requestEnvelope = buildDeliveryEnvelope({ sender: proposer, recipients: [verifier], payload: actionRequest() });
     let delivered: unknown;
     const server = await mockServer(async (request, response) => {
-      if (request.url === "/mpas/v1/coordination/poll") {
-        json(response, { version: "1", type: "CoordinationPollResponse", approvalRequests: [], actionUpdates: [], deliveries: [requestEnvelope] });
+      if (request.url === "/mpas/v1/relay/poll") {
+        json(response, { version: "1", type: "RelayPollResponse", deliveries: [requestEnvelope] });
       } else {
+        expect(request.url).toBe("/mpas/v1/relay/delivery");
         delivered = JSON.parse(await body(request));
-        json(response, { version: "1", type: "CoordinationDeliveryResponse", accepted: true });
+        json(response, { version: "1", type: "RelayDeliveryResponse", accepted: true });
       }
     });
-    const client = new CoordinationServiceClient({ url: server.url, participantDid: verifier });
-    const page = await client.pollWork();
-    const incoming = parseActionRequestEnvelope(page.deliveries?.[0]);
+    const client = new ActionRelayClient({ url: server.url, participantDid: verifier });
+    const page = await client.pollDeliveries();
+    const incoming = parseActionRequestEnvelope(page.deliveries[0]);
     const responseEnvelope = buildDeliveryEnvelope({
       sender: verifier,
       recipients: [proposer, maintainer],
       payload: approvalResponse(),
     });
-    await client.submitActionResponseDelivery(responseEnvelope);
+    await client.submitActionResponse(responseEnvelope);
 
     expect(incoming.payload.type).toBe("ActionRequest");
     expect(delivered).toMatchObject({
@@ -75,6 +117,10 @@ describe("routing clients", () => {
       recipients: [proposer, maintainer],
       payload: { type: "ActionResponse" },
     });
+    await expect(client.submitActionResponse({
+      ...responseEnvelope,
+      sender: maintainer,
+    })).rejects.toMatchObject({ name: "ActionRelayResponseError" });
   });
 
   it("binds notification callbacks to the session-provided socket without payload delivery", async () => {
@@ -110,7 +156,40 @@ describe("routing clients", () => {
     expect(context.coordinationUrl).toBe(server.url);
   });
 
-  it("polls on notification and advances its cursor only after the page is accepted", async () => {
+  it("keeps relay notification sessions on relay message types and paths", async () => {
+    const socket = new FakeSocket();
+    const server = await mockServer((request, response) => {
+      expect(request.url).toBe("/mpas/v1/relay/session");
+      json(response, {
+        version: "1",
+        type: "RelaySessionResponse",
+        websocketUrl: "wss://relay.example.com/mpas/v1/relay/ws",
+        ticket: "relay-ticket",
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      });
+    });
+    const received: string[] = [];
+    const client = new ActionRelayClient({
+      url: server.url,
+      participantDid: verifier,
+      webSocketFactory: ({ url, headers }) => {
+        expect(url).toBe("wss://relay.example.com/mpas/v1/relay/ws");
+        expect(headers.Authorization).toBe("Bearer relay-ticket");
+        return socket;
+      },
+    });
+
+    const context = await client.connectWorkNotifications({
+      onWorkAvailable: (notification) => received.push(notification.type),
+    });
+    socket.emit("message", { data: JSON.stringify({ version: "1", type: "RelayWorkAvailable" }) });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(received).toEqual(["RelayWorkAvailable"]);
+    expect(context.relayUrl).toBe(server.url);
+  });
+
+  it("polls workflow work after a coordination notification without a relay cursor", async () => {
     const socket = new FakeSocket();
     const accepted = Promise.withResolvers<void>();
     const server = await mockServer((request, response) => {
@@ -128,7 +207,6 @@ describe("routing clients", () => {
           type: "CoordinationPollResponse",
           approvalRequests: [],
           actionUpdates: [],
-          nextCursor: "7",
         });
       }
     });
@@ -144,7 +222,7 @@ describe("routing clients", () => {
     socket.emit("message", { data: JSON.stringify({ version: "1", type: "CoordinationWorkAvailable" }) });
     await accepted.promise;
     await Promise.resolve();
-    expect(context.getCursor()).toBe("7");
+    expect(context.did).toBe(verifier);
   });
 });
 

@@ -2,7 +2,7 @@
 
 **Status:** Draft v0.2
 **Companion to:** MPAS Core Specification  
-**Scope:** HTTP transport profile for MPAS Action Package submission, Action execution requests, Signer approval requests, Approval collection, Coordination Service routing, polling, and receipt distribution.  
+**Scope:** HTTP transport profile for MPAS Action Package submission, Action Relay delivery, Signer approval requests, Coordination Service workflows, polling, and receipt distribution.
 **Normative keywords:** The key words **MUST**, **MUST NOT**, **REQUIRED**, **SHOULD**, **SHOULD NOT**, **RECOMMENDED**, **MAY**, and **OPTIONAL** are to be interpreted as described in RFC 2119 and RFC 8174.
 
 ---
@@ -24,18 +24,21 @@ This profile defines how MPAS participants exchange those artifacts over HTTP.
 
 The primary operation in this profile is not a request for abstract verification. The primary operation is a request to process an Action Package and execute the Action if policy is satisfied. Verification is the deterministic processing step performed by the Verifier before execution.
 
-This profile defines three HTTP interfaces:
+This profile defines four HTTP interfaces:
 
 1. **Verifier / Application Action Interface**  
-   Used by a Proposer to submit an Action Package to the Verifier using `POST /mpas/v1/action`.
+   Used by a Proposer to submit an Action Package to the logical Verifier using `POST /mpas/v1/verifier/action`, either directly or through an Action Relay.
 
 2. **Signer Approval Interface**  
    Used by a Proposer or Coordination Service to request a Signer decision using `POST /mpas/v1/approval-request`.
 
-3. **Coordination Service Interface**  
-   Used by Proposers and Signers to route MPAS artifacts, poll for work, submit Approvals, cancel pending actions, and retrieve completed Action Packages.
+3. **Action Relay Interface**
+   Used to route addressed Delivery Envelopes between a Proposer and a Verifier that cannot accept an inbound connection.
 
-The Coordination Service topology is optional. Direct Proposer-to-Verifier and Proposer-to-Signer flows remain valid.
+4. **Coordination Service Interface**
+   Used by Proposers and Signers to create and observe approval workflows, submit Approvals, cancel pending actions, and retrieve completed Action Packages.
+
+The Action Relay and Coordination Service are independently optional. Direct Proposer-to-Verifier and Proposer-to-Signer flows remain valid.
 
 ---
 
@@ -50,10 +53,10 @@ This profile specifies:
 - Standard error envelope.
 - Action request and response wire format.
 - Signer approval request and response wire format.
-- Minimal Coordination Service HTTP interface.
-- Polling-first coordination behavior.
+- Minimal Action Relay and Coordination Service HTTP interfaces.
+- Polling-first relay and coordination behavior.
 - Optional service discovery.
-- Coordination Service trust boundary.
+- Action Relay and Coordination Service trust boundaries.
 - Coordination Service conflict rules for `actionId` and `actionEnvelopeHash`.
 - Execution Receipt return and distribution behavior.
 
@@ -91,7 +94,7 @@ The core MPAS specification remains authoritative for:
 - Execution Receipt semantics;
 - separation between coordination and authorization.
 
-This HTTP profile adds a concrete API contract so independently implemented Proposers, Signers, Coordination Services, Verifiers, and Applications can interoperate.
+This HTTP profile adds a concrete API contract so independently implemented Proposers, Signers, Action Relays, Coordination Services, Verifiers, and Applications can interoperate.
 
 ---
 
@@ -128,11 +131,11 @@ HTTP authentication identifies the caller to the service. It is not an MPAS Appr
 
 MPAS participant authentication **MUST** use the RFC 9421 profile defined in §4.6. Deployments **MAY** additionally impose transport or infrastructure controls (mTLS, enterprise SSO, gateway authentication, network allowlists); these are not a substitute for the §4.6 profile and **MUST NOT** be used to derive participant identity.
 
-A Verifier **MUST NOT** treat HTTP authentication, Coordination Service routing, notification delivery, or transport metadata as an Approval unless the Verifier's policy explicitly recognizes a corresponding MPAS Approval or trusted external approval record.
+A Verifier **MUST NOT** treat HTTP authentication, relay or coordination routing, notification delivery, or transport metadata as an Approval unless the Verifier's policy explicitly recognizes a corresponding MPAS Approval or trusted external approval record.
 
 ### 4.5 Idempotency
 
-Unsafe requests that create or mutate coordination state **SHOULD** include an `idempotencyKey` field in the request message. The field is an opaque client-generated string of at most 128 characters. A UUID is RECOMMENDED.
+Unsafe requests that create or mutate protocol state **SHOULD** include an `idempotencyKey` field in the request message. The field is an opaque client-generated string of at most 128 characters. A UUID is RECOMMENDED.
 
 For objects that have a routing wrapper around the request (for example, `DeliveryEnvelope<ActionRequest>`), the key remains inside the enclosed request; the wrapper has no idempotency field. The Action-processing layer, not the routing layer, resolves the key.
 
@@ -145,9 +148,11 @@ An object with no defined equivalence scope **MUST NOT** carry a body-level idem
 
 Idempotency keys are especially important for:
 
-- submitting an Action Package to a Coordination Service;
+- submitting an Action Package to a logical Verifier endpoint, including an Action Relay;
 - submitting an Approval to a Coordination Service;
 - submitting a completed Action Package to a Verifier when retrying after network failure.
+
+Initial Action submission and completed-package submission are distinct mutations and therefore use different idempotency keys. Retries of either mutation reuse that mutation's key.
 
 If the same idempotency key is reused with a non-equivalent request, the server **SHOULD** return `409 Conflict`.
 
@@ -200,7 +205,7 @@ Signers **SHOULD** omit `alg` to match the canonical wire example in §4.6.1 and
 
 `created` and `expires` **MUST** be present integer timestamps. `expires` **MUST** be strictly greater than `created`, and `expires - created` **MUST NOT** exceed 60 seconds. This ceiling is the declared-lifetime MPAS profile constraint that bounds replay exposure and nonce-retention requirements. Clients and deployments **MAY** choose a shorter period but not a longer one. The server **MUST** reject requests whose `created` is in the future beyond configured `clockSkew` (suggested default: 30 seconds), or whose `expires` has passed. The declared maximum lifetime remains 60 seconds, but configured future clock skew can extend the server-observed acceptance horizon by up to `clockSkew`.
 
-`nonce` **MUST** be present. On state-mutating endpoints, only after signature, digest, freshness, audience, identity, authorization, and side-effect-free business preflight validation succeeds and immediately before mutation, the server **MUST** atomically claim `(keyid, nonce)`. Exactly one concurrent claim **MUST** succeed. A successful claim **MUST** remain retained through `expires`; a failed claim **MUST** be rejected as replay. Invalid requests **MUST NOT** consume a nonce. An integration whose store operation combines validation and mutation **MUST** introduce a side-effect-free preflight so that the nonce claim can occur after validation and before commit. On read-only idempotent endpoints, freshness validation alone is acceptable. For Coordination Service endpoints specifically: `/action`, `coordination/workflow`, `approval`, `action-cancel`, `delivery`, and `session` are state-mutating; `poll` is read-only. The temporary `coordination/action` compatibility alias has the same state-mutating behavior as `coordination/workflow`.
+`nonce` **MUST** be present. On state-mutating endpoints, only after signature, digest, freshness, audience, identity, authorization, and side-effect-free business preflight validation succeeds and immediately before mutation, the server **MUST** atomically claim `(keyid, nonce)`. Exactly one concurrent claim **MUST** succeed. A successful claim **MUST** remain retained through `expires`; a failed claim **MUST** be rejected as replay. Invalid requests **MUST NOT** consume a nonce. An integration whose store operation combines validation and mutation **MUST** introduce a side-effect-free preflight so that the nonce claim can occur after validation and before commit. On read-only idempotent endpoints, freshness validation alone is acceptable. `/verifier/action`, `/relay/delivery`, relay and coordination session issuance, `/coordination/workflow`, `/coordination/approval`, and `/coordination/workflow-cancel` are state-mutating; relay and coordination poll are read-only. Temporary compatibility aliases have the same mutation and nonce behavior as their canonical operation.
 
 Signers **MUST** set the `tag` signature parameter to `mpas-v1`. The `tag` identifies the MPAS application profile and, as a signature parameter, is covered by `@signature-params`. A dictionary member's label correlates its `Signature-Input` value with the member of the same label in `Signature`; the label does not authenticate identity. The label **SHOULD** be `mpas`, but an alternate label is conforming when it matches in both dictionaries.
 
@@ -222,48 +227,55 @@ An unsigned request sent to a service that does not enforce authentication **MAY
 
 #### 4.6.4 Identity Binding and Endpoint Authorization
 
-Before processing a signed Coordination Service request, every representation of the participant identity required by that endpoint **MUST** be equal. Any mismatch **MUST** be rejected with `403 permission_denied`. Once the representations are equal, this profile does not prescribe which equal representation an implementation uses internally.
+Before processing a signed request under this profile, every representation of the participant identity required by that endpoint **MUST** be equal. Any mismatch **MUST** be rejected with `403 permission_denied`. Once the representations are equal, this profile does not prescribe which equal representation an implementation uses internally.
 
 Each endpoint interface defines the required equality invariant and resulting scope.
 
-##### 4.6.4.1 Coordination Service
+##### 4.6.4.1 Action Relay
 
-- `poll`: signature `keyid` **MUST** equal `CoordinationPollRequest.did`; the request **MUST** be scoped to that agreed DID.
-- `action-cancel`: signature `keyid` **MUST** equal request `proposerDid`, and both **MUST** equal the stored proposer.
-- `action`: signature `keyid` **MUST** equal `actionPackage.actionEnvelope.proposer.did`.
-- `DeliveryEnvelope<ActionRequest>` submitted to `/action`: signature `keyid` **MUST** equal `DeliveryEnvelope.sender` and the enclosed `ActionEnvelope.proposer.did`.
-- `delivery`: signature `keyid` **MUST** equal `DeliveryEnvelope.sender`, `ActionResponse.verifier.did`, and the workflow's configured Verifier DID.
-- `session`: signature `keyid` **MUST** equal `CoordinationSessionRequest.did`.
-- `approval`: signature `keyid` **MUST** equal the signer DID decoded from the Approval, and that DID **MUST** be an eligible signer for the referenced workflow.
+- `verifier/action`: signature `keyid` **MUST** equal `DeliveryEnvelope.sender` and the enclosed `ActionEnvelope.proposer.did` when an Action Relay hosts the endpoint.
+- `relay/poll`: signature `keyid` **MUST** equal `RelayPollRequest.did`; the request **MUST** be scoped to that DID.
+- `relay/delivery`: signature `keyid` **MUST** equal `DeliveryEnvelope.sender`, `ActionResponse.verifier.did`, and the relayed Action's recorded configured Verifier DID.
+- `relay/session`: signature `keyid` **MUST** equal `RelaySessionRequest.did`.
+
+##### 4.6.4.2 Coordination Service
+
+- `coordination/poll`: signature `keyid` **MUST** equal `CoordinationPollRequest.did`; the request **MUST** be scoped to that agreed DID.
+- `coordination/workflow-cancel`: signature `keyid` **MUST** equal request `proposerDid`, and both **MUST** equal the stored proposer.
+- `coordination/workflow`: signature `keyid` **MUST** equal `actionPackage.actionEnvelope.proposer.did`.
+- `coordination/session`: signature `keyid` **MUST** equal `CoordinationSessionRequest.did`.
+- `coordination/approval`: signature `keyid` **MUST** equal the signer DID decoded from the Approval, and that DID **MUST** be an eligible signer for the referenced workflow.
 
 Each equality and eligibility check occurs before processing, and any mismatch or ineligibility **MUST** be rejected with `403 permission_denied`. Version 1 retains the required `CoordinationPollRequest.did` and `CoordinationActionCancelRequest.proposerDid` fields. A future request schema version **MAY** remove redundant fields only at an explicit version boundary; v1 will not be mutated in place. Migration and versioning details will be decided if a future revision is proposed.
 
-When authentication is enforced, an unknown Action or workflow cannot satisfy the stored-proposer or eligible-signer requirement. An enforcing Coordination Service therefore returns `403 permission_denied` for an unknown `action-cancel` target or Approval workflow rather than revealing existence with `404`. With enforcement disabled, the existing Coordination Service `404 ACTION_NOT_FOUND` behavior is unchanged.
+When authentication is enforced, an unknown Action or workflow cannot satisfy the stored-proposer or eligible-signer requirement. An enforcing Coordination Service therefore returns `403 permission_denied` for an unknown `workflow-cancel` target or Approval workflow rather than revealing existence with `404`. With enforcement disabled, the existing Coordination Service `404 ACTION_NOT_FOUND` behavior is unchanged.
 
-##### 4.6.4.2 Verifier
+##### 4.6.4.3 Verifier
+
+`POST /mpas/v1/verifier/action` is the shared logical Action interface defined in §6. This subsection applies when a directly reachable Verifier hosts that endpoint; §4.6.4.1 applies when an Action Relay hosts it.
 
 For `DeliveryEnvelope<ActionRequest>`, signature `keyid` **MUST** equal `DeliveryEnvelope.sender` and the enclosed `ActionEnvelope.proposer.did`. For bare `ActionRequest`, signature `keyid` **MUST** equal the enclosed `ActionEnvelope.proposer.did`. HTTP authentication establishes request provenance; it is not an Approval and does not replace MPAS policy evaluation.
 
-##### 4.6.4.3 Signer
+##### 4.6.4.4 Signer
 
 Identity binding for `POST /mpas/v1/approval-request` is not yet defined. Until this section is specified, a Signer endpoint that adopts §4.6 authentication establishes caller identity for rate limiting and audit only — with no effect on the Signer's approval decision.
 
 #### 4.6.5 Enforcement
 
-The **trust boundary** is the operator-defined set of components and administrative principals within which unauthenticated participant identity claims are accepted. Authentication **MAY** be disabled only if every caller able to reach that Coordination Service is trusted to make any participant claim the instance accepts, or equivalent isolation prevents cross-participant access. Access to participant keys is relevant evidence in deployment assessment but does not define the boundary. Network placement alone does not define it. Outside this boundary, Coordination Service authentication **MUST** be enforced.
+The **trust boundary** is the operator-defined set of components and administrative principals within which unauthenticated participant identity claims are accepted. Authentication **MAY** be disabled only if every caller able to reach that service is trusted to make any participant claim the instance accepts, or equivalent isolation prevents cross-participant access. Access to participant keys is relevant evidence in deployment assessment but does not define the boundary. Network placement alone does not define it. Outside this boundary, authentication is enforced as stated below.
 
 Enforcement requirements by role:
 
-- A **Coordination Service** outside the trust boundary **MUST** enforce authentication.
-- Any other **MPAS endpoint** (Verifier or Signer) outside that boundary **MAY** enforce authentication. Identity binding for those interfaces remains limited as specified in §4.6.4.2 and §4.6.4.3.
+- An **Action Relay** or **Coordination Service** outside the trust boundary **MUST** enforce authentication.
+- Any other **MPAS endpoint** (Verifier or Signer) outside that boundary **MAY** enforce authentication. Identity binding for those interfaces remains limited as specified in §4.6.4.3 and §4.6.4.4.
 
-A fresh hosted Coordination Service outside the trust boundary **MUST** default enforcement on and **MUST NOT** be exposed unenforced. Existing deployments use a coordinated cutover so callers sign before enforcement is enabled.
+A fresh hosted Action Relay or Coordination Service outside the trust boundary **MUST** default enforcement on and **MUST NOT** be exposed unenforced. Existing deployments use a coordinated cutover so callers sign before enforcement is enabled.
 
 Production HTTPS remains independently required by §4.1. TLS protects transport but does not replace authentication when this section requires enforcement.
 
 Configuration **MUST** fail closed: enforcement enabled with an empty configured audience set or any configured value that is not a valid origin **MUST** refuse to start.
 
-Health-check endpoints (`GET /mpas/v1/coordination/health` and equivalents) **SHOULD** remain unauthenticated so deployment probes and monitoring continue to function.
+Health-check endpoints (`GET /mpas/v1/relay/health`, `GET /mpas/v1/coordination/health`, and equivalents) **SHOULD** remain unauthenticated so deployment probes and monitoring continue to function.
 
 #### 4.6.6 Error Responses
 
@@ -333,7 +345,7 @@ This is a deterministic MPAS protocol rejection, not an HTTP authorization failu
 |            `400 Bad Request` | Invalid HTTP request shape, invalid JSON, missing required HTTP-level fields.                                |
 |           `401 Unauthorized` | HTTP authentication missing or invalid.                                                                      |
 |              `403 Forbidden` | Authenticated caller is not allowed to use the endpoint or see the requested coordination state.             |
-|              `404 Not Found` | Requested coordination object, action, approval request, or cursor was not found or not visible to caller.   |
+|              `404 Not Found` | Requested coordination object, action, approval request, or relay cursor was not found or not visible to caller. |
 |               `409 Conflict` | Idempotency conflict, duplicate submission conflict, or same `actionId` with different `actionEnvelopeHash`. |
 |                   `410 Gone` | Resource expired or no longer available under retention policy.                                              |
 | `415 Unsupported Media Type` | Unsupported content type.                                                                                    |
@@ -384,7 +396,7 @@ Recommended error codes:
 | `signature_invalid`            | Signature verification failed. Under §4.6, this also covers HTTP Message Signature failures including expired/future timestamps, replayed nonce, and audience mismatch. |
 | `not_supported`                | Target application, operation, signature format, or profile is unsupported. |
 | `policy_unavailable`           | Policy could not be loaded or evaluated.                                    |
-| `relay_timeout`                | A Coordination Service's bounded wait for the designated Verifier expired. Retryable; the relay record survives. |
+| `timeout`                      | The endpoint could not obtain a result within its bounded wait. Retryable with the same idempotency key; the timeout itself creates and destroys no protocol state. |
 | `expired`                      | Artifact or coordination workflow expired.                                  |
 | `rate_limited`                 | Rate limit exceeded.                                                        |
 | `server_error`                 | Unexpected server error.                                                    |
@@ -447,7 +459,7 @@ Rules:
 
 ### 5.3 Participant Reference
 
-Participant references identify MPAS actors such as Proposers, Signers, Verifiers, Coordination Services, Applications, or auditors.
+Participant references identify MPAS actors such as Proposers, Signers, Verifiers, Applications, or auditors. An Action Relay or Coordination Service is not a participant merely because it transports messages or hosts workflow state.
 
 ```json
 {
@@ -478,7 +490,7 @@ Service discovery is optional. Deployments **MAY** configure endpoints out-of-ba
 
 Service discovery can help clients learn:
 
-- service role: Verifier, Signer, Coordination Service, or multiple roles;
+- service role: Verifier, Signer, Action Relay, Coordination Service, or multiple roles;
 - supported MPAS HTTP profile versions;
 - supported artifact versions;
 - supported signature formats;
@@ -487,6 +499,8 @@ Service discovery can help clients learn:
 - sync, async, polling, callback, and webhook capabilities.
 
 Service discovery metadata is not policy, not an Approval, and not authorization.
+
+An Action Relay or Coordination Service does not require a DID. `serviceDid` is present only when the service separately has and advertises a participant or service identity.
 
 Example:
 
@@ -500,7 +514,7 @@ Example:
   "artifactVersions": ["1"],
   "signatureFormats": ["jws", "eip712"],
   "endpoints": {
-    "action": "https://verifier.example/mpas/v1/action"
+    "action": "https://verifier.example/mpas/v1/verifier/action"
   },
   "capabilities": {
     "syncActionResponse": true,
@@ -541,7 +555,7 @@ Example:
 | `audience` | Conditional | Receiving service origin when the envelope is the signed HTTP request body (§4.6.3). |
 | `payload` | Yes | JSON representation of the applicable MPAS message or artifact. |
 
-A receiving Coordination Service creates an independent retrieval obligation for each authorized recipient. Retrieval by one recipient does not consume another recipient's delivery. Routing uses the explicit recipient list and does not inspect the payload to infer recipients or roles. A participant-authored signed submission establishes `keyid == sender`; the envelope is not an end-to-end signature.
+An Action Relay creates an independent retrieval obligation for each authorized recipient. Retrieval by one recipient does not consume another recipient's delivery. Routing uses the explicit recipient list and does not inspect the payload to infer recipients or roles. A participant-authored signed submission establishes `keyid == sender`; the envelope is not an end-to-end signature.
 
 A receiving endpoint **MUST** reject an envelope whose `expiresAt` is not in the future at submission, before creating any delivery obligation. Implementations **SHOULD** enforce a finite deployment-specific recipient-count limit to bound authorization work and delivery fan-out.
 
@@ -551,11 +565,11 @@ The Delivery Envelope equivalence contribution is defined in §4.5.
 
 ---
 
-## 6. Common Action Interface
+## 6. Verifier Action Interface
 
 ### 6.1 Purpose
 
-The Action Interface is used to submit an Action Package to either a directly reachable Verifier or a Coordination Service relay.
+The Action Interface is used to submit an Action Package to a logical Verifier endpoint. The endpoint may be hosted by a directly reachable Verifier or by an Action Relay.
 
 The caller is asking the Verifier to process the Action Package and execute the Action if policy is satisfied.
 
@@ -563,16 +577,20 @@ Verification is the deterministic processing step performed by the Verifier. It 
 
 ### 6.2 Endpoint
 
-| Client   | Endpoint Host                      | Method | Endpoint          | Request                                                       | Response         |
-| -------- | ---------------------------------- | -----: | ----------------- | ------------------------------------------------------------- | ---------------- |
-| Proposer | Verifier / Application             | `POST` | `/mpas/v1/action` | `ActionRequest` or `DeliveryEnvelope<ActionRequest>`          | `ActionResponse` |
-| Proposer | Coordination Service relay         | `POST` | `/mpas/v1/action` | `DeliveryEnvelope<ActionRequest>`                             | `ActionResponse` |
+| Client   | Endpoint Host          | Method | Endpoint                       | Request                                              | Response         |
+| -------- | ---------------------- | -----: | ------------------------------ | ---------------------------------------------------- | ---------------- |
+| Proposer | Verifier / Application | `POST` | `/mpas/v1/verifier/action` | `ActionRequest` or `DeliveryEnvelope<ActionRequest>` | `ActionResponse` |
+| Proposer | Action Relay           | `POST` | `/mpas/v1/verifier/action` | `DeliveryEnvelope<ActionRequest>`                    | `ActionResponse` |
+
+`POST /mpas/v1/action` is a temporary compatibility alias. The alias and canonical path **MUST** invoke the same handler and share authentication, Action idempotency, dispatch-ledger, relay correlation, and stored response state. New clients **MUST** use `/mpas/v1/verifier/action`.
 
 The Verifier may be embedded in a native MPAS Application or in another MPAS-aware execution component. This profile refers to that endpoint as the Verifier. It does not distinguish Credential Adapter implementations from native MPAS Application implementations at the HTTP protocol level.
 
 ### 6.3 ActionRequest
 
-`ActionRequest` carries an MPAS Action Package. A directly reachable Verifier **MUST** accept both a bare `ActionRequest` and `DeliveryEnvelope<ActionRequest>`. A Coordination Service relay **MUST** require the envelope because it supplies the routing metadata. A raw `ActionPackage` is not a request form for this endpoint.
+`ActionRequest` carries an MPAS Action Package. A directly reachable Verifier **MUST** accept both a bare `ActionRequest` and `DeliveryEnvelope<ActionRequest>`. An Action Relay **MUST** require the envelope because it supplies routing metadata. A raw `ActionPackage` is not a request form for this endpoint.
+
+A client **SHOULD** always send `DeliveryEnvelope<ActionRequest>`. The enveloped form is accepted by every host of this endpoint, so a client that always uses it works unchanged against a directly reachable Verifier and against an Action Relay, and can be repointed between them without a code change. The bare form remains valid but is a compatibility convenience for deployments that will only ever address a Verifier directly; a client that emits only the bare form cannot be repointed at a relay.
 
 ```json
 {
@@ -608,11 +626,13 @@ The same endpoint and request type are used for:
 
 For enveloped submission, the envelope `sender` and signed `keyid` equal the Action Envelope Proposer DID. A directly reachable Verifier selects its configured Verifier DID locally and requires that DID to occur in `DeliveryEnvelope.recipients`; it does not require itself to be the only recipient and is not responsible for forwarding to other recipients unless it also implements routing.
 
-A Coordination Service selects the designated Verifier DID from trusted deployment configuration, requires it among the authorized recipients, records it independently of the recipient list, stores the workflow and deliveries, and keeps the request pending until it receives the first qualifying Verifier-authored `ActionResponse` through §8.9. It **MUST NOT** synthesize an `ActionResponse` merely to acknowledge relay acceptance. An equivalent idempotent retry waits for or returns the stored Verifier response.
+An Action Relay selects the designated Verifier DID from trusted deployment configuration, requires it among the authorized recipients, records it independently of the recipient list, stores the relayed Action and deliveries, and keeps the request pending until it receives the first qualifying Verifier-authored `ActionResponse` through §8.9. It **MUST NOT** create an approval workflow or synthesize an `ActionResponse` merely to acknowledge relay acceptance. An equivalent idempotent retry waits for or returns the stored Verifier response.
 
-Before storing or exposing a relayed Action, the Coordination Service **MUST** verify that the Execution Payload matches `actionEnvelope.executionPayloadHash` and that `approvalBundle.actionEnvelopeHash` matches the computed Action Envelope hash. A mismatch is `400 artifact_hash_mismatch` and creates no delivery.
+Before storing or exposing a relayed Action, the Action Relay **MUST** verify that the Execution Payload matches `actionEnvelope.executionPayloadHash` and that `approvalBundle.actionEnvelopeHash` matches the computed Action Envelope hash. A mismatch is `400 artifact_hash_mismatch` and creates no delivery.
 
-The relay **MUST** bound how long it holds each HTTP submission open. If the deployment-selected bound expires before a qualifying response arrives, it returns `503 relay_timeout` with `retryable: true`; it **MUST NOT** synthesize an `ActionResponse`. The relayed Action and delivery records survive. An equivalent idempotent retry resumes waiting for, or returns, the same stored Verifier response. This profile does not fix the bound's duration.
+The relay **MUST** bound how long it holds each HTTP submission open. If the deployment-selected bound expires before a qualifying response arrives, it returns `503 timeout` with `retryable: true`; it **MUST NOT** synthesize an `ActionResponse`. The relayed Action and delivery records survive. An equivalent idempotent retry resumes waiting for, or returns, the same stored Verifier response. This profile does not fix the bound's duration.
+
+A directly reachable Verifier **MAY** return `503 timeout` under the same contract when it cannot obtain a result within its own bounded wait — for example, a slow upstream Application or an unresolved asynchronous policy evaluation. The code names the condition, not the component: it does not tell a client whether it reached a Verifier directly or through a relay, and a client handles it identically in both cases by retrying with the same idempotency key. Retry safety comes from that key and from the Core §6.5.1 dispatch-ledger rules, not from the error code. Which component's wait expired is diagnostic information and belongs in `error.message`, `error.details`, or `context.diagnostic`.
 
 ### 6.4 ActionResponse
 
@@ -738,7 +758,7 @@ The ActionResponse `result` values are a projection of the Core Action Lifecycle
 Request:
 
 ```http
-POST /mpas/v1/action
+POST /mpas/v1/verifier/action
 Content-Type: application/mpas+json
 Accept: application/mpas+json
 ```
@@ -877,7 +897,7 @@ Response:
 
 ### 6.8 Execution Receipt Return Behavior
 
-The Verifier returns the Execution Receipt to the caller of `/mpas/v1/action`.
+The Verifier returns the Execution Receipt to the caller of `/mpas/v1/verifier/action`.
 
 Participants MAY retrieve receipts from the Verifier, from a Coordination Service that has received them, or from any other service that stores them. How receipts propagate beyond the initial response is deployment-specific.
 
@@ -907,7 +927,7 @@ Example async response:
 }
 ```
 
-Async completion may be delivered by deployment-specific polling, callback, webhook, or Coordination Service mechanisms.
+Async completion may be delivered by deployment-specific polling, callback, webhook, Action Relay, or Coordination Service mechanisms.
 
 ---
 
@@ -1034,53 +1054,132 @@ Async completion may be handled through a Coordination Service poll, callback, w
 
 ---
 
-## 8. Coordination Service Interface
+## 8. Action Relay and Coordination Service Interfaces
 
-### 8.1 Purpose
+### 8.1 Purpose and separation
 
-A Coordination Service is an optional workflow, routing, synchronization, and state component.
+An Action Relay and a Coordination Service are independent optional services.
 
-A Coordination Service may:
+An Action Relay routes a Proposer's enveloped Action request to a configured Verifier and returns that Verifier's response. A Coordination Service creates and tracks an approval workflow only after an explicit client request. Either service may be used without the other.
 
-- accept Action Packages from Proposers;
-- store Authorization Requirements from Proposers;
-- expose Signer Review Sets or Approval Requests to eligible Signers;
-- collect Approvals;
-- assemble Approval Bundles;
-- allow Proposers to fetch Approvals or Approval Bundles;
-- distribute Execution Receipts reported by the Proposer;
-- expose workflow status and audit views.
+The services may be co-located, but co-location creates no protocol authority. A relay response **MUST NOT** automatically create a coordination workflow, and a ready coordination workflow **MUST NOT** automatically submit a completed Action Package to a Verifier. The Proposer or its bridge performs both explicit transitions.
 
-A Coordination Service is not the source of approval authority. It should be understood as a state machine and mailbox. It understands participants, workflow state, and routing metadata.
+### 8.2 Service Trust Boundary
 
-### 8.2 Coordination Service Trust Boundary
-
-A Coordination Service:
+An Action Relay or Coordination Service:
 
 - **MUST NOT** alter Execution Payloads, Action Envelopes, or Approval objects without causing verification failure.
 - **MUST NOT** treat chat messages, comments, dashboard clicks, notifications, or transport authentication as MPAS Approvals unless the Verifier's policy explicitly recognizes a corresponding trusted external approval record.
 - **MUST NOT** be treated as approval authority unless the Verifier's policy explicitly trusts it for a specific role.
 - **SHOULD NOT** hold application credentials, reusable signer credentials, private keys, or downstream application secrets.
-- **MAY** assemble Approval Bundles from unmodified Approvals.
-- **MAY** call Verifiers and Signers using the direct HTTP interfaces defined above.
+- **MAY**, when acting as a Coordination Service, assemble Approval Bundles from unmodified Approvals.
 
-### 8.3 Coordination Service Endpoints
+An Action Relay **MUST NOT** use relay records, response provenance, or a shared database to authorize a Coordination Service mutation. A Coordination Service **MUST** apply its own authentication and administrative authorization to an explicit workflow request.
 
-| Client                                  | Endpoint Host        | Method | Endpoint                                | Purpose                                                                                                       |
-| --------------------------------------- | -------------------- | -----: | --------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| Proposer                                | Coordination Service | `POST` | `/mpas/v1/action`                       | Submit canonical `DeliveryEnvelope<ActionRequest>` and receive the first Verifier-authored `ActionResponse`.  |
-| Proposer                                | Coordination Service | `POST` | `/mpas/v1/coordination/workflow`        | Create an approval workflow after direct Verifier evaluation returned Authorization Requirements.             |
-| Participant                             | Coordination Service | `POST` | `/mpas/v1/coordination/poll`            | Poll for pending Approval Requests, action state updates, and addressed deliveries.                           |
-| Signer                                  | Coordination Service | `POST` | `/mpas/v1/coordination/approval`        | Submit an Approval for an Action.                                                                             |
-| Proposer                                | Coordination Service | `POST` | `/mpas/v1/coordination/action-cancel`   | Cancel a pending action that is still awaiting approvals.                                                     |
-| Verifier                                | Coordination Service | `POST` | `/mpas/v1/coordination/delivery`        | Return `DeliveryEnvelope<ActionResponse>` after processing a relayed Action.                                  |
-| Participant                             | Coordination Service | `POST` | `/mpas/v1/coordination/session`         | Obtain a short-lived ticket for the optional notification-only WebSocket.                                     |
+### 8.3 Endpoints
 
-Implementations **MAY** expose a `GET /mpas/v1/coordination/health` endpoint for daemon startup checks, monitoring, and CLI status commands. This is not a protocol endpoint.
+Action Relay endpoints:
 
-A separate receipt endpoint is not required in v0.2. Receipts may be returned directly in `ActionResponse` or distributed through `/mpas/v1/coordination/poll`.
+| Client | Method | Endpoint | Purpose |
+| --- | ---: | --- | --- |
+| Proposer | `POST` | `/mpas/v1/verifier/action` | Submit `DeliveryEnvelope<ActionRequest>` and receive the unchanged Verifier-authored `ActionResponse`. |
+| Participant | `POST` | `/mpas/v1/relay/poll` | Poll for addressed deliveries. |
+| Verifier | `POST` | `/mpas/v1/relay/delivery` | Return `DeliveryEnvelope<ActionResponse>`. |
+| Participant | `POST` | `/mpas/v1/relay/session` | Obtain a relay-notification WebSocket ticket. |
+| Participant | `GET` | `/mpas/v1/relay/ws` | Receive `RelayWorkAvailable`. |
+
+Coordination Service endpoints:
+
+| Client | Method | Endpoint | Purpose |
+| --- | ---: | --- | --- |
+| Proposer | `POST` | `/mpas/v1/coordination/workflow` | Explicitly create an approval workflow. |
+| Participant | `POST` | `/mpas/v1/coordination/poll` | Poll for Approval Requests and action updates. |
+| Signer | `POST` | `/mpas/v1/coordination/approval` | Submit an Approval. |
+| Proposer | `POST` | `/mpas/v1/coordination/workflow-cancel` | Cancel a pending workflow. |
+| Participant | `POST` | `/mpas/v1/coordination/session` | Obtain a workflow-notification WebSocket ticket. |
+| Participant | `GET` | `/mpas/v1/coordination/ws` | Receive `CoordinationWorkAvailable`. |
+
+Implementations **MAY** expose unauthenticated relay and coordination health endpoints for deployment probes. These are not protocol endpoints.
+
+A separate receipt endpoint is not required in v0.2. A Verifier returns a receipt in `ActionResponse`; a client may report the result to its workflow service under deployment-specific behavior.
 
 For migration, a Coordination Service **SHOULD** temporarily accept `POST /mpas/v1/coordination/action` as a deprecated alias of `POST /mpas/v1/coordination/workflow`. The alias accepts the same request, returns the same response, and enters the same DID-scoped idempotency domain; it does not create a second workflow or mutation namespace. New clients **MUST** use `/mpas/v1/coordination/workflow`.
+
+#### 8.3.1 POST /mpas/v1/relay/poll
+
+The Relay poll retrieves only addressed `DeliveryEnvelope` objects. It is separate from workflow polling.
+
+```json
+{
+  "version": "1",
+  "type": "RelayPollRequest",
+  "did": "did:jwk:...participant...",
+  "audience": "https://relay.example.com",
+  "cursor": "opaque-checkpoint"
+}
+```
+
+```json
+{
+  "version": "1",
+  "type": "RelayPollResponse",
+  "deliveries": [
+    {
+      "version": "1",
+      "type": "DeliveryEnvelope",
+      "sender": "did:jwk:...sender...",
+      "recipients": ["did:jwk:...participant..."],
+      "createdAt": "2026-08-29T12:00:00.000Z",
+      "payload": { "version": "1", "type": "ActionRequest" }
+    }
+  ],
+  "nextCursor": "opaque-checkpoint"
+}
+```
+
+The relay **MUST** establish `keyid == did` and return only unexpired envelopes whose `recipients` contains that DID. Delivery is at least once. A repeated cursor may return the same page. Every capped non-empty page **MUST** include a `nextCursor` for its last delivery, including the currently known final page. A client persists the checkpoint only after durably accepting the page.
+
+A routing client parses the envelope before dispatching the payload on its own `type`. A Verifier relay worker conforming to this version **MUST** fail closed without advancing the cursor when a delivery payload is not `ActionRequest`.
+
+#### 8.3.2 Relay notification session
+
+`POST /mpas/v1/relay/session` accepts:
+
+```json
+{
+  "version": "1",
+  "type": "RelaySessionRequest",
+  "did": "did:jwk:...participant...",
+  "audience": "https://relay.example.com"
+}
+```
+
+After establishing `keyid == did`, the relay returns `RelaySessionResponse` with `websocketUrl`, an opaque single-use DID-bound `ticket`, and `expiresAt`. The URL identifies `/mpas/v1/relay/ws`. The ticket behavior is defined in §9.2.
+
+```json
+{
+  "version": "1",
+  "type": "RelaySessionResponse",
+  "websocketUrl": "wss://relay.example.com/mpas/v1/relay/ws",
+  "ticket": "opaque-single-use-value",
+  "expiresAt": "2026-08-29T12:05:00.000Z"
+}
+```
+
+The participant uses `websocketUrl` exactly as returned and supplies `Authorization: Bearer <ticket>` on the WebSocket upgrade. The ticket is omitted from URLs and logs, atomically consumed, and valid for no more than five minutes.
+
+#### 8.3.3 Migration from the combined delivery binding
+
+During migration, an implementation **MAY**:
+
+- accept `/mpas/v1/action` as the §6 alias;
+- accept `/mpas/v1/coordination/delivery` as an alias of `/mpas/v1/relay/delivery`.
+
+These aliases do not combine the services. Relay deliveries are available only from
+`/mpas/v1/relay/poll`, and relay notifications use only the relay session and
+WebSocket. Coordination polling and notifications contain workflow work only.
+
+Each compatibility binding **MUST** share the canonical operation's storage, authorization, correlation, cursor, nonce, and idempotency behavior. It **MUST NOT** create a second mutation. New clients use the separated endpoints.
 
 ### 8.4 POST /mpas/v1/coordination/workflow
 
@@ -1088,7 +1187,7 @@ Used by a Proposer to submit an Action Package to a Coordination Service for app
 
 The Coordination Service stores the Action Package and makes it available to eligible Signers for review.
 
-This endpoint is used with the direct-Verifier-then-coordinate topology. Coordination-Service-relayed Verifier submission uses `/mpas/v1/action` and the common contract in §6.
+This endpoint is used only after a client has received `additionalApprovalsRequired` from the logical Verifier and has chosen this Coordination Service. The initial Verifier call may have been direct or relayed; that choice does not change this endpoint.
 
 The version 1 wire discriminants remain `CoordinationActionRequest` and `CoordinationActionResponse`. Renaming the endpoint does not create a second message format or silently revise the version 1 payload schemas.
 
@@ -1154,12 +1253,14 @@ Rules:
 - Before creating a workflow, it **MUST** verify `actionEnvelope.executionPayloadHash` and `approvalBundle.actionEnvelopeHash`; verify the Authorization Requirements' exact Action hash and Verifier binding; reject expired requirements; and reject duplicate or unachievable `eligibleSigners` threshold sets. A failure creates no workflow. Hash failures use `400 artifact_hash_mismatch`, expired requirements use `409 expired`, and other requirements failures use `400 invalid_request`.
 - The Proposer DID is not categorically forbidden from `eligibleSigners`. Whether a Proposer Approval counts is determined by the applicable Verifier policy or policy profile.
 - The Coordination Service **SHOULD** compute and store the Execution Payload hash and Action Package hash for audit/debugging, but those hashes are not substitutes for the normative Action Envelope binding.
-- If `authorizationRequirements` are provided, the Coordination Service **SHOULD** use them to determine which Signers are eligible and expose Approval Requests accordingly.
+- Proposer-forwarded `authorizationRequirements` are coordination input, not independently authenticated Verifier authority at this HTTP hop. Before exposing review material, the Coordination Service **MUST** apply its own administrative authorization to every candidate recipient. It **MUST NOT** bypass that authorization because it is co-located with an Action Relay or can read relay records.
+- If `authorizationRequirements` are provided and the candidates are authorized, the Coordination Service **SHOULD** use them to determine which Signers receive Approval Requests.
 - The Coordination Service makes collected Approvals and completed Action Packages available to the Proposer through `/mpas/v1/coordination/poll`.
+- The Authorization Requirements do not freeze Verifier policy. The Proposer resubmits the completed package to the logical Verifier, which evaluates its current policy under the existing Core rules.
 
 ### 8.5 POST /mpas/v1/coordination/poll
 
-Used by MPAS participants to poll for pending work, action state updates, and addressed deliveries.
+Used by MPAS participants to poll for approval work and action state updates.
 
 Polling is mandatory for Coordination Service interoperability. Participants using a Coordination Service topology **MUST** be able to retrieve pending messages by polling, even when push notifications or webhooks are also supported.
 
@@ -1191,7 +1292,6 @@ Fields:
 | `type`    |   Yes    | MUST be `CoordinationPollRequest`.                          |
 | `did`      |   Yes    | DID of the participant polling for work or status updates. Required in request schema v1. On a signed request, signature `keyid` **MUST** equal this field before processing or the server rejects with `403`; the response is scoped to that agreed DID. |
 | `audience` | Conditional | Configured service URL origin (§4.6.3). Required whenever the request carries an MPAS signature; MAY be omitted only on an unsigned request to an unenforcing service. |
-| `cursor`   | Optional | Opaque continuation token from a previous response's `nextCursor`. Paginating servers use it to resume; omit it to start from the beginning. |
 
 Response:
 
@@ -1251,19 +1351,6 @@ Response:
         "type": "ActionPackage"
       }
     }
-  ],
-  "deliveries": [
-    {
-      "version": "1",
-      "type": "DeliveryEnvelope",
-      "sender": "did:jwk:...sender...",
-      "recipients": ["did:jwk:...recipient..."],
-      "createdAt": "2026-08-25T12:00:00.000Z",
-      "payload": {
-        "version": "1",
-        "type": "ActionRequest"
-      }
-    }
   ]
 }
 ```
@@ -1280,13 +1367,7 @@ Rules:
 - When state is `rejected`, the action update includes `rejectedAt`. This records when the Coordination Service's non-authoritative workflow view became rejected.
 - An action update MUST NOT contain an `expiredAt` field. When and how an implementation marks a workflow expired is internal bookkeeping and is not part of the wire protocol.
 - The existing `approvalRequests` and `actionUpdates` arrays may be empty.
-- `deliveries` is optional; absence is equivalent to an empty array. Every returned envelope is unexpired and contains the authenticated poll DID in `recipients`.
-- A Verifier may poll for a relayed `ActionRequest` addressed to its configured DID.
-- Delivery is at least once. Repeating a cursor may return the same envelope, so recipients apply the enclosed MPAS object's identity and replay rules.
-- `nextCursor` reflects delivery position only. `approvalRequests` and `actionUpdates` are returned in full and are not cursor-paged in version 1.
-- **Delivery page cap (optional).** A Coordination Service MAY cap the number of `deliveries` in one response. Every non-empty delivery page **MUST** include `nextCursor` identifying the last returned delivery, including the currently known final page. The client persists that checkpoint only after durably accepting the page and re-polls with it. A subsequent caught-up poll may return no deliveries and omit `nextCursor`.
-
-There is no delivery-specific cursor in version 1.
+Addressed Delivery Envelopes are retrieved from `/mpas/v1/relay/poll`, never from this workflow poll.
 
 ### 8.6 POST /mpas/v1/coordination/approval
 
@@ -1364,9 +1445,11 @@ Rules:
 - The Coordination Service **MUST** reject Approvals submitted for cancelled actions with `404`.
 - For one `actionEnvelopeHash`, a Signer's first valid additional-approval decision is final. A duplicate with the same decision **MAY** be accepted idempotently but **MUST NOT** inflate threshold counts. A later different decision **MUST** be rejected with `409 Conflict`. Changing a decision requires a new Action Envelope and workflow. The Proposer's initial `propose` Approval is not an additional-approval decision under this rule.
 
-### 8.7 POST /mpas/v1/coordination/action-cancel
+### 8.7 POST /mpas/v1/coordination/workflow-cancel
 
-Used by the original Proposer to cancel a pending action that is still awaiting approvals.
+Used by the original Proposer to cancel a pending coordination workflow that is still awaiting approvals. It does not cancel or reverse the Action at a Verifier or Action Relay.
+
+`POST /mpas/v1/coordination/action-cancel` is a temporary compatibility alias. It accepts the same request, returns the same response, and shares the canonical endpoint's authentication, nonce, idempotency, authorization, and workflow mutation. The version 1 request and response discriminants remain `CoordinationActionCancelRequest` and `CoordinationActionCancelResponse`; this path correction does not introduce duplicate message types.
 
 Request:
 
@@ -1388,7 +1471,7 @@ Fields:
 | ------------- | :------: | -------------------------------------------------------------------------------------- |
 | `version`     |   Yes    | MUST be `"1"`.                                                                         |
 | `type`        |   Yes    | MUST be `CoordinationActionCancelRequest`.                                             |
-| `actionId`    |   Yes    | The Action ID of the action to cancel.                                                 |
+| `actionId`    |   Yes    | The Action ID identifying the workflow to cancel.                                     |
 | `proposerDid` |   Yes    | DID of the proposer requesting cancellation. Required in request schema v1. On a signed request, signature `keyid`, this field, and the stored proposer **MUST** all be equal before processing or the server rejects with `403`. |
 | `idempotencyKey` | Recommended | Mutation idempotency key (§4.5).                                                |
 | `audience`    | Conditional | Configured service URL origin (§4.6.3). Required whenever the request carries an MPAS signature; MAY be omitted only on an unsigned request to an unenforcing service. |
@@ -1418,12 +1501,12 @@ Response:
 Rules:
 
 - On a signed request, the server **MUST** establish `keyid == proposerDid == stored proposer` before processing; any mismatch **MUST** be rejected with `403`.
-- Only the original proposer (matching `actionPackage.actionEnvelope.proposer.did`) **MAY** cancel an action.
-- Cancellation is only allowed when the action is in `awaitingApprovals` state. If the action is already in `readyForResubmission`, the Coordination Service **MUST** return `409 Conflict`.
-- A cancelled action **MUST NOT** be served to signers in poll responses.
+- Only the original proposer (matching `actionPackage.actionEnvelope.proposer.did`) **MAY** cancel a workflow.
+- Cancellation is only allowed when the workflow is in `awaitingApprovals` state. If the workflow is already in `readyForResubmission`, the Coordination Service **MUST** return `409 Conflict`.
+- A cancelled workflow **MUST NOT** be served to signers in poll responses.
 - Approvals submitted after cancellation **MUST** be rejected with `404`.
-- Cancellation is final — a cancelled action cannot be re-activated. The proposer must submit a new action if they want to retry.
-- Returns `404` if the action is unknown.
+- Cancellation is final — a cancelled workflow cannot be reactivated. The proposer must create a new workflow if coordination is still required.
+- Returns `404` if the workflow is unknown.
 - Returns `403` if the requesting DID does not match the original proposer.
 
 ### 8.8 Coordination States
@@ -1463,36 +1546,36 @@ Because additional-approval decisions are immutable under §8.6, a Coordination 
 
 The Verifier performs authoritative verification when it receives the completed Action Package through the direct or relayed Action interface.
 
-### 8.9 POST /mpas/v1/coordination/delivery
+### 8.9 POST /mpas/v1/relay/delivery
 
-This endpoint exists so a Verifier that retrieved a relayed `ActionRequest` through poll can return its Verifier-authored `ActionResponse` to the Coordination Service. It is not the initial Action submission path and does not accept arbitrary participant payloads in this version.
+This endpoint exists so a Verifier that retrieved a relayed `ActionRequest` through `/relay/poll` can return its Verifier-authored `ActionResponse` to the Action Relay. It is not the initial Action submission path and does not accept arbitrary participant payloads in this version.
 
 The request body is `DeliveryEnvelope<ActionResponse>`. Its `recipients` array **MUST** include the Proposer DID and **SHOULD** include the Maintainer DIDs authorized for the Action. The endpoint **MUST** require `payload.type == "ActionResponse"` and establish:
 
 ```text
 signature keyid == DeliveryEnvelope.sender
                 == ActionResponse.verifier.did
-                == configured workflow Verifier DID
+                == relayed Action's recorded Verifier DID
 ```
 
-The configured workflow Verifier DID is recorded independently when the canonical Action request is accepted. It must have occurred in that request's recipient array, but it need not have been the only recipient. The service correlates the response by the exact Action identity and hashes; it does not compare commands or parameters. Only a response from the recorded designated Verifier satisfies the workflow.
+The configured Verifier DID is recorded independently when the canonical Action request is accepted. It must have occurred in that request's recipient array, but it need not have been the only recipient. The relay correlates the response by the exact Action identity and hashes; it does not compare commands or parameters. Only a response from the recorded designated Verifier completes the held Action request.
 
-The Coordination Service **MUST** reject an additional response recipient unless that DID is authorized by the authenticated `AuthorizationRequirements` for the Action or by Coordination Service administrative policy. Recipient authorization does not make a recipient a Signer or Verifier. The response envelope distributes the `ActionResponse`; the existing `ApprovalRequest` and `SignerReviewSet` messages provide the Action review material to eligible Signers.
+The Action Relay **MUST** reject an additional response recipient unless that DID is authorized by relay administrative policy. Recipient authorization does not make a recipient a Signer or Verifier.
 
-Before a response delivery creates an approval workflow, the Coordination Service **MUST** validate the Verifier-authored Authorization Requirements using the same exact-hash, Verifier, expiry, unique-signer, and achievable-threshold checks defined in §8.4. It rejects an invalid response delivery before storing any recipient delivery or creating a workflow. A Proposer DID is not categorically invalid in `eligibleSigners`; applicable policy determines whether it can count.
+The relay may validate Action identity and hash consistency in an enclosed `AuthorizationRequirements`, but it **MUST NOT** create, authorize, or advance an approval workflow from that response. A later workflow exists only after the Proposer explicitly calls `/mpas/v1/coordination/workflow`.
 
 After durable storage, the endpoint returns:
 
 ```json
 {
   "version": "1",
-  "type": "CoordinationDeliveryResponse",
+  "type": "RelayDeliveryResponse",
   "accepted": true,
   "createdAt": "2026-08-25T12:00:01.000Z"
 }
 ```
 
-This response acknowledges delivery to the Coordination Service; it is not an Action result. The unchanged Verifier-authored `ActionResponse` completes the pending relayed `/mpas/v1/action` request and remains pollable for its addressed recipients. The envelope has no body-level idempotency field. A Coordination Service **MAY** deduplicate repeated response submissions by authenticated sender plus the exact enclosed payload hash; otherwise retries may create repeated delivery records.
+This response acknowledges delivery to the Action Relay; it is not an Action result. The unchanged Verifier-authored `ActionResponse` completes the pending relayed `/mpas/v1/verifier/action` request and remains pollable for its addressed recipients. The envelope has no body-level idempotency field. An Action Relay **MAY** deduplicate repeated response submissions by authenticated sender plus the exact enclosed payload hash; otherwise retries may create repeated delivery records.
 
 ### 8.10 POST /mpas/v1/coordination/session
 
@@ -1525,19 +1608,28 @@ The participant uses `websocketUrl` exactly as returned and performs a WebSocket
 
 ---
 
-## 9. Polling and Optional Push Notification
+## 9. Polling and Optional Work Notification
 
 ### 9.1 Polling-First Requirement
 
-The Coordination Service interface is polling-first.
+The Action Relay and Coordination Service interfaces are polling-first.
 
-A Coordination Service implementing this profile **MUST** expose `/mpas/v1/coordination/poll`.
+An Action Relay implementing this profile **MUST** expose `/mpas/v1/relay/poll`. A Coordination Service implementing this profile **MUST** expose `/mpas/v1/coordination/poll`.
 
-Participant clients using the Coordination Service topology **MUST** be able to retrieve pending messages by polling.
+Participant clients **MUST** be able to retrieve pending messages by polling the service that owns that work. Relay polling returns addressed Delivery Envelopes; coordination polling returns Approval Requests and action updates.
 
 ### 9.2 Optional WebSocket Notification
 
-Coordination Services **MAY** support the session and WebSocket binding in §8.10 in addition to polling. After establishing the connection exactly as described there, the client waits for a notification containing only:
+Action Relays and Coordination Services **MAY** support their respective session and WebSocket bindings in addition to polling. A relay sends:
+
+```json
+{
+  "version": "1",
+  "type": "RelayWorkAvailable"
+}
+```
+
+A Coordination Service sends:
 
 ```json
 {
@@ -1546,11 +1638,11 @@ Coordination Services **MAY** support the session and WebSocket binding in §8.1
 }
 ```
 
-The notification contains no URL, cursor, count, `DeliveryEnvelope`, or other MPAS payload. The client polls the Coordination Service HTTPS origin retained from its signed session request; it does not derive that origin by rewriting `websocketUrl`.
+The notification contains no URL, cursor, count, `DeliveryEnvelope`, or other MPAS payload. The client polls the HTTPS origin and service interface retained from its signed session request; it does not derive an origin or choose a poll API by rewriting `websocketUrl`.
 
 After binding every authenticated connection, including the first, the service **MUST** send a notification when pollable work already exists for that DID. It **SHOULD** notify after committing new pollable work. Notifications may be duplicated, coalesced, delayed, or lost; the authenticated poll remains authoritative.
 
-Heartbeat, reconnect, backoff, connection limits, and local wake-up behavior are deployment choices. Polling remains sufficient for interoperability.
+Heartbeat, reconnect, backoff, connection limits, email, SMS, mobile push, and local wake-up behavior are deployment choices. Polling remains sufficient for interoperability.
 
 ---
 
@@ -1566,7 +1658,7 @@ A Verifier implementing this profile **MUST**:
 - verify that the Approval Bundle binds to the computed Action Envelope hash;
 - verify candidate Approvals needed to satisfy or block policy;
 - determine policy from trusted configuration, application state, smart contract logic, enterprise policy, or another deterministic trusted source;
-- not rely on Proposer-supplied policy fields, unsigned metadata, Coordination Service routing, or HTTP caller identity as authoritative policy;
+- not rely on Proposer-supplied policy fields, unsigned metadata, Action Relay or Coordination Service metadata, or HTTP caller identity as authoritative policy;
 - enforce replay and Action ID rules;
 - return Authorization Requirements with `actionEnvelopeHash` when additional Approvals may satisfy policy;
 - return an Execution Receipt when required by the deployment or profile.
@@ -1580,7 +1672,19 @@ A Signer implementing this profile **MUST**:
 - not approve if the Execution Payload is missing, unavailable, or does not match the Action Envelope;
 - avoid relying only on untrusted summaries or coordination metadata.
 
-### 10.3 Coordination Service Requirements
+### 10.3 Action Relay Requirements
+
+An Action Relay implementing this profile **MUST**:
+
+- authenticate callers under §4.6 when outside the trust boundary;
+- select and record the designated Verifier from trusted configuration;
+- isolate delivery retrieval by authenticated recipient DID;
+- correlate a Verifier response by exact Action identity and hashes;
+- preserve the Verifier-authored `ActionResponse` unchanged;
+- treat recipient membership as delivery authorization only; and
+- never create or advance an approval workflow from relay state.
+
+### 10.4 Coordination Service Requirements
 
 A Coordination Service implementing this profile **MUST**:
 
@@ -1589,11 +1693,14 @@ A Coordination Service implementing this profile **MUST**:
 - compute and store `actionEnvelopeHash` for received Action Packages;
 - reject same-`actionId`, different-`actionEnvelopeHash` conflicts unless a supersession mechanism is explicitly defined;
 - expose polling for participants;
+- create a workflow only from an explicit workflow request;
+- apply its own administrative authorization before exposing review material, without relying on relay state;
+- return a completed Action Package to the Proposer rather than automatically submitting it to a Verifier;
 - treat Coordination Service state, comments, notifications, routing, and HTTP authentication as non-authoritative for MPAS approval;
 - not treat itself as approval authority unless explicitly trusted by Verifier policy for a specific role;
 - not hold downstream application credentials in the ordinary Coordination Service role.
 
-### 10.4 Credential and Application Secret Handling
+### 10.5 Credential and Application Secret Handling
 
 This profile refers only to the Verifier at the HTTP layer. A Verifier may be embedded in a native MPAS Application or another MPAS-aware component.
 
@@ -1601,7 +1708,7 @@ Any component that holds or uses application credentials **MUST**:
 
 - use credentials only after the Action Package satisfies Verifier policy;
 - bind credential use to the approved Execution Payload;
-- not expose reusable credentials to Proposers, Signers, agents, or Coordination Services;
+- not expose reusable credentials to Proposers, Signers, agents, Action Relays, or Coordination Services;
 - select credentials from trusted configuration, not from Proposer-supplied payload fields or unsigned metadata.
 
 ---
@@ -1612,7 +1719,7 @@ Any component that holds or uses application credentials **MUST**:
 
 A conforming Verifier / Application endpoint **MUST** support:
 
-- `POST /mpas/v1/action`;
+- `POST /mpas/v1/verifier/action`;
 - `DeliveryEnvelope<ActionRequest>` and bare `ActionRequest`;
 - `ActionResponse`;
 - `application/mpas+json`;
@@ -1630,29 +1737,39 @@ A conforming Signer endpoint **MUST** support:
 - verification of Execution Payload hash before Approval creation;
 - production or return of a valid MPAS Approval when approving, rejecting, or abstaining.
 
-### 11.3 Coordination Service Conformance
+### 11.3 Action Relay Conformance
+
+A conforming Action Relay **MUST** support:
+
+- RFC 9421 authentication and identity binding under §4.6;
+- `POST /mpas/v1/verifier/action` with `DeliveryEnvelope<ActionRequest>`;
+- `POST /mpas/v1/relay/poll`;
+- `POST /mpas/v1/relay/delivery` for `DeliveryEnvelope<ActionResponse>`;
+- rejection of already-expired envelopes before delivery creation;
+- a bounded relay wait returning retryable `503 timeout` without deleting durable state;
+- independent recipient obligations and delivery-position cursor checkpoints; and
+- exact response correlation without workflow creation.
+
+During migration it **SHOULD** support the compatibility endpoint aliases in §8.3.3.
+
+### 11.4 Coordination Service Conformance
 
 A conforming Coordination Service **MUST** support:
 
 - RFC 9421 authentication profile (§4.6) — deterministic signature selection, signature verification, identity binding, freshness, atomic nonce claiming after validation and before mutation, signed-request audience validation, fail-closed configuration, generic external failures, and logging redaction;
 - `POST /mpas/v1/coordination/workflow`;
-- `POST /mpas/v1/action` with `DeliveryEnvelope<ActionRequest>`;
 - `POST /mpas/v1/coordination/poll`;
 - `POST /mpas/v1/coordination/approval`;
-- `POST /mpas/v1/coordination/action-cancel`;
-- `POST /mpas/v1/coordination/delivery` for `DeliveryEnvelope<ActionResponse>`;
-- polling-first participant delivery;
-- rejection of already-expired Delivery Envelopes before creating delivery obligations;
-- a bounded relay wait that returns retryable `503 relay_timeout` without deleting durable relay state;
-- independent recipient obligations and optional `CoordinationPollResponse.deliveries`;
-- delivery-position cursor checkpoints and bounded delivery pages when a page cap is used;
+- `POST /mpas/v1/coordination/workflow-cancel`;
 - storage of unmodified Approvals;
 - first-decision-final handling for additional-approval decisions;
-- Action Package hash-binding and Verifier-requirements validation before delivery or workflow creation;
+- Action Package hash-binding and requirements validation before workflow creation;
 - conflict detection for same `actionId` with different `actionEnvelopeHash`;
 - assembly of completed Action Packages for proposer retrieval via poll.
 
-During the migration period, it **SHOULD** also support the deprecated `/mpas/v1/coordination/action` alias defined in §8.3.
+It **MUST NOT** create a workflow from relay state or automatically submit a completed package to a Verifier.
+
+During the migration period, it **SHOULD** also support the deprecated `/mpas/v1/coordination/action` alias defined in §8.3 and `/mpas/v1/coordination/action-cancel` alias defined in §8.7.
 
 ---
 
@@ -1671,7 +1788,7 @@ Steps:
 2. Proposer constructs Action Envelope with `executionPayloadHash` and `actionId`.
 3. Proposer creates its own Approval.
 4. Proposer assembles initial Approval Bundle.
-5. Proposer submits ActionRequest to `/mpas/v1/action`.
+5. Proposer submits ActionRequest to `/mpas/v1/verifier/action`.
 6. Verifier verifies the package.
 7. If the Proposer's Approval satisfies policy, Verifier executes the Action.
 8. Verifier returns ActionResponse with Execution Receipt.
@@ -1709,9 +1826,9 @@ Rules:
 
 ---
 
-## 14. Coordination Service Topology
+## 14. Relay and Coordination Topologies
 
-This appendix describes a neutral Coordination Service topology. It is informative except where it references normative endpoint behavior defined above.
+This appendix describes neutral relay and coordination topologies. It is informative except where it references normative endpoint behavior defined above.
 
 ### 14.1 Direct-to-Verifier Initial Submission
 
@@ -1729,16 +1846,18 @@ Proposer -> Coordination Service: CoordinationActionRequest(ActionPackage + Auth
 Coordination Service -> Proposer: CoordinationActionResponse(awaitingApprovals)
 ```
 
-### 14.2 Coordination-Service-Relayed Initial Submission
+### 14.2 Action-Relayed Initial Submission
 
 ```text
-Proposer -> Coordination Service: DeliveryEnvelope(ActionRequest, configured Verifier among recipients)
-Coordination Service -> Verifier: poll returns addressed DeliveryEnvelope(ActionRequest)
-Verifier -> Coordination Service: DeliveryEnvelope(ActionResponse)
-Coordination Service -> Proposer: unchanged Verifier-authored ActionResponse
+Proposer -> Action Relay: DeliveryEnvelope(ActionRequest, configured Verifier among recipients)
+Action Relay -> Verifier: RelayPollResponse(deliveries: [DeliveryEnvelope(ActionRequest)])
+Verifier -> Action Relay: DeliveryEnvelope(ActionResponse)
+Action Relay -> Proposer: unchanged Verifier-authored ActionResponse
 ```
 
-The Coordination Service resolves the designated Verifier DID from trusted deployment configuration, requires it among the authorized envelope recipients, and records it independently. Other recipients do not become Verifiers or Signers merely by receiving the envelope.
+The Action Relay resolves the designated Verifier DID from trusted deployment configuration, requires it among the authorized envelope recipients, and records it independently. Other recipients do not become Verifiers or Signers merely by receiving the envelope. An `additionalApprovalsRequired` response ends this relay exchange; it does not create a workflow.
+
+If the client chooses approval coordination, it next performs the same explicit workflow request shown in §14.1. That Coordination Service may be operated separately and applies its own authorization.
 
 ### 14.3 Signer Polling
 
@@ -1757,18 +1876,18 @@ The Coordination Service generates Approval Requests from:
 
 The Signer must still verify the Execution Payload hash against the Action Envelope before approving.
 
-### 14.4 Coordination-Service-Relayed Completed Action Submission
+### 14.4 Completed Action Submission
 
 ```text
-Verifier -> Coordination Service: CoordinationPollRequest(did)
-Coordination Service -> Verifier: CoordinationPollResponse(deliveries: [ActionRequest(completed ActionPackage)])
-Verifier -> Coordination Service: DeliveryEnvelope(ActionResponse(executed + ExecutionReceipt))
-Coordination Service -> Proposer: addressed delivery and stored Action result
+Proposer -> Coordination Service: CoordinationPollRequest(did)
+Coordination Service -> Proposer: CoordinationPollResponse(actionUpdates: [readyForResubmission + completed ActionPackage])
+Proposer -> logical Verifier: ActionRequest or DeliveryEnvelope(ActionRequest)
+logical Verifier -> Proposer: ActionResponse(executed + ExecutionReceipt)
 ```
 
-The Coordination Service may continue to expose the existing Proposer action update. In the relayed topology it also makes the completed package available to the recorded designated Verifier and any separately authorized recipients. The Verifier returns its response through §8.9.
+The Proposer or its bridge explicitly submits the completed package to the same configured logical Verifier interface used initially. If that endpoint is an Action Relay, the internal exchange repeats §14.2. The Coordination Service does not submit or deliver the package to the Verifier.
 
-### 14.5 Direct-to-Verifier Completed Action Submission
+### 14.5 Direct-to-Verifier Variant
 
 In the direct-to-Verifier topology, the Proposer retrieves the completed Action Package and returns it to the same direct Action endpoint:
 
@@ -1779,7 +1898,7 @@ Proposer -> Verifier: ActionRequest(completed ActionPackage from poll response)
 Verifier -> Proposer: ActionResponse(executed + ExecutionReceipt)
 ```
 
-The Proposer may use either Action request form accepted by §6. This completion path does not require the Coordination Service to relay to the Verifier.
+The Proposer may use either Action request form accepted by §6. The same client state machine also applies when the logical Verifier URL is an Action Relay.
 
 ### 14.6 Proposer Polling for Status
 
@@ -1790,12 +1909,12 @@ Proposer -> Coordination Service: CoordinationPollRequest(did)
 Coordination Service -> Proposer: CoordinationPollResponse(actionUpdates: [state: awaitingApprovals, progress: ...])
 ```
 
-When the state becomes `readyForResubmission`, the direct topology continues through §14.5. In the relayed topology, the Coordination Service also routes the completed package as described in §14.4.
+When the state becomes `readyForResubmission`, the Proposer continues through §14.4. The Coordination Service does not infer which Verifier endpoint the Proposer will use.
 
 ### 14.7 Proposer Cancellation
 
 ```text
-Proposer -> Coordination Service: CoordinationActionCancelRequest(actionId, proposerDid)
+Proposer -> Coordination Service: POST /mpas/v1/coordination/workflow-cancel, CoordinationActionCancelRequest(actionId, proposerDid)
 Coordination Service -> Proposer: CoordinationActionCancelResponse(state: cancelled, cancelledAt: ...)
 ```
 
@@ -1827,14 +1946,15 @@ Future companion profiles may define:
 
 This HTTP profile defines a minimal interoperable transport contract for MPAS:
 
-- `/mpas/v1/action` is the primary Verifier / Application endpoint.
+- `/mpas/v1/verifier/action` is the primary logical Verifier / Application endpoint; `/mpas/v1/action` is a temporary alias.
 - The wire messages are `ActionRequest` and `ActionResponse`.
 - `/mpas/v1/approval-request` is the direct Signer endpoint.
-- Coordination Services expose the common `/action` relay plus workflow, poll, approval, cancellation, Verifier response delivery, and optional session endpoints. `/coordination/workflow` creates the approval workflow used by the direct-to-Verifier topology when the Verifier has already returned Authorization Requirements. `/coordination/action` is only a temporary migration alias.
-- The poll endpoint returns Approval Requests, action state updates, and optional addressed `DeliveryEnvelope` objects.
+- Action Relays expose the envelope-only logical Verifier endpoint plus `/relay/poll`, `/relay/delivery`, and optional relay notification endpoints.
+- Coordination Services expose workflow, poll, approval, cancellation, and optional workflow notification endpoints. `/coordination/action` is only a temporary alias for `/coordination/workflow`.
+- Relay poll returns addressed Delivery Envelopes. Coordination poll returns Approval Requests and action state updates.
 - Authorization Requirements bind to exactly one `actionEnvelopeHash`.
 - `actionId` remains the workflow and replay identifier inside the Action Envelope.
 - Coordination Services may index by `actionId` but must reject same-`actionId`, different-`actionEnvelopeHash` conflicts.
-- The Coordination Service may assemble completed Action Packages and route them to the recorded designated Verifier and other authorized recipients.
-- A relayed Verifier returns `DeliveryEnvelope<ActionResponse>` to the Coordination Service, which preserves the response and any Execution Receipt unchanged.
-- Coordination is routing and workflow, not approval authority.
+- The Coordination Service may assemble completed Action Packages for Proposer retrieval; the Proposer or bridge explicitly resubmits them to the logical Verifier.
+- A relayed Verifier returns `DeliveryEnvelope<ActionResponse>` to the Action Relay, which preserves the response and any Execution Receipt unchanged.
+- Relay transport and approval coordination are separable and neither is approval authority.

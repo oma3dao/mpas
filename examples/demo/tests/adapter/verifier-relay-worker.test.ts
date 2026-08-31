@@ -1,51 +1,72 @@
-import { mkdtemp, readFile, stat } from "node:fs/promises";
+import { mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import {
-  CoordinationUnavailableError,
+  ActionRelayUnavailableError,
   MpasAuthError,
   buildDeliveryEnvelope,
   type ActionPackage,
   type ActionRequest,
   type ActionResponse,
-  type CoordinationDeliveryResponse,
-  type CoordinationNotificationConnection,
-  type CoordinationPollResponse,
-  type CoordinationWebSocket,
+  type RelayDeliveryResponse,
+  type RelayNotificationConnection,
+  type RelayPollResponse,
+  type ActionRelayWebSocket,
   type DeliveryEnvelope,
   type Did,
 } from "@oma3/mpas";
 import {
-  FileVerifierCoordinationStateStore,
-  VerifierCoordinationWorker,
-  type VerifierCoordinationClient,
-  type VerifierCoordinationState,
-  type VerifierCoordinationStateStore,
-} from "../../src/adapter/verifier-coordination-worker.js";
+  FileVerifierRelayStateStore,
+  VerifierRelayWorker,
+  type VerifierRelayClient,
+  type VerifierRelayState,
+  type VerifierRelayStateStore,
+} from "../../src/adapter/verifier-relay-worker.js";
 import { computeJsonHash } from "../../src/core/verification.js";
 
 const fixtures = fileURLToPath(new URL("../fixtures/core/", import.meta.url));
-const coordinationUrl = "https://coordination.example";
+const relayUrl = "https://relay.example";
 const verifier = "did:jwk:verifier" as Did;
 const maintainer = "did:jwk:maintainer" as Did;
 
-describe("VerifierCoordinationWorker", () => {
+describe("VerifierRelayWorker", () => {
   it("persists its cursor and response cache in a private state file", async () => {
     const path = join(await mkdtemp(join(tmpdir(), "mpas-verifier-state-")), "state.json");
-    const store = new FileVerifierCoordinationStateStore(path);
-    const state = await store.load({ coordinationUrl, verifierDid: verifier });
+    const store = new FileVerifierRelayStateStore(path);
+    const state = await store.load({ relayUrl, verifierDid: verifier });
     state.cursor = "cursor-7";
 
     await store.save(state);
 
-    await expect(store.load({ coordinationUrl, verifierDid: verifier })).resolves.toMatchObject({
-      coordinationUrl,
+    await expect(store.load({ relayUrl, verifierDid: verifier })).resolves.toMatchObject({
+      relayUrl,
       verifierDid: verifier,
       cursor: "cursor-7",
     });
     expect((await stat(path)).mode & 0o777).toBe(0o600);
+  });
+
+  it("loads the legacy coordination-named state shape as relay state", async () => {
+    const path = join(await mkdtemp(join(tmpdir(), "mpas-verifier-state-")), "state.json");
+    await writeFile(path, JSON.stringify({
+      version: "1",
+      type: "MpasVerifierCoordinationState",
+      coordinationUrl: relayUrl,
+      verifierDid: verifier,
+      cursor: "legacy-cursor",
+      responses: {},
+    }));
+
+    const state = await new FileVerifierRelayStateStore(path).load({ relayUrl, verifierDid: verifier });
+
+    expect(state).toMatchObject({
+      type: "MpasVerifierRelayState",
+      relayUrl,
+      verifierDid: verifier,
+      cursor: "legacy-cursor",
+    });
   });
 
   it("polls an addressed Action, returns its response to the Proposer, and advances the cursor", async () => {
@@ -75,11 +96,11 @@ describe("VerifierCoordinationWorker", () => {
     const requestEnvelope = await actionRequestEnvelope();
     const store = new MemoryStateStore();
     const client = new FakeCoordinationClient(requestEnvelope);
-    client.submitFailures.push(new CoordinationUnavailableError("temporary outage"));
+    client.submitFailures.push(new ActionRelayUnavailableError("temporary outage"));
     const processAction = vi.fn(async () => actionResponse(requestEnvelope));
     const worker = await createWorker(client, store, processAction);
 
-    await expect(worker.pollNow()).rejects.toBeInstanceOf(CoordinationUnavailableError);
+    await expect(worker.pollNow()).rejects.toBeInstanceOf(ActionRelayUnavailableError);
     const cachedEnvelope = Object.values(store.state?.responses ?? {})[0]?.envelope;
     expect(cachedEnvelope).toBeDefined();
     expect(worker.getCursor()).toBeUndefined();
@@ -102,7 +123,7 @@ describe("VerifierCoordinationWorker", () => {
       .mockResolvedValueOnce(terminal);
     const worker = await createWorker(client, store, processAction);
 
-    await expect(worker.pollNow()).rejects.toBeInstanceOf(CoordinationUnavailableError);
+    await expect(worker.pollNow()).rejects.toBeInstanceOf(ActionRelayUnavailableError);
     expect(store.state?.responses ?? {}).toEqual({});
     expect(client.submissions).toEqual([]);
     expect(worker.getCursor()).toBeUndefined();
@@ -114,7 +135,7 @@ describe("VerifierCoordinationWorker", () => {
     expect(worker.getCursor()).toBe("cursor-1");
   });
 
-  it("addresses a requirements response to the Proposer and eligible Maintainers", async () => {
+  it("addresses a requirements response only to the Proposer", async () => {
     const requestEnvelope = await actionRequestEnvelope();
     const client = new FakeCoordinationClient(requestEnvelope);
     const response = actionResponse(requestEnvelope);
@@ -133,7 +154,7 @@ describe("VerifierCoordinationWorker", () => {
 
     await worker.pollNow();
 
-    expect(client.submissions[0]?.recipients).toEqual([requestEnvelope.sender, maintainer]);
+    expect(client.submissions[0]?.recipients).toEqual([requestEnvelope.sender]);
   });
 
   it("fails closed without advancing the cursor for an unsupported delivery payload", async () => {
@@ -144,8 +165,8 @@ describe("VerifierCoordinationWorker", () => {
     } as unknown as DeliveryEnvelope<ActionRequest>;
     const client = new FakeCoordinationClient(unsupported);
     const events: string[] = [];
-    const worker = await VerifierCoordinationWorker.create({
-      coordinationUrl,
+    const worker = await VerifierRelayWorker.create({
+      relayUrl,
       verifierDid: verifier,
       client,
       stateStore: new MemoryStateStore(),
@@ -188,7 +209,7 @@ describe("VerifierCoordinationWorker", () => {
     const requestEnvelope = await actionRequestEnvelope();
     const client = new FakeCoordinationClient(requestEnvelope);
     const processAction = vi.fn()
-      .mockRejectedValueOnce(new CoordinationUnavailableError("temporary adapter failure"))
+      .mockRejectedValueOnce(new ActionRelayUnavailableError("temporary adapter failure"))
       .mockResolvedValueOnce(actionResponse(requestEnvelope));
     const worker = await createWorker(client, new MemoryStateStore(), processAction);
 
@@ -219,25 +240,25 @@ describe("VerifierCoordinationWorker", () => {
   });
 });
 
-class MemoryStateStore implements VerifierCoordinationStateStore {
-  state?: VerifierCoordinationState;
+class MemoryStateStore implements VerifierRelayStateStore {
+  state?: VerifierRelayState;
 
-  async load(identity: { coordinationUrl: string; verifierDid: Did }): Promise<VerifierCoordinationState> {
+  async load(identity: { relayUrl: string; verifierDid: Did }): Promise<VerifierRelayState> {
     return this.state ?? {
       version: "1",
-      type: "MpasVerifierCoordinationState",
-      coordinationUrl: identity.coordinationUrl,
+      type: "MpasVerifierRelayState",
+      relayUrl: identity.relayUrl,
       verifierDid: identity.verifierDid,
       responses: {},
     };
   }
 
-  async save(state: VerifierCoordinationState): Promise<void> {
+  async save(state: VerifierRelayState): Promise<void> {
     this.state = structuredClone(state);
   }
 }
 
-class FakeSocket implements CoordinationWebSocket {
+class FakeSocket implements ActionRelayWebSocket {
   readonly close = vi.fn(() => this.emit("close"));
   private readonly listeners = new Map<string, Set<(event: unknown) => void>>();
 
@@ -256,7 +277,7 @@ class FakeSocket implements CoordinationWebSocket {
   }
 }
 
-class FakeCoordinationClient implements VerifierCoordinationClient {
+class FakeCoordinationClient implements VerifierRelayClient {
   readonly sockets: FakeSocket[] = [];
   readonly submissions: DeliveryEnvelope<ActionResponse>[] = [];
   readonly submitFailures: Error[] = [];
@@ -273,37 +294,33 @@ class FakeCoordinationClient implements VerifierCoordinationClient {
     return socket;
   }
 
-  async pollWork(options: { cursor?: string } = {}): Promise<CoordinationPollResponse> {
+  async pollDeliveries(options: { cursor?: string } = {}): Promise<RelayPollResponse> {
     this.pollCount += 1;
     if (this.delivery && options.cursor === undefined) {
       return {
         version: "1",
-        type: "CoordinationPollResponse",
-        approvalRequests: [],
-        actionUpdates: [],
+        type: "RelayPollResponse",
         deliveries: [this.delivery as unknown as DeliveryEnvelope],
         nextCursor: "cursor-1",
       };
     }
     return {
       version: "1",
-      type: "CoordinationPollResponse",
-      approvalRequests: [],
-      actionUpdates: [],
+      type: "RelayPollResponse",
       deliveries: [],
       ...(options.cursor ? { nextCursor: options.cursor } : {}),
     };
   }
 
-  async submitActionResponseDelivery(
+  async submitActionResponse(
     envelope: DeliveryEnvelope<ActionResponse>,
-  ): Promise<CoordinationDeliveryResponse> {
+  ): Promise<RelayDeliveryResponse> {
     const failure = this.submitFailures.shift();
     if (failure) throw failure;
     this.submissions.push(structuredClone(envelope));
     return {
       version: "1",
-      type: "CoordinationDeliveryResponse",
+      type: "RelayDeliveryResponse",
       accepted: true,
       createdAt: "2026-08-28T12:00:00.000Z",
     };
@@ -311,7 +328,7 @@ class FakeCoordinationClient implements VerifierCoordinationClient {
 
   async connectWorkNotifications(input: {
     onWorkAvailable: () => void | Promise<void>;
-  }): Promise<CoordinationNotificationConnection> {
+  }): Promise<RelayNotificationConnection> {
     this.connectCount += 1;
     if (this.connectError) throw this.connectError;
     this.onWorkAvailable = input.onWorkAvailable;
@@ -319,8 +336,8 @@ class FakeCoordinationClient implements VerifierCoordinationClient {
     this.sockets.push(socket);
     return {
       socket,
-      coordinationUrl,
-      audience: coordinationUrl,
+      relayUrl,
+      audience: relayUrl,
       did: verifier,
     };
   }
@@ -331,13 +348,13 @@ class FakeCoordinationClient implements VerifierCoordinationClient {
 }
 
 async function createWorker(
-  client: VerifierCoordinationClient,
-  stateStore: VerifierCoordinationStateStore,
+  client: VerifierRelayClient,
+  stateStore: VerifierRelayStateStore,
   processAction: (envelope: DeliveryEnvelope<ActionRequest>) => Promise<ActionResponse>,
   fallbackPollIntervalMs = 60_000,
-): Promise<VerifierCoordinationWorker> {
-  return VerifierCoordinationWorker.create({
-    coordinationUrl,
+): Promise<VerifierRelayWorker> {
+  return VerifierRelayWorker.create({
+    relayUrl,
     verifierDid: verifier,
     client,
     stateStore,
