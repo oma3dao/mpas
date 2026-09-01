@@ -945,13 +945,13 @@ After Part 3, you have two agents running: a proposer (with GitHub tools) and a 
 
 > Delete the branch `demo/branch-alpha` from `example-org/mpas-demo-repository`.
 
-The proposer bridge submits to the Action endpoint → the Verifier returns `additionalApprovalsRequired` (policy requires 1 maintainer for `delete_branch_mirror`) → the bridge explicitly creates a Coordination Service workflow → the tool call returns an MCP Task immediately. A relay response alone never creates that workflow. The `taskId` is the Action ID; `_meta["org.oma3/mpas"].authorizationState` is `authorization_required`.
+The proposer bridge submits A1 to the Action endpoint → the Verifier returns `additionalApprovalsRequired` (policy requires 1 maintainer for `delete_branch_mirror`) → the bridge constructs A2 and explicitly creates a Coordination Service workflow → the tool call returns an MCP Task immediately. A relay response alone never creates that workflow. The stable `taskId` is distinct from both Action IDs; `_meta["org.oma3/mpas"].authorizationState` is `authorization_required`.
 
 **In the maintainer agent:**
 
 > Check for pending MPAS approvals and approve any delete_branch_mirror action.
 
-The maintainer calls `mpas_list_pending` → `mpas_review_action` → `mpas_approve`. The Coordination Service returns `readyForResubmission` without routing or submitting the completed package. The proposer bridge detects that update, explicitly resubmits the package to the Action endpoint, and the adapter dispatches.
+The maintainer calls `mpas_list_pending` → `mpas_review_action` → `mpas_approve`. The Coordination Service returns `readyForSubmission` without routing or submitting the completed replacement Action Package. The proposer bridge detects that update, explicitly submits the replacement Action to the Action endpoint for the first time, and the adapter dispatches.
 
 **Result:** The proposer’s `tasks/get` on that Task returns the execution result. Do not call the application tool again to check progress — that would create a new Action.
 
@@ -1131,7 +1131,7 @@ Restart the daemon per §2.2 so it picks up the new config. It now serves **both
 
 Your agent now sees both tool sets. `*_mirror` tools stay dry-run; `*_demo` tools hit real GitHub. Nothing was replaced, so you can go back to dry-run at any time by using the mirror tools.
 
-> **Retrieving results with two bridges:** each bridge keeps its own Task/workflow store. Observe a Task with `tasks/get` on the **same server** that returned it — Task IDs are not shared between bridges, and asking the wrong one returns not-found.
+> **Retrieving results with two bridges:** each bridge keeps its own Task/workflow store. Observe a Task with `tasks/get` on the **same server** that returned it — Task IDs are not shared between bridges, and asking the wrong one returns not-found. A Task ID is also distinct from the current MPAS Action ID and remains stable if approval collection causes A1 to be replaced by A2.
 
 **Test `create_issue_demo` (auto-approved):**
 
@@ -1489,7 +1489,7 @@ Nothing is pending yet (the issue was auto-approved), so an empty list is the ex
 
 1. In the **proposer's terminal**: ask it to delete a branch from YOUR_USER/YOUR_DEMO_REPO. The tool call returns an MCP Task immediately — it does **not** block — and the proposer should tell you approval is required.
 2. **Switch to the maintainer's terminal**: check for pending approvals and approve.
-3. **Back in the proposer's terminal**: ask it to check the Task. It uses `tasks/get` with the Task ID (the Action ID) and reports the execution result.
+3. **Back in the proposer's terminal**: ask it to check the Task. It uses `tasks/get` with the stable Task ID and reports the execution result. The bridge—not the MCP client—tracks whichever MPAS Action currently belongs to that Task.
 
 There is no approval timeout to tune: the Action stays active until the Action Envelope expires, and the result remains retrievable for at least `workflow.resultRetentionSeconds` (default 24 hours) after it resolves. Take as long as you need between steps 1 and 2.
 

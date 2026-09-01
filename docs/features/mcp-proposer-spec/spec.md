@@ -251,8 +251,9 @@ phases:
 | Bridge state | Meaning |
 | :--- | :--- |
 | `created` | Initial package exists and has been durably recorded. |
+| `submittingToCoordination` | The bridge has replaced the previous Action and is creating the replacement Action's coordination workflow. |
 | `awaitingApprovals` | Coordination workflow exists and more signed Approvals are needed. |
-| `readyForResubmission` | Coordination Service has supplied a completed package; the Verifier has not yet authorized it. |
+| `readyForSubmission` | Coordination Service has supplied a completed replacement Action Package; that Action has not yet been submitted to the Verifier. |
 | `submittingToVerifier` | Bridge is submitting or recovering submission of the completed package. |
 | `awaitingVerifierResult` | Verifier accepted dispatch but no terminal response is yet recoverable. |
 | `resolved` | Bridge has durably stored a terminal `ActionResponse`. |
@@ -264,7 +265,7 @@ reuse `executed`, `failed`, `pending`, or `indeterminate` as bridge phases.
 In particular:
 
 - `awaitingApprovals` is not MPAS HTTP `pending`;
-- `readyForResubmission` is not authorization;
+- `readyForSubmission` is not authorization;
 - `awaitingVerifierResult` corresponds to observing Verifier work and does not
   permit another dispatch; and
 - a result-wait timeout is not a workflow state or terminal outcome.
@@ -299,8 +300,8 @@ torn-write detection to reach the same place.
 
 The bridge must durably record:
 
-1. the initial workflow before the first adapter submission;
-2. the Coordination Service reference before returning a deferred result;
+1. the initial workflow and stable Task ID before the first Action submission;
+2. every replacement Action and its Coordination Service reference before returning a deferred result;
 3. the completed Action Package before attempting final submission;
 4. every transition that changes recovery behavior; and
 5. the complete terminal result before reporting the action as resolved.
@@ -313,8 +314,9 @@ deferred result that promises later retrieval.
 At minimum, an active workflow contains:
 
 ```text
-actionId
-actionEnvelopeHash
+stable Task ID
+current actionId
+current actionEnvelopeHash
 original tool name
 Execution Payload or initial Action Package
 Authorization Requirements
@@ -344,8 +346,9 @@ obtainable, as sanitized material for the client-facing `MpasBridgeError`.
 On startup, the bridge reconciles all unresolved records:
 
 - `created`: determine whether initial submission must be retried or recovered;
+- `submittingToCoordination`: retry creation of the current replacement Action's workflow;
 - `awaitingApprovals`: resume Coordination Service polling;
-- `readyForResubmission`: submit the stored completed package;
+- `readyForSubmission`: submit the stored completed replacement Action Package;
 - `submittingToVerifier`: recover or repeat the identical submission safely;
 - `awaitingVerifierResult`: attempt to obtain the terminal response without
   redispatch; if none is obtainable, mark the workflow `unresolvable`

@@ -369,7 +369,7 @@ For messages that define a body field, a service accepts that field during migra
 - During migration, a Coordination Service should accept `POST /mpas/v1/coordination/action` as a deprecated alias with the same request, response, authorization, idempotency scope, and workflow side effects. New clients use `/coordination/workflow`.
 - The endpoint rename does not rename the established version 1 `CoordinationActionRequest` and `CoordinationActionResponse` wire discriminants.
 - Polling remains sufficient for interoperability; WebSocket support is optional.
-- Existing `approvalRequests` and `actionUpdates` poll behavior is unchanged. A completed package is returned to the Proposer as `readyForResubmission`; the Coordination Service does not automatically submit or deliver it to the Verifier.
+- Existing `approvalRequests` and `actionUpdates` poll behavior is unchanged except for the canonical ready-state spelling. A completed replacement Action Package is returned to the Proposer as `readyForSubmission`; the Coordination Service does not automatically submit or deliver it to the Verifier.
 - For a given Action Envelope hash and Signer DID, the first valid coordination decision is final. Repeating the same decision is idempotent; a different decision is a `409` conflict. A changed decision requires a new Action Envelope and workflow. The Proposer's initial `propose` Approval is not an additional-approval decision under this rule.
 - A Coordination Service SHOULD mark its non-authoritative workflow `rejected` as soon as the immutable decisions make the approval expression unreachable.
 - This feature does not define discovery or coordination across multiple Coordination Services.

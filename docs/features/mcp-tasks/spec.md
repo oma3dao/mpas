@@ -65,11 +65,11 @@ and cooperative cancellation without changing application tool schemas.
    a terminal state during the original request. A client that does not
    declare the required extensions receives a missing-capability error.
 
-4. **Task ID reuses Action ID.** `taskId` equals
-   `actionEnvelope.actionId.value`. MPAS creates Action IDs with
-   cryptographically random UUIDs, so they satisfy the Tasks uniqueness and
-   entropy requirements. Clients MUST use the `taskId` field for task
-   operations and MUST NOT rely on other MPAS fields as task handles.
+4. **Task ID is stable and distinct from Action IDs.** The bridge assigns a
+   cryptographically random `taskId` that remains unchanged when approval
+   collection replaces A1 with A2. The bridge MUST NOT reuse an MPAS Action ID
+   as a Task ID. Clients MUST use the `taskId` field for task operations and
+   MUST NOT rely on current or retired MPAS Action IDs as task handles.
 
 5. **Server-directed creation.** Clients do not send a `task` request field.
    The bridge decides to return a task after verifying per-request extension
@@ -99,7 +99,7 @@ and cooperative cancellation without changing application tool schemas.
     already-dispatched application operation.
 
 12. **MCP polling does not drive MPAS.** `tasks/get` only observes stored
-    state. Existing background Coordination polling, verifier resubmission,
+    state. Existing background Coordination polling, Action submission,
     reconciliation, and transient-operation retry continue independently.
 
 ---
@@ -183,7 +183,7 @@ Required Client Capability) with the missing entries in
 
 | MCP Task status | MPAS workflow state | Meaning |
 |---|---|---|
-| `working` | `created`, `awaitingApprovals`, `readyForResubmission`, `submittingToVerifier`, `awaitingVerifierResult` | MPAS processing continues. |
+| `working` | `created`, `submittingToCoordination`, `awaitingApprovals`, `readyForSubmission`, `submittingToVerifier`, `awaitingVerifierResult` | MPAS processing continues. |
 | `completed` | `resolved`, `unresolvable` | A `CallToolResult` is available in `tasks/get.result`; it may have `isError: true`. |
 | `cancelled` | `cancelled` | The bridge accepted cancellation and stopped future work where possible. |
 | `failed` | Reserved for a stored JSON-RPC execution error | `tasks/get.error` contains the JSON-RPC error. |
@@ -405,7 +405,7 @@ Rules:
 |---|---|
 | `created` before a usable Verifier response | `submitted` |
 | `awaitingApprovals` | `authorization_required` |
-| `readyForResubmission`, `submittingToVerifier` | `approvals_collected` |
+| `readyForSubmission`, `submittingToVerifier` | `approvals_collected` |
 | `awaitingVerifierResult` | `pending` |
 
 ---
@@ -463,8 +463,8 @@ An unknown or invisible Task returns `-32602`.
 
 For a known, visible Task, cancellation:
 
-1. Atomically marks an active workflow `cancelled`, preventing later polling,
-   resubmission, or retry by the bridge.
+1. Atomically marks an active workflow `cancelled`, preventing later
+   Coordination polling, Action submission, or transport retry by the bridge.
 2. If Coordination started, best-effort calls the existing
    `/mpas/v1/coordination/action-cancel` endpoint.
 3. Returns an empty acknowledgement:
@@ -490,7 +490,8 @@ MCP task polling and MPAS workflow progression are independent:
 
 - `tasks/get` is read-only.
 - The bridge background tick polls Coordination for updates.
-- Completed approval packages are resubmitted to the Verifier.
+- Completed approval packages are submitted to the Verifier as the current
+  Action's first submission.
 - `pending` verifier work continues to be checked using the existing workflow
   mechanism.
 - Transient adapter and Coordination failures are retried while the Action
@@ -573,7 +574,7 @@ this specification.
 | `MpasBridgeDeferredResult` | Flat `CreateTaskResult` with `resultType: "task"` |
 | `MpasBridgeActionOutcome` | Completed Task with `result.isError: true` |
 | `MpasBridgeError` after task creation | Completed error result or Task JSON-RPC error |
-| Action reference as client handle | `taskId` (same value as Action ID) |
+| Action reference as client handle | Stable `taskId`, distinct from every current or retired Action ID |
 | Output-schema unions | Upstream schema unchanged |
 | Tool description notices | Upstream description unchanged |
 | `notificationRequired` | Human-readable `statusMessage` when needed |

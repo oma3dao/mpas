@@ -3,6 +3,7 @@ import { canonicalize } from "json-canonicalize";
 import type {
   ActionEnvelope,
   ActionPackage,
+  AdditionalApprovalsAuthorizationRequirements,
   Approval,
   CanonicalApprovalPayload,
   Did,
@@ -41,6 +42,53 @@ export class ActionPackageBuilder {
     const approval = await this.createProposerApproval(envelope);
 
     return this.createPackage(payload, envelope, approval);
+  }
+
+  /**
+   * Retires an approvals-gated Action and constructs the replacement Action
+   * whose Approvals will be collected through Coordination.
+   *
+   * The Execution Payload and execution target are preserved, while the
+   * replacement receives a new Action ID, envelope hash, validity window, and
+   * Proposer Approval. The returned Authorization Requirements are newly
+   * Proposer-authored and bind to the replacement envelope.
+   */
+  async buildCoordinationReplacement(
+    priorPackage: ActionPackage,
+    verifierRequirements: AdditionalApprovalsAuthorizationRequirements,
+  ): Promise<{
+    actionPackage: ActionPackage;
+    authorizationRequirements: AdditionalApprovalsAuthorizationRequirements;
+  }> {
+    if (priorPackage.actionEnvelope.proposer.did !== this.config.keyManager.did) {
+      throw new Error("Cannot replace an Action authored by a different Proposer.");
+    }
+    const priorActionEnvelopeHash = computeJsonHash(priorPackage.actionEnvelope);
+    if (
+      verifierRequirements.actionEnvelopeHash.alg !== priorActionEnvelopeHash.alg ||
+      verifierRequirements.actionEnvelopeHash.value !== priorActionEnvelopeHash.value
+    ) {
+      throw new Error("Verifier Authorization Requirements do not bind to the Action being replaced.");
+    }
+
+    const payload = structuredClone(priorPackage.executionPayload);
+    const envelope = this.createReplacementEnvelope(priorPackage.actionEnvelope, payload);
+    const approval = await this.createProposerApproval(envelope);
+    const actionPackage = this.createPackage(payload, envelope, approval);
+    const actionEnvelopeHash = computeJsonHash(envelope);
+    const authorizationRequirements: AdditionalApprovalsAuthorizationRequirements = {
+      version: "1",
+      type: "AuthorizationRequirements",
+      actionEnvelopeHash,
+      result: "additionalApprovalsRequired",
+      verifier: structuredClone(verifierRequirements.verifier),
+      approvalRequirements: structuredClone(verifierRequirements.approvalRequirements),
+      ...(verifierRequirements.policyRef !== undefined ? { policyRef: verifierRequirements.policyRef } : {}),
+      createdAt: envelope.createdAt,
+      expiresAt: envelope.expiresAt,
+    };
+
+    return { actionPackage, authorizationRequirements };
   }
 
   /** @deprecated Use {@link buildFromToolCall}; staged construction is not part of the canonical API. */
@@ -88,6 +136,18 @@ export class ActionPackageBuilder {
       actionId: {
         value: `urn:uuid:${randomUUID()}`,
       },
+      createdAt: now.toISOString(),
+      expiresAt: expiresAt.toISOString(),
+    };
+  }
+
+  private createReplacementEnvelope(prior: ActionEnvelope, payload: ExecutionPayload): ActionEnvelope {
+    const now = new Date();
+    const expiresAt = new Date(now.getTime() + this.defaultExpirationMinutes * 60 * 1000);
+    return {
+      ...structuredClone(prior),
+      executionPayloadHash: computeJsonHash(payload),
+      actionId: { value: `urn:uuid:${randomUUID()}` },
       createdAt: now.toISOString(),
       expiresAt: expiresAt.toISOString(),
     };

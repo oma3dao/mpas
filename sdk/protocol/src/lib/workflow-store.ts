@@ -14,8 +14,9 @@
 
 export type BridgeWorkflowState =
   | "created"
+  | "submittingToCoordination"
   | "awaitingApprovals"
-  | "readyForResubmission"
+  | "readyForSubmission"
   | "submittingToVerifier"
   | "awaitingVerifierResult"
   | "resolved"
@@ -34,7 +35,11 @@ export type WorkflowResolution =
   | { kind: "cancelled"; cancelledAt: string };
 
 export interface CreateWorkflowInput {
+  /** Stable bridge/MCP Task identifier. Never reused as an MPAS Action ID. */
+  taskId: string;
   actionId: string;
+  /** Stable across retries of this Action; replaced together with the Action. */
+  actionIdempotencyKey: string;
   actionEnvelopeHash: string;
   toolName: string;
   /** Initial Action Package (or Execution Payload) as submitted. */
@@ -43,8 +48,23 @@ export interface CreateWorkflowInput {
   expiresAt: string;
 }
 
-export interface WorkflowRecord {
+export interface ReplaceWorkflowActionInput {
+  fromState: "created" | "submittingToVerifier";
   actionId: string;
+  actionIdempotencyKey: string;
+  actionEnvelopeHash: string;
+  actionPackage: unknown;
+  authorizationRequirements: unknown;
+  expiresAt: string;
+}
+
+export interface WorkflowRecord {
+  /** Stable local operation identifier used by MCP Tasks and store operations. */
+  taskId: string;
+  /** Current MPAS Action identifier. Changes when an Action is retired. */
+  actionId: string;
+  /** Body-level idempotency key for the current Action Request. */
+  actionIdempotencyKey: string;
   actionEnvelopeHash: string;
   toolName: string;
   state: BridgeWorkflowState;
@@ -76,14 +96,19 @@ export interface WorkflowRecord {
  */
 export interface WorkflowStore {
   createWorkflow(input: CreateWorkflowInput): WorkflowRecord;
-  getWorkflow(actionId: string): WorkflowRecord | undefined;
+  getWorkflow(taskId: string): WorkflowRecord | undefined;
+  /** Resolve the stable workflow from any current or retired Action ID. */
+  getWorkflowByActionId(actionId: string): WorkflowRecord | undefined;
+
+  /** Atomically replace the current Action and enter `submittingToCoordination`. */
+  replaceAction(taskId: string, input: ReplaceWorkflowActionInput): WorkflowRecord;
 
   /**
    * Atomic state transition. Succeeds only when `from` is the current state.
    * Terminal states are set exclusively by {@link resolveWorkflow} and are
    * never left.
    */
-  compareAndSetState(actionId: string, from: BridgeWorkflowState, to: BridgeWorkflowState): boolean;
+  compareAndSetState(taskId: string, from: BridgeWorkflowState, to: BridgeWorkflowState): boolean;
 
   /**
    * Exclusive worker claim with a lease. Grants when the workflow is
@@ -91,28 +116,28 @@ export interface WorkflowStore {
    * while another worker holds a live lease. The check-and-write MUST be
    * atomic so two workers can never both acquire a claim.
    */
-  claimWorkflow(actionId: string, workerId: string, leaseMs: number): boolean;
+  claimWorkflow(taskId: string, workerId: string, leaseMs: number): boolean;
 
-  saveCoordinationReference(actionId: string, ref: unknown): void;
-  saveCompletedPackage(actionId: string, completedPackage: unknown): void;
-  saveAuthorizationRequirements(actionId: string, requirements: unknown): void;
+  saveCoordinationReference(taskId: string, ref: unknown): void;
+  saveCompletedPackage(taskId: string, completedPackage: unknown): void;
+  saveAuthorizationRequirements(taskId: string, requirements: unknown): void;
   /** Preserve the exact last nonterminal Verifier ActionResponse verbatim. */
-  saveLastActionResponse(actionId: string, response: unknown): void;
-  saveAdapterAttempt(actionId: string, attempt: unknown): void;
+  saveLastActionResponse(taskId: string, response: unknown): void;
+  saveAdapterAttempt(taskId: string, attempt: unknown): void;
 
   /**
    * Terminal, immutable resolution. The first resolution wins; later calls
    * are ignored so repeated result retrievals observe the same stored outcome
    * (client profile §7.3).
    */
-  resolveWorkflow(actionId: string, resolution: WorkflowResolution): void;
+  resolveWorkflow(taskId: string, resolution: WorkflowResolution): void;
 
   /**
    * Atomically cancel an active workflow. Returns true only when this call
    * wins the first-terminal-write race. Unknown and terminal workflows return
    * false and are left unchanged.
    */
-  cancelWorkflow(actionId: string): boolean;
+  cancelWorkflow(taskId: string): boolean;
 
   /** Non-terminal workflows, for startup reconciliation (feature spec §9.4). */
   listRecoverableWorkflows(): WorkflowRecord[];
@@ -141,6 +166,7 @@ interface MemoryEntry {
  */
 export class MemoryWorkflowStore implements WorkflowStore {
   private readonly entries = new Map<string, MemoryEntry>();
+  private readonly actionTasks = new Map<string, string>();
   private readonly now: () => number;
 
   constructor(options: { now?: () => number } = {}) {
@@ -152,12 +178,20 @@ export class MemoryWorkflowStore implements WorkflowStore {
   }
 
   createWorkflow(input: CreateWorkflowInput): WorkflowRecord {
-    if (this.entries.has(input.actionId)) {
+    if (input.taskId === input.actionId) {
+      throw new Error("Task ID and Action ID must be distinct.");
+    }
+    if (this.entries.has(input.taskId)) {
+      throw new Error(`Workflow already exists for task ${input.taskId}.`);
+    }
+    if (this.actionTasks.has(input.actionId)) {
       throw new Error(`Workflow already exists for action ${input.actionId}.`);
     }
     const at = this.timestamp();
     const record: WorkflowRecord = {
+      taskId: input.taskId,
       actionId: input.actionId,
+      actionIdempotencyKey: input.actionIdempotencyKey,
       actionEnvelopeHash: input.actionEnvelopeHash,
       toolName: input.toolName,
       state: "created",
@@ -167,20 +201,53 @@ export class MemoryWorkflowStore implements WorkflowStore {
       createdAt: at,
       updatedAt: at,
     };
-    this.entries.set(input.actionId, { record });
+    this.entries.set(input.taskId, { record });
+    this.actionTasks.set(input.actionId, input.taskId);
     return clone(record);
   }
 
-  getWorkflow(actionId: string): WorkflowRecord | undefined {
-    const entry = this.entries.get(actionId);
+  getWorkflow(taskId: string): WorkflowRecord | undefined {
+    const entry = this.entries.get(taskId);
     return entry ? clone(entry.record) : undefined;
   }
 
-  compareAndSetState(actionId: string, from: BridgeWorkflowState, to: BridgeWorkflowState): boolean {
+  getWorkflowByActionId(actionId: string): WorkflowRecord | undefined {
+    const taskId = this.actionTasks.get(actionId);
+    return taskId === undefined ? undefined : this.getWorkflow(taskId);
+  }
+
+  replaceAction(taskId: string, input: ReplaceWorkflowActionInput): WorkflowRecord {
+    if (taskId === input.actionId) {
+      throw new Error("Task ID and Action ID must be distinct.");
+    }
+    const entry = this.entries.get(taskId);
+    if (!entry || entry.record.state !== input.fromState) {
+      throw new Error(`Workflow ${taskId} is not in replacement state ${input.fromState}.`);
+    }
+    if (this.actionTasks.has(input.actionId)) {
+      throw new Error(`Workflow already exists for action ${input.actionId}.`);
+    }
+    const actionPackage = clone(input.actionPackage);
+    const authorizationRequirements = clone(input.authorizationRequirements);
+    this.actionTasks.set(input.actionId, taskId);
+    entry.record.actionId = input.actionId;
+    entry.record.actionIdempotencyKey = input.actionIdempotencyKey;
+    entry.record.actionEnvelopeHash = input.actionEnvelopeHash;
+    entry.record.actionPackage = actionPackage;
+    entry.record.authorizationRequirements = authorizationRequirements;
+    entry.record.expiresAt = input.expiresAt;
+    entry.record.state = "submittingToCoordination";
+    delete entry.record.coordinationRef;
+    delete entry.record.completedPackage;
+    entry.record.updatedAt = this.timestamp();
+    return clone(entry.record);
+  }
+
+  compareAndSetState(taskId: string, from: BridgeWorkflowState, to: BridgeWorkflowState): boolean {
     if (TERMINAL_WORKFLOW_STATES.has(from) || TERMINAL_WORKFLOW_STATES.has(to)) {
       return false;
     }
-    const entry = this.entries.get(actionId);
+    const entry = this.entries.get(taskId);
     if (!entry || entry.record.state !== from) {
       return false;
     }
@@ -189,8 +256,8 @@ export class MemoryWorkflowStore implements WorkflowStore {
     return true;
   }
 
-  claimWorkflow(actionId: string, workerId: string, leaseMs: number): boolean {
-    const entry = this.entries.get(actionId);
+  claimWorkflow(taskId: string, workerId: string, leaseMs: number): boolean {
+    const entry = this.entries.get(taskId);
     if (!entry || TERMINAL_WORKFLOW_STATES.has(entry.record.state)) {
       return false;
     }
@@ -207,38 +274,38 @@ export class MemoryWorkflowStore implements WorkflowStore {
     return true;
   }
 
-  saveCoordinationReference(actionId: string, ref: unknown): void {
-    this.mutate(actionId, (record) => {
+  saveCoordinationReference(taskId: string, ref: unknown): void {
+    this.mutate(taskId, (record) => {
       record.coordinationRef = clone(ref);
     });
   }
 
-  saveCompletedPackage(actionId: string, completedPackage: unknown): void {
-    this.mutate(actionId, (record) => {
+  saveCompletedPackage(taskId: string, completedPackage: unknown): void {
+    this.mutate(taskId, (record) => {
       record.completedPackage = clone(completedPackage);
     });
   }
 
-  saveAuthorizationRequirements(actionId: string, requirements: unknown): void {
-    this.mutate(actionId, (record) => {
+  saveAuthorizationRequirements(taskId: string, requirements: unknown): void {
+    this.mutate(taskId, (record) => {
       record.authorizationRequirements = clone(requirements);
     });
   }
 
-  saveLastActionResponse(actionId: string, response: unknown): void {
-    this.mutate(actionId, (record) => {
+  saveLastActionResponse(taskId: string, response: unknown): void {
+    this.mutate(taskId, (record) => {
       record.lastActionResponse = clone(response);
     });
   }
 
-  saveAdapterAttempt(actionId: string, attempt: unknown): void {
-    this.mutate(actionId, (record) => {
+  saveAdapterAttempt(taskId: string, attempt: unknown): void {
+    this.mutate(taskId, (record) => {
       record.adapterAttempts.push(clone(attempt));
     });
   }
 
-  resolveWorkflow(actionId: string, resolution: WorkflowResolution): void {
-    const entry = this.entries.get(actionId);
+  resolveWorkflow(taskId: string, resolution: WorkflowResolution): void {
+    const entry = this.entries.get(taskId);
     if (!entry || TERMINAL_WORKFLOW_STATES.has(entry.record.state)) {
       return;
     }
@@ -249,8 +316,8 @@ export class MemoryWorkflowStore implements WorkflowStore {
     entry.record.updatedAt = at;
   }
 
-  cancelWorkflow(actionId: string): boolean {
-    const entry = this.entries.get(actionId);
+  cancelWorkflow(taskId: string): boolean {
+    const entry = this.entries.get(taskId);
     if (!entry || TERMINAL_WORKFLOW_STATES.has(entry.record.state)) {
       return false;
     }
@@ -272,22 +339,25 @@ export class MemoryWorkflowStore implements WorkflowStore {
   purgeExpiredResults(retentionMs: number = DEFAULT_RETENTION_MS): number {
     const nowMs = this.now();
     let purged = 0;
-    for (const [actionId, entry] of this.entries) {
+    for (const [taskId, entry] of this.entries) {
       const { record } = entry;
       if (!TERMINAL_WORKFLOW_STATES.has(record.state) || record.resolvedAt === undefined) {
         continue;
       }
       const keepUntil = Math.max(Date.parse(record.expiresAt), Date.parse(record.resolvedAt) + retentionMs);
       if (nowMs > keepUntil) {
-        this.entries.delete(actionId);
+        this.entries.delete(taskId);
+        for (const [actionId, mappedTaskId] of this.actionTasks) {
+          if (mappedTaskId === taskId) this.actionTasks.delete(actionId);
+        }
         purged += 1;
       }
     }
     return purged;
   }
 
-  private mutate(actionId: string, apply: (record: WorkflowRecord) => void): void {
-    const entry = this.entries.get(actionId);
+  private mutate(taskId: string, apply: (record: WorkflowRecord) => void): void {
+    const entry = this.entries.get(taskId);
     if (!entry) {
       return;
     }

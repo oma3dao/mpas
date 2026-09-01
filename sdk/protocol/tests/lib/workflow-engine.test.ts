@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   CoordinationResponseError,
   CoordinationUnavailableError,
+  computeHash,
   MpasAuthError,
   type ActionResponse,
   type CoordinationActionUpdate,
@@ -9,6 +10,7 @@ import {
 import { MemoryWorkflowStore, type WorkflowStore } from "../../src/lib/workflow-store.js";
 import {
   BridgeWorkflowEngine,
+  type WorkflowActionEndpoint,
   type WorkflowAdapter,
   type WorkflowCoordination,
 } from "../../src/lib/workflow-engine.js";
@@ -17,27 +19,54 @@ import {
  * Proposer-bridge workflow engine (feature spec §6 bridge track, §9.4, §11).
  *
  * The engine owns the bridge track: initial submission, coordination handoff,
- * completed-package resubmission, terminal storage, startup reconciliation,
+ * replacement-Action submission, terminal storage, startup reconciliation,
  * and expiry. Result recovery is best effort: a crash window that loses the
  * terminal response resolves to `unresolvable`, never to a fabricated
  * Action outcome.
  */
 
+const TASK_ID = "urn:uuid:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const ACTION_ID = "urn:uuid:11111111-1111-4111-8111-111111111111";
+const REPLACEMENT_ACTION_ID = "urn:uuid:22222222-2222-4222-8222-222222222222";
 const HASH = "b64url-envelope-digest";
-const EXPIRES_AT = "2030-01-01T00:00:00.000Z";
+const IDEMPOTENCY_KEY = "initial-action-attempt";
 const PROPOSER_DID = "did:jwk:proposer";
+const REPLACEMENT_HASH = computeHash({
+  proposer: { did: PROPOSER_DID },
+  actionId: { value: REPLACEMENT_ACTION_ID },
+  expiresAt: "2030-01-01T00:00:00.000Z",
+}).value;
+const EXPIRES_AT = "2030-01-01T00:00:00.000Z";
 
 function response(result: ActionResponse["result"], extra: Partial<ActionResponse> = {}): ActionResponse {
-  return { version: "1", type: "ActionResponse", result, ...extra };
+  return {
+    version: "1",
+    type: "ActionResponse",
+    result,
+    ...(result === "additionalApprovalsRequired" && extra.authorizationRequirements === undefined
+      ? {
+          authorizationRequirements: {
+            version: "1" as const,
+            type: "AuthorizationRequirements" as const,
+            actionEnvelopeHash: { alg: "sha-256" as const, value: HASH },
+            result: "additionalApprovalsRequired" as const,
+            verifier: { did: "did:jwk:verifier" as const },
+            approvalRequirements: {
+              anyOf: [{ type: "threshold" as const, threshold: 1, eligibleSigners: ["did:jwk:signer" as const] }],
+            },
+          },
+        }
+      : {}),
+    ...extra,
+  };
 }
 
-function actionRef(actionId = ACTION_ID) {
+function actionRef(actionId = REPLACEMENT_ACTION_ID, hash = REPLACEMENT_HASH) {
   return {
     version: "1" as const,
     type: "ActionRef" as const,
     actionId: { value: actionId },
-    actionEnvelopeHash: { alg: "sha-256" as const, value: HASH },
+    actionEnvelopeHash: { alg: "sha-256" as const, value: hash },
   };
 }
 
@@ -67,7 +96,13 @@ function fakeCoordination(updates: () => CoordinationActionUpdate[] = () => []):
     cancelled,
     async submitAction(pkg: unknown) {
       submitted.push(pkg);
-      return { version: "1" as const, type: "CoordinationActionResponse" as const, actionRef: actionRef(), state: "awaitingApprovals" as const };
+      const actionPackage = pkg as { actionEnvelope: { actionId: { value: string } }; approvalBundle: { actionEnvelopeHash: { value: string } } };
+      return {
+        version: "1" as const,
+        type: "CoordinationActionResponse" as const,
+        actionRef: actionRef(actionPackage.actionEnvelope.actionId.value, actionPackage.approvalBundle.actionEnvelopeHash.value),
+        state: "awaitingApprovals" as const,
+      };
     },
     async poll() {
       return { version: "1" as const, type: "CoordinationPollResponse" as const, approvalRequests: [], actionUpdates: updates() };
@@ -86,7 +121,8 @@ function fakeCoordination(updates: () => CoordinationActionUpdate[] = () => []):
 }
 
 function makeEngine(opts: {
-  adapter: WorkflowAdapter;
+  adapter?: WorkflowAdapter;
+  actionEndpoint?: WorkflowActionEndpoint;
   coordination?: WorkflowCoordination;
   store?: WorkflowStore;
   now?: () => number;
@@ -94,9 +130,36 @@ function makeEngine(opts: {
   const store = opts.store ?? new MemoryWorkflowStore({ now: opts.now });
   const engine = new BridgeWorkflowEngine({
     store,
-    adapter: opts.adapter,
+    ...(opts.actionEndpoint !== undefined
+      ? { actionEndpoint: opts.actionEndpoint }
+      : { adapter: opts.adapter! }),
     coordination: opts.coordination ?? fakeCoordination(),
     proposerDid: PROPOSER_DID,
+    buildCoordinationReplacement: async (priorPackage, verifierRequirements) => {
+      const prior = priorPackage;
+      const actionPackage = {
+        ...structuredClone(prior),
+        fake: "replacement-package",
+        actionEnvelope: {
+          ...structuredClone(prior.actionEnvelope),
+          actionId: { value: REPLACEMENT_ACTION_ID },
+          expiresAt: EXPIRES_AT,
+        },
+        approvalBundle: {
+          version: "1",
+          type: "ApprovalBundle",
+          actionEnvelopeHash: { alg: "sha-256", value: REPLACEMENT_HASH },
+          approvals: [],
+        },
+      };
+      return {
+        actionPackage,
+        authorizationRequirements: {
+          ...structuredClone(verifierRequirements),
+          actionEnvelopeHash: { alg: "sha-256", value: REPLACEMENT_HASH },
+        },
+      };
+    },
     workerId: "test-worker",
     now: opts.now,
   });
@@ -105,7 +168,9 @@ function makeEngine(opts: {
 
 function proposalInput() {
   return {
+    taskId: TASK_ID,
     actionId: ACTION_ID,
+    actionIdempotencyKey: IDEMPOTENCY_KEY,
     actionEnvelopeHash: HASH,
     toolName: "merge_pull_request",
     actionPackage: {
@@ -117,6 +182,67 @@ function proposalInput() {
 }
 
 describe("propose", () => {
+  it("rejects a Task ID reused as the Action ID", async () => {
+    const { engine } = makeEngine({ adapter: fakeAdapter(response("executed")) });
+
+    await expect(engine.propose({ ...proposalInput(), taskId: ACTION_ID })).rejects.toThrow(
+      /must be distinct/i,
+    );
+  });
+
+  it("reuses one idempotency key for retries of the same Action", async () => {
+    const requests: Parameters<WorkflowActionEndpoint["submitActionRequest"]>[0][] = [];
+    let attempt = 0;
+    const actionEndpoint: WorkflowActionEndpoint = {
+      async submitActionRequest(request) {
+        requests.push(request);
+        attempt += 1;
+        if (attempt === 1) throw new Error("connect ECONNREFUSED");
+        return response("executed");
+      },
+    };
+    const { engine } = makeEngine({ actionEndpoint });
+
+    await engine.propose(proposalInput());
+    await engine.pollOnce();
+
+    expect(requests.map((request) => request.idempotencyKey)).toEqual([
+      IDEMPOTENCY_KEY,
+      IDEMPOTENCY_KEY,
+    ]);
+  });
+
+  it("uses a new durable idempotency key for the replacement Action", async () => {
+    const requests: Parameters<WorkflowActionEndpoint["submitActionRequest"]>[0][] = [];
+    const actionEndpoint: WorkflowActionEndpoint = {
+      async submitActionRequest(request) {
+        requests.push(request);
+        return requests.length === 1
+          ? response("additionalApprovalsRequired")
+          : response("executed");
+      },
+    };
+    const coordination = fakeCoordination(() => [{
+      version: "1",
+      type: "CoordinationActionUpdate",
+      actionRef: actionRef(),
+      state: "readyForSubmission",
+      actionPackage: { fake: "completed-replacement-package" },
+    }]);
+    const { engine, store } = makeEngine({ actionEndpoint, coordination });
+
+    await engine.propose(proposalInput());
+    const replacementKey = store.getWorkflow(TASK_ID)?.actionIdempotencyKey;
+    await engine.pollOnce();
+
+    expect(replacementKey).toBeTruthy();
+    expect(replacementKey).not.toBe(IDEMPOTENCY_KEY);
+    expect(requests.map((request) => request.idempotencyKey)).toEqual([
+      IDEMPOTENCY_KEY,
+      replacementKey,
+    ]);
+  });
+
   it("settles immediately when the adapter returns a terminal response", async () => {
     const adapter = fakeAdapter(response("executed", { executionResult: { content: [] } }));
     const { engine, store } = makeEngine({ adapter });
@@ -127,12 +253,11 @@ describe("propose", () => {
     if (outcome.kind === "settled") {
       expect(outcome.actionResponse.result).toBe("executed");
     }
-    expect(store.getWorkflow(ACTION_ID)?.state).toBe("resolved");
+    expect(store.getWorkflow(TASK_ID)?.state).toBe("resolved");
   });
 
   it("defers on additionalApprovalsRequired and hands the action to coordination", async () => {
-    const authReqs = { version: "1", type: "AuthorizationRequirements" };
-    const adapter = fakeAdapter(response("additionalApprovalsRequired", { authorizationRequirements: authReqs as ActionResponse["authorizationRequirements"] }));
+    const adapter = fakeAdapter(response("additionalApprovalsRequired"));
     const coordination = fakeCoordination();
     const { engine, store } = makeEngine({ adapter, coordination });
 
@@ -140,8 +265,12 @@ describe("propose", () => {
 
     expect(outcome.kind).toBe("deferred");
     expect(coordination.submitted).toHaveLength(1);
-    const record = store.getWorkflow(ACTION_ID);
+    const record = store.getWorkflow(TASK_ID);
     expect(record?.state).toBe("awaitingApprovals");
+    expect(record?.taskId).toBe(TASK_ID);
+    expect(record?.actionId).toBe(REPLACEMENT_ACTION_ID);
+    expect(record?.actionId).not.toBe(ACTION_ID);
+    expect(record?.actionEnvelopeHash).toBe(REPLACEMENT_HASH);
     expect(record?.authorizationRequirements).toMatchObject({ type: "AuthorizationRequirements" });
     expect(record?.coordinationRef).toMatchObject({ type: "ActionRef" });
     if (outcome.kind === "deferred") {
@@ -158,7 +287,7 @@ describe("propose", () => {
     // Client profile §4.2: the deferred result may be returned as soon as the
     // Action is durably recorded, with no Verifier response yet.
     expect(outcome.kind).toBe("deferred");
-    const record = store.getWorkflow(ACTION_ID);
+    const record = store.getWorkflow(TASK_ID);
     expect(record?.state).toBe("created");
     expect(record?.adapterAttempts.length).toBeGreaterThan(0);
   });
@@ -170,7 +299,7 @@ describe("propose", () => {
     const outcome = await engine.propose(proposalInput());
 
     expect(outcome.kind).toBe("deferred");
-    expect(store.getWorkflow(ACTION_ID)?.state).toBe("awaitingVerifierResult");
+    expect(store.getWorkflow(TASK_ID)?.state).toBe("awaitingVerifierResult");
   });
 
   it("stops retrying when coordination rejects the proposer", async () => {
@@ -185,14 +314,14 @@ describe("propose", () => {
     const outcome = await engine.propose(proposalInput());
 
     expect(outcome.kind).toBe("deferred");
-    expect(store.getWorkflow(ACTION_ID)).toMatchObject({
+    expect(store.getWorkflow(TASK_ID)).toMatchObject({
       state: "unresolvable",
       resolution: {
         kind: "unresolvable",
         errorCode: "COORDINATION_AUTHORIZATION_FAILED",
       },
     });
-    expect(store.getWorkflow(ACTION_ID)?.coordinationRef).toBeUndefined();
+    expect(store.getWorkflow(TASK_ID)?.coordinationRef).toBeUndefined();
     await engine.pollOnce();
     expect(adapter.calls).toHaveLength(1);
     expect(coordination.submitted).toHaveLength(1);
@@ -208,7 +337,7 @@ describe("propose", () => {
 
     await engine.propose(proposalInput());
 
-    expect(store.getWorkflow(ACTION_ID)?.resolution).toMatchObject({
+    expect(store.getWorkflow(TASK_ID)?.resolution).toMatchObject({
       kind: "unresolvable",
       errorCode: "COORDINATION_REQUEST_REJECTED",
     });
@@ -234,10 +363,10 @@ describe("propose", () => {
     const { engine, store } = makeEngine({ adapter, coordination });
 
     await engine.propose(proposalInput());
-    expect(store.getWorkflow(ACTION_ID)?.state).toBe("created");
+    expect(store.getWorkflow(TASK_ID)?.state).toBe("submittingToCoordination");
     await engine.pollOnce();
 
-    expect(store.getWorkflow(ACTION_ID)?.state).toBe("awaitingApprovals");
+    expect(store.getWorkflow(TASK_ID)?.state).toBe("awaitingApprovals");
     expect(adapter.calls).toHaveLength(1);
     expect(coordination.submitted).toHaveLength(2);
   });
@@ -255,12 +384,12 @@ describe("pollOnce (bridge track advancement)", () => {
     const { engine, store } = makeEngine({ adapter, coordination });
 
     await engine.propose(proposalInput());
-    expect(store.getWorkflow(ACTION_ID)?.state).toBe("created");
+    expect(store.getWorkflow(TASK_ID)?.state).toBe("created");
     await engine.pollOnce();
-    expect(store.getWorkflow(ACTION_ID)?.state).toBe("resolved");
+    expect(store.getWorkflow(TASK_ID)?.state).toBe("resolved");
   });
 
-  it("submits the completed package when coordination reports readyForResubmission", async () => {
+  it("submits completed A2 when coordination reports readyForSubmission", async () => {
     const completedPackage = { fake: "completed-package" };
     const adapter = fakeAdapter(
       response("additionalApprovalsRequired"),
@@ -271,7 +400,7 @@ describe("pollOnce (bridge track advancement)", () => {
         version: "1",
         type: "CoordinationActionUpdate",
         actionRef: actionRef(),
-        state: "readyForResubmission",
+        state: "readyForSubmission",
         expiresAt: EXPIRES_AT,
         actionPackage: completedPackage as CoordinationActionUpdate["actionPackage"],
       },
@@ -281,7 +410,7 @@ describe("pollOnce (bridge track advancement)", () => {
     await engine.propose(proposalInput());
     await engine.pollOnce();
 
-    const record = store.getWorkflow(ACTION_ID);
+    const record = store.getWorkflow(TASK_ID);
     expect(record?.state).toBe("resolved");
     expect(record?.completedPackage).toEqual(completedPackage);
     expect(record?.resolution).toMatchObject({ kind: "resolved", actionResponse: { result: "executed" } });
@@ -299,7 +428,7 @@ describe("pollOnce (bridge track advancement)", () => {
     await engine.propose(proposalInput());
     await engine.pollOnce();
 
-    const record = store.getWorkflow(ACTION_ID);
+    const record = store.getWorkflow(TASK_ID);
     expect(record?.state).toBe("unresolvable");
     expect(record?.resolution).toMatchObject({ kind: "unresolvable", errorCode: "ACTION_EXPIRED_BEFORE_RESOLUTION" });
   });
@@ -314,7 +443,7 @@ describe("pollOnce (bridge track advancement)", () => {
     await engine.propose(proposalInput());
     await engine.pollOnce();
 
-    expect(store.getWorkflow(ACTION_ID)?.resolution).toMatchObject({
+    expect(store.getWorkflow(TASK_ID)?.resolution).toMatchObject({
       kind: "unresolvable",
       errorCode: "COORDINATION_REJECTED",
     });
@@ -330,7 +459,7 @@ describe("pollOnce (bridge track advancement)", () => {
     await engine.propose(proposalInput());
     await engine.pollOnce();
 
-    expect(store.getWorkflow(ACTION_ID)?.resolution).toMatchObject({
+    expect(store.getWorkflow(TASK_ID)?.resolution).toMatchObject({
       kind: "unresolvable",
       errorCode: "RESULT_UNAVAILABLE",
     });
@@ -345,7 +474,7 @@ describe("pollOnce (bridge track advancement)", () => {
     clock.now = Date.parse("2026-07-26T19:00:01.000Z");
     await engine.pollOnce();
 
-    const record = store.getWorkflow(ACTION_ID);
+    const record = store.getWorkflow(TASK_ID);
     expect(record?.state).toBe("unresolvable");
     expect(record?.resolution).toMatchObject({ errorCode: "ACTION_EXPIRED_BEFORE_RESOLUTION" });
   });
@@ -358,11 +487,11 @@ describe("cancel", () => {
     const { engine, store } = makeEngine({ adapter, coordination });
     await engine.propose(proposalInput());
 
-    const cancelled = await engine.cancel(ACTION_ID);
+    const cancelled = await engine.cancel(TASK_ID);
     expect(cancelled?.state).toBe("cancelled");
-    expect(coordination.cancelled).toEqual([ACTION_ID]);
+    expect(coordination.cancelled).toEqual([REPLACEMENT_ACTION_ID]);
     await engine.pollOnce();
-    expect(store.getWorkflow(ACTION_ID)?.state).toBe("cancelled");
+    expect(store.getWorkflow(TASK_ID)?.state).toBe("cancelled");
     expect(adapter.calls).toHaveLength(1);
   });
 
@@ -393,12 +522,12 @@ describe("cancel", () => {
 
     const proposing = engine.propose(proposalInput());
     await started;
-    await engine.cancel(ACTION_ID);
+    await engine.cancel(TASK_ID);
     finishSubmission?.();
     await proposing;
 
-    expect(store.getWorkflow(ACTION_ID)?.state).toBe("cancelled");
-    expect(coordination.cancelled).toEqual([ACTION_ID]);
+    expect(store.getWorkflow(TASK_ID)?.state).toBe("cancelled");
+    expect(coordination.cancelled).toEqual([REPLACEMENT_ACTION_ID]);
   });
 
   it("does not reveal a workflow owned by another proposer DID", async () => {
@@ -407,8 +536,8 @@ describe("cancel", () => {
       ...proposalInput(),
       actionPackage: { actionEnvelope: { proposer: { did: "did:jwk:other" } } },
     });
-    expect(await engine.cancel(ACTION_ID)).toBeUndefined();
-    expect(store.getWorkflow(ACTION_ID)?.state).toBe("created");
+    expect(await engine.cancel(TASK_ID)).toBeUndefined();
+    expect(store.getWorkflow(TASK_ID)?.state).toBe("created");
   });
 });
 
@@ -417,11 +546,11 @@ describe("reconcile (startup recovery, feature spec §9.4)", () => {
     const adapter = fakeAdapter(new Error("down during propose"), response("executed"));
     const { engine, store } = makeEngine({ adapter });
     await engine.propose(proposalInput());
-    expect(store.getWorkflow(ACTION_ID)?.state).toBe("created");
+    expect(store.getWorkflow(TASK_ID)?.state).toBe("created");
 
     await engine.reconcile();
 
-    expect(store.getWorkflow(ACTION_ID)?.state).toBe("resolved");
+    expect(store.getWorkflow(TASK_ID)?.state).toBe("resolved");
   });
 
   it("resolves a replay-rejected recovery as unresolvable RESULT_UNAVAILABLE (best effort)", async () => {
@@ -435,12 +564,12 @@ describe("reconcile (startup recovery, feature spec §9.4)", () => {
     const coordination = fakeCoordination();
     const { engine, store } = makeEngine({ adapter, coordination });
     await engine.propose(proposalInput());
-    store.saveCompletedPackage(ACTION_ID, { fake: "completed-package" });
-    store.compareAndSetState(ACTION_ID, "awaitingApprovals", "submittingToVerifier");
+    store.saveCompletedPackage(TASK_ID, { fake: "completed-package" });
+    store.compareAndSetState(TASK_ID, "awaitingApprovals", "submittingToVerifier");
 
     await engine.reconcile();
 
-    const record = store.getWorkflow(ACTION_ID);
+    const record = store.getWorkflow(TASK_ID);
     expect(record?.state).toBe("unresolvable");
     expect(record?.resolution).toMatchObject({ kind: "unresolvable", errorCode: "RESULT_UNAVAILABLE" });
   });
@@ -452,12 +581,12 @@ describe("reconcile (startup recovery, feature spec §9.4)", () => {
     );
     const { engine, store } = makeEngine({ adapter });
     await engine.propose(proposalInput());
-    store.saveCompletedPackage(ACTION_ID, { fake: "completed-package" });
-    store.compareAndSetState(ACTION_ID, "awaitingApprovals", "submittingToVerifier");
+    store.saveCompletedPackage(TASK_ID, { fake: "completed-package" });
+    store.compareAndSetState(TASK_ID, "awaitingApprovals", "submittingToVerifier");
 
     await engine.reconcile();
 
-    expect(store.getWorkflow(ACTION_ID)?.state).toBe("awaitingVerifierResult");
+    expect(store.getWorkflow(TASK_ID)?.state).toBe("awaitingVerifierResult");
   });
 });
 
@@ -473,21 +602,23 @@ describe("lastActionResponse preservation (client profile §5.1)", () => {
     await engine.propose(proposalInput());
 
     // Preserved exactly — same members, same values, no synthesis.
-    expect(store.getWorkflow(ACTION_ID)?.lastActionResponse).toEqual(verifierResponse);
+    expect(store.getWorkflow(TASK_ID)?.lastActionResponse).toEqual(verifierResponse);
   });
 
   it("stores the exact pending response and leaves it absent when no Verifier response exists", async () => {
     const adapter = fakeAdapter(response("pending"));
     const { engine, store } = makeEngine({ adapter });
     await engine.propose(proposalInput());
-    expect(store.getWorkflow(ACTION_ID)?.lastActionResponse).toEqual(response("pending"));
+    expect(store.getWorkflow(TASK_ID)?.lastActionResponse).toEqual(response("pending"));
 
     const downAdapter = fakeAdapter(new Error("down"));
     const second = makeEngine({ adapter: downAdapter });
-    await second.engine.propose({ ...proposalInput(), actionId: "urn:uuid:33333333-3333-4333-8333-333333333333" });
-    expect(
-      second.store.getWorkflow("urn:uuid:33333333-3333-4333-8333-333333333333")?.lastActionResponse,
-    ).toBeUndefined();
+    await second.engine.propose({
+      ...proposalInput(),
+      taskId: "urn:uuid:cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+      actionId: "urn:uuid:33333333-3333-4333-8333-333333333333",
+    });
+    expect(second.store.getWorkflow("urn:uuid:cccccccc-cccc-4ccc-8ccc-cccccccccccc")?.lastActionResponse).toBeUndefined();
   });
 });
 
@@ -497,7 +628,7 @@ describe("waitForResult (client track observation)", () => {
     const { engine } = makeEngine({ adapter });
     await engine.propose(proposalInput());
 
-    const record = await engine.waitForResult(ACTION_ID, 0);
+    const record = await engine.waitForResult(TASK_ID, 0);
     expect(record?.state).toBe("resolved");
   });
 
@@ -514,7 +645,7 @@ describe("waitForResult (client track observation)", () => {
         version: "1",
         type: "CoordinationActionUpdate",
         actionRef: actionRef(),
-        state: "readyForResubmission",
+        state: "readyForSubmission",
         expiresAt: EXPIRES_AT,
         actionPackage: completedPackage as CoordinationActionUpdate["actionPackage"],
       },
@@ -522,7 +653,7 @@ describe("waitForResult (client track observation)", () => {
     const { engine } = makeEngine({ adapter, coordination });
     await engine.propose(proposalInput());
 
-    const waiter = engine.waitForResult(ACTION_ID, 5_000);
+    const waiter = engine.waitForResult(TASK_ID, 5_000);
     await engine.pollOnce();
 
     const record = await waiter;
@@ -534,7 +665,7 @@ describe("waitForResult (client track observation)", () => {
     const { engine } = makeEngine({ adapter });
     await engine.propose(proposalInput());
 
-    const record = await engine.waitForResult(ACTION_ID, 10);
+    const record = await engine.waitForResult(TASK_ID, 10);
     expect(record?.state).toBe("awaitingApprovals");
   });
 
@@ -543,11 +674,11 @@ describe("waitForResult (client track observation)", () => {
     const { engine, store } = makeEngine({ adapter });
     await engine.propose(proposalInput());
 
-    await engine.waitForResult(ACTION_ID, 10);
-    await engine.waitForResult(ACTION_ID, 0);
+    await engine.waitForResult(TASK_ID, 10);
+    await engine.waitForResult(TASK_ID, 0);
 
     // No further adapter submissions happened because of waiting.
     expect(adapter.calls).toHaveLength(1);
-    expect(store.getWorkflow(ACTION_ID)?.state).toBe("awaitingApprovals");
+    expect(store.getWorkflow(TASK_ID)?.state).toBe("awaitingApprovals");
   });
 });

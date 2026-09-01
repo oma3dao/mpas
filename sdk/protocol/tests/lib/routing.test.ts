@@ -92,6 +92,35 @@ describe("routing helpers", () => {
     expect(() => parseActionResponseEnvelope({ ...envelope, payload: actionRequest() })).toThrow();
   });
 
+  it("requires response and authorization-requirements Verifier DIDs to match", () => {
+    const response: ActionResponse = {
+      version: "1",
+      type: "ActionResponse",
+      verifier: { did: verifier },
+      actionEnvelopeHash: { alg: "sha-256", value: "envelope" },
+      result: "additionalApprovalsRequired",
+      authorizationRequirements: {
+        version: "1",
+        type: "AuthorizationRequirements",
+        actionEnvelopeHash: { alg: "sha-256", value: "envelope" },
+        result: "additionalApprovalsRequired",
+        verifier: { did: verifier },
+        approvalRequirements: {
+          anyOf: [{ type: "threshold", eligibleSigners: [observer], threshold: 1 }],
+        },
+      },
+    };
+
+    expect(parseActionResponse(response)).toBe(response);
+    expect(() => parseActionResponse({
+      ...response,
+      authorizationRequirements: {
+        ...response.authorizationRequirements!,
+        verifier: { did: observer },
+      },
+    })).toThrow("must equal ActionResponse.verifier.did");
+  });
+
   it("resolves body/header idempotency and fingerprints independently of the key", () => {
     expect(resolveIdempotencyKey("same", "same")).toBe("same");
     expect(resolveIdempotencyKey(undefined, "header")).toBe("header");

@@ -59,7 +59,7 @@ For the full protocol design, start with the base specification:
 
 ### How it works
 
-**The agent sees a normal MCP server.** The MCP Bridge abstracts the entire MPAS protocol — signing, envelope construction, coordination polling, resubmission — away from the agent. From the agent's perspective, it calls tools like `create_issue_mirror` or `delete_branch_mirror` and receives an MCP Task; it observes that Task with `tasks/get`.
+**The agent sees a normal MCP server.** The MCP Bridge abstracts the entire MPAS protocol — signing, envelope construction, replacement Actions, and coordination polling — away from the agent. From the agent's perspective, it calls tools like `create_issue_mirror` or `delete_branch_mirror` and receives an MCP Task; it observes that stable Task with `tasks/get` even if the bridge replaces the underlying MPAS Action.
 
 **Proposer flow:**
 
@@ -69,7 +69,7 @@ For the full protocol design, start with the base specification:
    - If auto-approved: dispatches immediately to the target (GitHub) and returns the result
    - If approval required: returns `additionalApprovalsRequired`
 4. Bridge submits the pending action to the Coordination Service and polls for resolution
-5. Once a maintainer approves, the bridge resubmits the completed Action Package to the adapter
+5. Once a maintainer approves the replacement Action, the bridge submits its completed Action Package to the adapter
 6. Adapter verifies the full policy is met (correct signatures, threshold reached, no self-approval), then dispatches
 7. The agent's `tasks/get` on that Task returns the execution result
 
@@ -78,7 +78,7 @@ For the full protocol design, start with the base specification:
 1. Agent calls `mpas_list_pending` → Signer Server queries the Coordination Service
 2. Agent calls `mpas_review_action` → Server fetches full action details and verifies integrity
 3. Agent calls `mpas_approve` → Server signs an approval and submits it to the Coordination Service
-4. The proposer's bridge detects the approval on its next poll and resubmits
+4. The proposer's bridge detects the approval on its next poll and submits the completed replacement Action
 
 **Key security properties:**
 
@@ -116,7 +116,7 @@ Give each agent exactly one role. A proposer’s prime directive is to submit go
 
 Self-approval is enforced at two levels regardless of group membership:
 1. **Coordination service** — rejects any approval submission where `signerDid` matches the action's `proposer.did`
-2. **Policy engine (defense in depth)** — excludes the proposer's DID when counting approvals toward thresholds on resubmission
+2. **Policy engine (defense in depth)** — excludes the proposer's DID when counting approvals toward thresholds on the completed replacement Action
 
 ## Signer Server
 
@@ -313,7 +313,7 @@ The bridge config lives on the agent side and tells the MCP Bridge how to connec
 The bridge speaks MCP `2026-07-28` and advertises
 `io.modelcontextprotocol/tasks` plus `org.oma3/mpas` through
 `server/discover`. Every accepted application `tools/call` returns a flat
-official Task whose `taskId` is the MPAS Action ID. Clients observe progress
+official Task whose stable `taskId` is distinct from every MPAS Action ID. Clients observe progress
 and retrieve the terminal native result with read-only `tasks/get`; Task
 polling does not drive the background MPAS workflow.
 
@@ -390,7 +390,7 @@ Coordination Service endpoints:
 - `POST /mpas/v1/coordination/delivery` — compatibility alias for `/relay/delivery`
 - `POST /mpas/v1/coordination/session` and `GET /mpas/v1/coordination/ws` — notification-only WebSocket
 
-Repeat `--authorized-recipient-did` to permit informational relay recipients in addition to the configured Verifier. Relay and coordination WebSockets contain no work payload and wake only their corresponding signed poll. A relayed `additionalApprovalsRequired` response does not create a workflow; the proposer bridge explicitly calls `/coordination/workflow`. A `readyForResubmission` update likewise does not route the completed package; the bridge explicitly submits it to the Action endpoint.
+Repeat `--authorized-recipient-did` to permit informational relay recipients in addition to the configured Verifier. Relay and coordination WebSockets contain no work payload and wake only their corresponding signed poll. A relayed `additionalApprovalsRequired` response does not create a workflow; the proposer bridge explicitly calls `/coordination/workflow`. A `readyForSubmission` update likewise does not route the completed package; the bridge explicitly submits it to the Action endpoint.
 
 ### Run the Credential Adapter as a hosted Verifier
 

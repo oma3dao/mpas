@@ -274,7 +274,7 @@ The bridge submits the Action Package (wrapped in an `ActionRequest`) to the ada
 | `executed`                        | Relays `executionResult` (verbatim MCP tool result) to the agent as the tool call response.                            |
 | `failed`                          | Tool-level failure (`isError: true`): relays `executionResult` verbatim. Protocol-level failure: returns a definitive error. |
 | `rejected`                        | Returns an error to the agent with the rejection reason.                                                               |
-| `additionalApprovalsRequired`     | Returns a pending status with details on the approvals needed. Optionally submits to Coordination.                     |
+| `additionalApprovalsRequired`     | Retires the current Action, constructs a replacement Action with fresh hash-bound approvals, and optionally submits that replacement to Coordination. |
 | `malformed`                       | Returns an error to the agent (likely a bridge bug).                                                                   |
 | `indeterminate`                   | Returns an outcome-unconfirmed status. The bridge MUST NOT auto-resubmit or re-propose; reconciliation is out of band. |
 | `pending`                         | The action is executing at the Verifier. The bridge polls or awaits rather than re-proposing; returns a pending status. |
@@ -291,14 +291,14 @@ When the adapter returns `additionalApprovalsRequired`, the bridge can be config
 | Strategy      | Behavior                                                                                                                                                                                                                    |
 | :------------ | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `return`      | Return the pending status to the agent. The agent (or human) handles approval collection externally.                                                                                                                        |
-| `coordinate`  | Submit the original Action Package + Authorization Requirements to the Coordination Service. The ProposerBridge polls for its own action's state updates. When `readyForResubmission`, the bridge resubmits to the adapter.  |
+| `coordinate`  | Construct a replacement Action and Proposer-authored requirements from the Verifier's advisory response, then submit that replacement to Coordination. When `readyForSubmission`, the bridge submits the completed replacement Action to the adapter for the first time. |
 | `wait`        | Same as `coordinate`, but blocks the tool call (with timeout) until the final result is available. Returns the execution result when resolved or times out.                                                                  |
 
 The ProposerBridge only polls for state updates on actions it submitted. It does not poll for signer work — that is the Signer Server's responsibility.
 
 The strategy is configurable per bridge instance.
 
-**Resubmission semantics:** When the bridge resubmits a completed Action Package after collecting approvals, it uses the SAME `actionId` and the same Action Envelope. Per the Core Action Lifecycle (Core Section 6.9.2), this is permitted because the `actionId` is `open` and the envelope hash matches the pinned hash. The adapter performs full re-verification of the newly submitted package.
+**Replacement semantics:** Suppose the initial Action is A1. After `additionalApprovalsRequired`, the bridge retires A1 and constructs A2 with a new `actionId`, Action Envelope hash, expiration, Proposer Approval, and A2-bound Authorization Requirements. Coordination collects Approvals for A2. The completed A2 package is then submitted to the adapter for the first time. The bridge keeps a separate, stable MCP Task ID across A1, A2, and any later replacements.
 
 ---
 
@@ -569,9 +569,9 @@ interface CoordinationPollResponse {
 
 interface ActionUpdate {
   actionRef: ActionRef;
-  state: 'awaitingApprovals' | 'readyForResubmission' | 'cancelled';
+  state: 'awaitingApprovals' | 'readyForSubmission' | 'cancelled';
   progress?: Progress;
-  actionPackage?: ActionPackage;  // Present when readyForResubmission
+  actionPackage?: ActionPackage;  // Present when readyForSubmission
   cancelledAt?: string;           // Present when cancelled
   updatedAt: string;
 }

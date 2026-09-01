@@ -34,9 +34,9 @@
   - `cancelAction(actionId, did)` → `POST /mpas/v1/coordination/action-cancel`
 
 - **`ProposerBridge`** — update the `coordinate` and `wait` strategies:
-  - On `additionalApprovalsRequired`: call `coordinationClient.submitAction(originalPackage, authReqs)`
+  - On `additionalApprovalsRequired`: retire the current Action, construct a replacement Action with a new Action ID and hash, author replacement-bound requirements, then call `coordinationClient.submitAction(replacementPackage, replacementRequirements)`
   - Poll using `coordinationClient.poll(agentDid)` and look at `actionUpdates` for own actions
-  - When an update has `state: "readyForResubmission"` and includes `actionPackage`, resubmit that package to the adapter directly
+  - When an update has `state: "readyForSubmission"` and includes `actionPackage`, submit that replacement Action Package to the adapter directly for the first time
   - Support `cancelAction` if the agent or bridge decides to abort
 
 - **`MaintainerBridge`** — update to use on-demand querying:
@@ -57,7 +57,7 @@
 - `CoordinationClient` unit tests need updating to match new request/response shapes.
 - `ProposerBridge` tests for `coordinate`/`wait` strategies need updating to work with the new poll-based flow (receive completed `actionPackage` from poll response).
 - `MaintainerBridge` tests need updating to reflect on-demand querying rather than background polling.
-- Integration tests should verify the full flow: ProposerBridge → adapter → coordination → MaintainerBridge approves → ProposerBridge gets completed package → resubmits → receipt.
+- Integration tests should verify the full flow: ProposerBridge submits A1 → adapter returns requirements → bridge creates A2 → coordination → MaintainerBridge approves A2 → ProposerBridge gets completed A2 → submits A2 → receipt.
 
 ---
 

@@ -3,7 +3,14 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { compactVerify, importJWK, type JWK } from "jose";
 import { describe, expect, it } from "vitest";
-import { ActionPackageBuilder, computeJsonHash, KeyManager, type CanonicalApprovalPayload, type Did } from "../../src/index.js";
+import {
+  ActionPackageBuilder,
+  computeJsonHash,
+  KeyManager,
+  type AdditionalApprovalsAuthorizationRequirements,
+  type CanonicalApprovalPayload,
+  type Did,
+} from "../../src/index.js";
 
 const fixturesDir = fileURLToPath(new URL("../fixtures/", import.meta.url));
 
@@ -85,6 +92,56 @@ describe("ActionPackageBuilder", () => {
       signerDid: proposer.did,
       createdAt: approval.createdAt,
     });
+  });
+
+  it("constructs a separately identified A2 and proposer-authored H2 requirements", async () => {
+    const keyManager = await KeyManager.fromFile(join(fixturesDir, "keys", "proposer.json"));
+    const builder = new ActionPackageBuilder({
+      applicationDid: "did:web:github.example",
+      executionProfile: { id: "did:web:profiles.oma3.org:mcp", format: "mcp.toolsCall" },
+      keyManager,
+      defaultExpirationMinutes: 30,
+    });
+    const a1 = await builder.buildFromToolCall("create_issue", { title: "Hello" });
+    const h1 = computeJsonHash(a1.actionEnvelope);
+    const verifierRequirements: AdditionalApprovalsAuthorizationRequirements = {
+      version: "1",
+      type: "AuthorizationRequirements",
+      actionEnvelopeHash: h1,
+      result: "additionalApprovalsRequired",
+      verifier: { did: "did:jwk:verifier" },
+      approvalRequirements: {
+        anyOf: [{ type: "threshold", threshold: 1, eligibleSigners: ["did:jwk:signer"] }],
+      },
+      policyRef: "github-review-v1",
+    };
+
+    const replacement = await builder.buildCoordinationReplacement(a1, verifierRequirements);
+    const a2 = replacement.actionPackage;
+    const h2 = computeJsonHash(a2.actionEnvelope);
+
+    expect(a2.executionPayload).toEqual(a1.executionPayload);
+    expect(a2.actionEnvelope.actionId).not.toEqual(a1.actionEnvelope.actionId);
+    expect(h2).not.toEqual(h1);
+    expect(a2.approvalBundle.actionEnvelopeHash).toEqual(h2);
+    expect(a2.approvalBundle.approvals).toHaveLength(1);
+    expect(a2.approvalBundle.approvals[0]).toMatchObject({
+      actionEnvelopeHash: h2,
+      decision: "propose",
+    });
+    expect(replacement.authorizationRequirements).toMatchObject({
+      actionEnvelopeHash: h2,
+      result: "additionalApprovalsRequired",
+      verifier: verifierRequirements.verifier,
+      approvalRequirements: verifierRequirements.approvalRequirements,
+      policyRef: verifierRequirements.policyRef,
+      expiresAt: a2.actionEnvelope.expiresAt,
+    });
+
+    await expect(builder.buildCoordinationReplacement(a1, {
+      ...verifierRequirements,
+      actionEnvelopeHash: { alg: "sha-256", value: "not-h1" },
+    })).rejects.toThrow("do not bind to the Action being replaced");
   });
 
 });

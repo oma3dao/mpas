@@ -107,6 +107,21 @@ function makeBridge(adapter: WorkflowAdapter, options: { store?: MemoryWorkflowS
   return new ProposerBridge({
     tools: UPSTREAM_TOOLS,
     buildActionPackage: (name, args) => buildPackage(name, args, options.proposerDid ?? PROPOSER_DID),
+    buildCoordinationReplacement: async (priorPackage, verifierRequirements) => {
+      const payload = priorPackage.executionPayload as { name: string; arguments: object };
+      const actionPackage = await buildPackage(
+        payload.name,
+        payload.arguments,
+        options.proposerDid ?? PROPOSER_DID,
+      );
+      return {
+        actionPackage,
+        authorizationRequirements: {
+          ...structuredClone(verifierRequirements),
+          actionEnvelopeHash: actionPackage.approvalBundle.actionEnvelopeHash,
+        },
+      };
+    },
     store: options.store ?? new MemoryWorkflowStore({ now: () => Date.parse("2026-08-14T10:00:00.000Z") }),
     adapter,
     coordination: coordination(),
@@ -160,7 +175,7 @@ describe("official MCP Tasks bridge runtime", () => {
       _meta: {
         "org.oma3/mpas": {
           version: "2",
-          actionId: task.taskId,
+          actionId: expect.not.stringMatching(task.taskId),
           authorizationState: "authorization_required",
           disclosure: "transparent",
           requirements,
@@ -193,8 +208,25 @@ describe("official MCP Tasks bridge runtime", () => {
 
   it("cooperatively cancels a working Task and keeps cancellation terminal", async () => {
     const store = new MemoryWorkflowStore({ now: () => Date.parse("2026-08-14T10:00:00.000Z") });
-    const bridge = makeBridge(fakeAdapter(response("additionalApprovalsRequired")), { store });
+    const bridge = makeBridge(
+      fakeAdapter(
+        response("additionalApprovalsRequired", {
+          authorizationRequirements: {
+            version: "1",
+            type: "AuthorizationRequirements",
+            result: "additionalApprovalsRequired",
+            actionEnvelopeHash: { alg: "sha-256", value: "response-hash" },
+            verifier: { did: "did:jwk:verifier" as Did },
+            approvalRequirements: { anyOf: [] },
+          },
+        }),
+      ),
+      { store },
+    );
     const created = await bridge.handleToolCall("merge_pull_request", {});
+    expect(store.getWorkflow(created.taskId)).toMatchObject({
+      state: "awaitingApprovals",
+    });
 
     await expect(bridge.handleTasksCancel(created.taskId)).resolves.toEqual({ resultType: "complete" });
     expect(bridge.handleTasksGet(created.taskId)).toMatchObject({ status: "cancelled" });
@@ -206,7 +238,9 @@ describe("official MCP Tasks bridge runtime", () => {
     const store = new MemoryWorkflowStore();
     const foreign = await buildPackage("merge_pull_request", {}, OTHER_DID);
     store.createWorkflow({
+      taskId: "urn:uuid:ffffffff-ffff-4fff-8fff-ffffffffffff",
       actionId: foreign.actionEnvelope.actionId.value,
+      actionIdempotencyKey: "foreign-action-attempt",
       actionEnvelopeHash: foreign.approvalBundle.actionEnvelopeHash.value,
       toolName: "merge_pull_request",
       actionPackage: foreign,

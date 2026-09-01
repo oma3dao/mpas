@@ -153,8 +153,11 @@ A bridge MUST expose the exact discovered upstream application tools:
 Clients discover MPAS through the `org.oma3/mpas` profile-extension capability
 in `server/discover`, not through tool names or description text.
 
-Every accepted application `tools/call` creates a new MPAS Action and returns
-a flat official `CreateTaskResult`. The Task ID MUST equal the MPAS Action ID.
+Every accepted application `tools/call` creates a stable MCP Task and a first
+MPAS Action (A1), then returns a flat official `CreateTaskResult`. The Task ID
+is an operation-level bridge identifier and MUST remain stable if the bridge
+later replaces A1 with A2 or A3. The bridge MUST generate it independently,
+and it MUST NOT equal or be treated as any MPAS Action ID.
 
 ## 5. MPAS Task Metadata
 
@@ -181,23 +184,31 @@ interface MpasTaskMeta {
 
 The value is stored at `_meta["org.oma3/mpas"]`.
 
+`actionId`, `actionEnvelopeHash`, and `expiresAt` identify the Task's current
+MPAS Action. They change together when the bridge retires an Action and
+constructs its replacement; the MCP Task ID does not change. A client MUST NOT
+use the Task ID as an Action-processing or Coordination correlation key.
+
 The bridge MUST read the complete `actionEnvelopeHash` object from the stored
 Action Package and MUST verify that its digest equals the workflow store's
 existing digest string. It MUST NOT reconstruct the object by splitting or
 rewriting the stored signed package.
 
-`requirements` is present only for `authorization_required` when the Verifier
-supplied `authorizationRequirements.approvalRequirements`. Profile version 2
-MUST NOT expose collected-versus-required approval counts.
+`requirements` is present only for `authorization_required` when A2's
+Proposer-authored `authorizationRequirements.approvalRequirements` is present.
+These conditions normally derive from the Verifier's advisory A1 response.
+Profile version 2 MUST NOT expose collected-versus-required approval counts.
 
 | Bridge workflow state | Task status | Authorization state |
 |---|---|---|
 | `created` | `working` | `submitted` |
 | `awaitingApprovals` | `working` | `authorization_required` |
-| `readyForResubmission`, `submittingToVerifier` | `working` | `approvals_collected` |
+| `readyForSubmission`, `submittingToVerifier` | `working` | `approvals_collected` |
 | `awaitingVerifierResult` | `working` | `pending` |
 | `resolved`, `unresolvable` | `completed` | Metadata omitted |
 | `cancelled` | `cancelled` | Metadata omitted |
+
+The bridge MUST use `readyForSubmission` in Task metadata and persisted workflow state.
 
 ## 6. Task Results
 
@@ -240,7 +251,7 @@ Cancellation is cooperative:
 
 1. `tasks/cancel` atomically marks an active workflow `cancelled` when it wins
    the terminal-state race.
-2. The bridge stops future local polling, retry, and resubmission for it.
+2. The bridge stops future local polling, retry, and Action submission for it.
 3. If Coordination started, the bridge best-effort requests Coordination
    cancellation.
 4. Cancellation cannot undo an operation already dispatched upstream.
@@ -250,27 +261,42 @@ Cancellation of an already-terminal visible Task is an acknowledged no-op.
 ## 9. Background Progress and Retention
 
 Task observation and MPAS progression are independent. The bridge MUST
-continue background Coordination polling, completed-package resubmission,
+continue background Coordination polling, completed-package submission,
 startup reconciliation, and retry of transient adapter or Coordination
-failures until the Action expires or reaches a terminal state.
+failures until the current Action expires or the Task reaches a terminal state.
 
 The bridge configures a logical Verifier Action endpoint independently from an
 optional Coordination Service. The Verifier endpoint may be direct or hosted
 by an Action Relay; that topology MUST NOT change the MCP client-facing Task
 contract or the bridge's interpretation of `ActionResponse`.
 
-After `additionalApprovalsRequired`, the bridge explicitly calls
-`/mpas/v1/coordination/workflow` when Coordination is configured. It MUST NOT
-assume that an Action Relay created that workflow. When Coordination returns a
-completed Action Package in `readyForResubmission`, the bridge explicitly
-submits it to the same logical Verifier endpoint used for the initial Action.
-The Coordination Service does not perform that submission on the bridge's
-behalf.
+After receiving `additionalApprovalsRequired` for A1, the bridge MUST NOT
+submit any subsequent Action Package that reuses A1's Action ID. It MUST
+construct A2 with a new Action ID, Action Envelope hash, expiration, and
+Proposer Approval. It MAY reuse the same profile-native Execution Payload.
+It then authors A2-bound Authorization Requirements, normally by deriving the
+approval conditions, policy reference, and intended `verifier.did` from the
+Verifier's A1-bound advisory response. The H2-bound object is Proposer-authored
+and MUST NOT be represented as Verifier-authored.
+
+The bridge explicitly calls `/mpas/v1/coordination/workflow` with A2 when
+Coordination is configured. It MUST NOT assume that an Action Relay created
+that workflow. When Coordination returns a completed A2 Action Package in
+`readyForSubmission`, the bridge explicitly submits A2 to the same logical
+Verifier endpoint used for A1. This is A2's first Verifier submission, not a
+retry of A1. The Coordination Service does not perform that submission on the
+bridge's behalf.
+
+If A2 receives `additionalApprovalsRequired`, the bridge repeats the rule by
+retiring A2 and constructing A3 with fresh hash-bound Approvals. Before any
+protocol response is received, transport failure or retryable `503 timeout`
+instead causes an exact retry of the current Action with the same Action ID
+and idempotency key.
 
 `ttlMs` is measured from Task creation and mirrors actual retention:
 
 ```text
-keepUntil = max(actionEnvelope.expiresAt, resolvedAt + resultRetention)
+keepUntil = max(currentActionEnvelope.expiresAt, resolvedAt + resultRetention)
 ttlMs     = keepUntil - createdAt
 ```
 

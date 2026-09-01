@@ -133,17 +133,19 @@ export class GeneratedBridge {
         id: plugin.executionProfile.id,
         format: plugin.executionProfile.format ?? "mcp.toolsCall",
       };
+      const actionPackageBuilder = new ActionPackageBuilder({
+        applicationDid: config.applicationDid,
+        executionProfile,
+        keyManager,
+        ...(config.defaultExpirationMinutes !== undefined
+          ? { defaultExpirationMinutes: config.defaultExpirationMinutes }
+          : {}),
+      });
       return new ProposerBridge({
         tools: [...this.tools],
-        buildActionPackage: (toolName, args) =>
-          new ActionPackageBuilder({
-            applicationDid: config.applicationDid,
-            executionProfile,
-            keyManager,
-            ...(config.defaultExpirationMinutes !== undefined
-              ? { defaultExpirationMinutes: config.defaultExpirationMinutes }
-              : {}),
-          }).buildFromToolCall(toolName, args),
+        buildActionPackage: (toolName, args) => actionPackageBuilder.buildFromToolCall(toolName, args),
+        buildCoordinationReplacement: (priorPackage, verifierRequirements) =>
+          actionPackageBuilder.buildCoordinationReplacement(priorPackage, verifierRequirements),
         store: this.store,
         actionEndpoint,
         coordinationService,

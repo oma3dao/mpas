@@ -48,7 +48,7 @@ function taskSummary(record: WorkflowRecord, config: TaskResultConfig): Task {
       : "completed"
     : "working";
   return {
-    taskId: record.actionId,
+    taskId: record.taskId,
     status,
     ...(statusMessage(record) !== undefined ? { statusMessage: statusMessage(record) } : {}),
     createdAt: record.createdAt,
@@ -64,8 +64,9 @@ function statusMessage(record: WorkflowRecord): string | undefined {
     case "created":
       return "Submitting the MPAS Action.";
     case "awaitingApprovals":
+    case "submittingToCoordination":
       return "Awaiting MPAS authorization.";
-    case "readyForResubmission":
+    case "readyForSubmission":
     case "submittingToVerifier":
       return "MPAS approvals collected; submitting for execution.";
     case "awaitingVerifierResult":
@@ -120,7 +121,7 @@ function toolError(message: string, actionResponse?: ActionResponse): Record<str
 function resolvedActionResponse(record: WorkflowRecord): ActionResponse {
   const resolution = record.resolution;
   if (resolution?.kind !== "resolved") {
-    throw new Error(`Workflow ${record.actionId} has an inconsistent resolved state.`);
+    throw new Error(`Workflow ${record.taskId} has an inconsistent resolved state.`);
   }
   return resolution.actionResponse as ActionResponse;
 }

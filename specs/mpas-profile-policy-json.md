@@ -547,7 +547,7 @@ Policy evaluation produces one of the following policy outcomes:
 | Outcome | Meaning |
 | :--- | :--- |
 | `authorized` | Current verified Approvals satisfy the combined requirements. |
-| `additionalApprovalsRequired` | The action is structurally valid and may be authorized if additional Approvals are collected. |
+| `additionalApprovalsRequired` | The action is structurally valid but does not satisfy current policy; the Proposer may construct a replacement Action and collect the described Approvals. |
 | `rejected` | The action is rejected by policy and cannot be satisfied by collecting ordinary additional Approvals. |
 | `notSupported` | The Application DID, execution profile, or action is not supported by the Verifier. |
 | `malformed` | The Action Package or Execution Payload is structurally invalid or cannot be safely interpreted. |
@@ -612,11 +612,12 @@ For this profile:
 - Authorization Requirements MUST bind to the computed `actionEnvelopeHash`;
 - threshold requirements referring to `eligibleSignerGroup` MUST be expanded into concrete eligible Signer DIDs or represented through a future extension recognized by the relying participants;
 - Authorization Requirements are not a guarantee of later execution;
-- the Verifier MUST reevaluate current policy when a completed Action Package is submitted.
+- the returned requirements are advisory feedback for the submitted Action and are not Coordination input for a different Action until the Proposer creates a new requirements object bound to that replacement Action;
+- the Verifier MUST evaluate current policy when a completed replacement Action Package is submitted.
 
-### 7.8 Re-Evaluation on Completed Action Packages
+### 7.8 Evaluation of Completed Replacement Actions
 
-A Verifier MUST reevaluate current policy when a completed Action Package is submitted, even if it previously returned Authorization Requirements for the same Action Envelope.
+A Verifier's `additionalApprovalsRequired` response for A1 binds to A1 and does not reserve or pre-authorize later execution. A conforming Proposer retires A1, constructs A2 with a new Action ID and Action Envelope hash, obtains fresh Approvals bound to A2, and submits completed A2 to the Verifier. The Verifier MUST evaluate A2 against current policy as an independent Action.
 
 A later Action Package may be rejected because:
 
@@ -912,9 +913,9 @@ Signer group membership MUST be protected as trusted authorization configuration
 
 A Verifier MUST NOT count an Approval unless the Approval has been verified and binds to the computed Action Envelope hash.
 
-### 9.7 Policy Re-Evaluation
+### 9.7 Policy Evaluation After Coordination
 
-A Verifier MUST reevaluate current policy when a completed Action Package is submitted. Previously returned Authorization Requirements do not guarantee future execution.
+A Verifier MUST evaluate the completed replacement Action against current policy when it is submitted. Authorization Requirements previously returned for an earlier Action do not guarantee execution of the replacement Action.
 
 ### 9.8 Reject-Entry Handling
 

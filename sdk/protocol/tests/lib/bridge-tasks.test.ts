@@ -9,6 +9,7 @@ import {
 import { CreateTaskResultSchema, GetTaskResultSchema } from "../../src/lib/mcp-tasks-extension.js";
 import type { WorkflowRecord } from "../../src/lib/workflow-store.js";
 
+const TASK_ID = "urn:uuid:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const ACTION_ID = "urn:uuid:11111111-1111-4111-8111-111111111111";
 const PROPOSER_DID = "did:jwk:proposer" as Did;
 const CREATED_AT = "2026-08-14T10:00:00.000Z";
@@ -26,7 +27,7 @@ describe("official MCP Task result builders", () => {
     expect(CreateTaskResultSchema.safeParse(result).success).toBe(true);
     expect(result).toMatchObject({
       resultType: "task",
-      taskId: ACTION_ID,
+      taskId: TASK_ID,
       status: "working",
       ttlMs: 1_800_000,
       pollIntervalMs: 2_500,
@@ -174,7 +175,9 @@ describe("official MCP Task result builders", () => {
 
 function workflow(overrides: Partial<WorkflowRecord> = {}): WorkflowRecord {
   return {
+    taskId: TASK_ID,
     actionId: ACTION_ID,
+    actionIdempotencyKey: "initial-action-attempt",
     actionEnvelopeHash: "signed-envelope-digest",
     toolName: "merge_pull_request",
     state: "created",

@@ -77,6 +77,7 @@ export function compatibilityResultForRecord(
       structuredContent: {
         version: MPAS_COMPATIBILITY_INTERFACE_VERSION,
         type: "MpasBridgeActionOutcome",
+        taskId: record.taskId,
         actionRef: compatibilityActionRef(record),
         actionResponse: actionResponse as unknown as Record<string, unknown>,
         resolvedAt: record.resolvedAt,
@@ -111,7 +112,14 @@ function buildDeferredCompatibilityResult(
   options: CompatibilityResultOptions,
 ): CompatibilityToolResult {
   const now = options.now ?? (() => Date.now());
-  const lastActionResponse = record.lastActionResponse as ActionResponse | undefined;
+  const storedResponse = record.lastActionResponse as ActionResponse | undefined;
+  const lastActionResponse =
+    (record.state === "submittingToCoordination" || record.state === "awaitingApprovals") &&
+    storedResponse?.result === "additionalApprovalsRequired"
+      ? storedResponse
+      : record.state === "awaitingVerifierResult" && storedResponse?.result === "pending"
+        ? storedResponse
+        : undefined;
   const notificationRequired =
     lastActionResponse?.result === "additionalApprovalsRequired" &&
     options.notificationAssignedElsewhere !== true;
@@ -119,6 +127,7 @@ function buildDeferredCompatibilityResult(
   const structuredContent: Record<string, unknown> = {
     version: MPAS_COMPATIBILITY_INTERFACE_VERSION,
     type: "MpasBridgeDeferredResult",
+    taskId: record.taskId,
     actionRef: compatibilityActionRef(record),
     ...(lastActionResponse !== undefined ? { lastActionResponse } : {}),
     notificationRequired,
@@ -130,7 +139,7 @@ function buildDeferredCompatibilityResult(
   const text =
     lastActionResponse?.result === "additionalApprovalsRequired"
       ? `Additional MPAS approvals are required. Action ${record.actionId} remains active.`
-      : `MPAS Action ${record.actionId} remains active. Use ${MPAS_WAIT_TOOL_NAME} to retrieve the result.`;
+      : `MPAS Task ${record.taskId} remains active on Action ${record.actionId}. Use ${MPAS_WAIT_TOOL_NAME} to retrieve the result.`;
 
   return { content: [{ type: "text", text }], structuredContent };
 }

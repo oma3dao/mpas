@@ -49,6 +49,9 @@ function makeServer(): MpasTasksServer {
   const bridge = new ProposerBridge({
     tools: [{ name: "merge_pull_request", description: "Merge.", inputSchema: { type: "object" } }],
     buildActionPackage: packageFor,
+    buildCoordinationReplacement: async () => {
+      throw new Error("unused");
+    },
     store: new MemoryWorkflowStore({ now: () => Date.parse("2026-08-14T10:00:00.000Z") }),
     adapter: {
       async submit() {

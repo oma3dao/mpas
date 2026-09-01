@@ -86,7 +86,11 @@ describe("generateBridge", () => {
     expect(store).toContain('from "node:sqlite"');
     expect(store).toContain("implements WorkflowStore");
     expect(store).toContain("PRAGMA journal_mode = WAL");
-    expect(store).toContain("cancelWorkflow(actionId: string)");
+    expect(store).toContain("cancelWorkflow(taskId: string)");
+    expect(store).toContain("replaceAction(taskId: string, input: ReplaceWorkflowActionInput)");
+    expect(store).toContain("action_idempotency_key");
+    expect(store).toContain("idx_workflows_current_action_id");
+    expect(store).toContain("Task ID and Action ID must be distinct.");
     expect(store).toContain("'resolved', 'unresolvable', 'cancelled'");
     expect(generateWorkflowStore()).toBe(store);
 

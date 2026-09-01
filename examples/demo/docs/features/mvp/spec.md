@@ -543,12 +543,12 @@ Pass-through operations do NOT require additional approvals beyond the proposer'
 
 ### 9.4 Insufficient Approvals (Iterative Flow — Governed Only)
 
-1. Bridge submits Action Package with only its Proposer Approval.
+1. Bridge submits A1 with only its Proposer Approval.
 2. Adapter verifies structure and hashes (pass), evaluates policy → insufficient approvals.
-3. Adapter returns Authorization Requirements (per MPAS Core Section 5.8): "need 2 approvals from maintainers." This is a stateless response — nothing is recorded and the `actionId` is NOT in the dispatch ledger.
-4. Bridge reports the pending status to the agent. The bridge (or coordination service, or human) obtains the needed approvals via the coordination service, group chat, or any other method.
-5. Bridge re-submits the Action Package with the updated Approval Bundle, using the SAME `actionId` and same Action Envelope. Per the Core Action Lifecycle (Section 6.9.2), the `actionId` is not in the ledger, so the adapter performs full stateless re-verification of the newly submitted package.
-6. Policy satisfied → the adapter resolves credentials and launches the target, writes `executing`, then dispatches.
+3. Adapter returns advisory Authorization Requirements bound to A1. This is a stateless response — nothing is recorded and A1 is not in the dispatch ledger.
+4. Bridge retires A1 and constructs A2 with a new Action ID, Action Envelope hash, expiration, and fresh Proposer Approval. It authors A2-bound requirements derived from the advisory response and sends A2 to Coordination.
+5. After Coordination collects A2 Approvals, the bridge submits the completed A2 Action Package to the adapter for the first time.
+6. The adapter fully verifies A2. If policy is satisfied, it resolves credentials, writes `executing`, and dispatches.
 
 ### 9.5 Rejection
 
@@ -753,8 +753,8 @@ All responses use the HTTP profile's `result` field (not a separate `outcome` fi
 | Expired Action Envelope | 200 | `expired` | `expired` | Stateless deterministic rejection |
 | Replay: same actionId, different envelope hash | 200 | `rejected` | `rejected` | Ledger holds a different hash |
 | Replay: actionId resolved (any hash) | 200 | `rejected` | `rejected` | Already dispatched; no new receipt |
-| actionId not in ledger (incl. resubmission with more approvals) | 200 | (full stateless verification) | — | No pinning; re-verify the submitted package |
-| Resubmission while actionId is `executing` (same hash) | 200 | `pending` | — | No second dispatch; dedup |
+| actionId not in ledger (including completed replacement Action) | 200 | (full stateless verification) | — | No pinning; verify the submitted package |
+| Exact retry while actionId is `executing` (same hash) | 200 | `pending` | — | No second dispatch; dedup |
 | No matching deployment config | 200 | `rejected` | `rejected` | Unknown application |
 | Governed operation, payload schema validation failed | 200 | `rejected` | `rejected` | Governed path; stateless deterministic rejection |
 | Governed operation, policy not satisfied (can be remedied) | 200 | `additionalApprovalsRequired` | — | Governed path; stateless; nothing recorded |

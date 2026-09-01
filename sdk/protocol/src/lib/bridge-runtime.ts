@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { ActionPackage, Did } from "../types/mpas.js";
 import { computeJsonHash } from "../utils/hash.js";
 import {
@@ -29,6 +30,7 @@ import {
   type WorkflowAdapter,
   type WorkflowCoordination,
   type WorkflowCoordinationService,
+  type BuildCoordinationReplacement,
 } from "./workflow-engine.js";
 import type { WorkflowRecord, WorkflowStore } from "./workflow-store.js";
 
@@ -46,6 +48,7 @@ export interface BridgeUpstreamTool {
 export interface ProposerBridgeOptions {
   tools: BridgeUpstreamTool[];
   buildActionPackage: (toolName: string, args: object) => Promise<ActionPackage>;
+  buildCoordinationReplacement: BuildCoordinationReplacement;
   store: WorkflowStore;
   /** Common Action endpoint used for initial and completed Action submission. */
   actionEndpoint?: WorkflowActionEndpoint;
@@ -123,6 +126,7 @@ export class ProposerBridge {
       ...(options.coordinationService !== undefined ? { coordinationService: options.coordinationService } : {}),
       ...(options.adapter !== undefined ? { adapter: options.adapter } : {}),
       ...(options.coordination !== undefined ? { coordination: options.coordination } : {}),
+      buildCoordinationReplacement: options.buildCoordinationReplacement,
       proposerDid: options.proposerDid,
       ...(options.workerId !== undefined ? { workerId: options.workerId } : {}),
       ...(options.now !== undefined ? { now: options.now } : {}),
@@ -215,7 +219,9 @@ export class ProposerBridge {
     const actionPackage = await this.buildActionPackage(toolName, args);
     const envelope = actionPackage.actionEnvelope;
     const outcome = await this.engine.propose({
+      taskId: `urn:uuid:${randomUUID()}`,
       actionId: envelope.actionId.value,
+      actionIdempotencyKey: randomUUID(),
       actionEnvelopeHash: computeJsonHash(envelope).value,
       toolName,
       actionPackage,
@@ -233,8 +239,8 @@ export class ProposerBridge {
     }
 
     try {
-      this.visibleRecord(input.actionId);
-      const record = await this.engine.waitForResult(input.actionId, input.timeoutSeconds * 1_000);
+      const visible = this.visibleCompatibilityRecord(input.actionId);
+      const record = await this.engine.waitForResult(visible.taskId, input.timeoutSeconds * 1_000);
       if (!record || workflowProposerDid(record) !== this.proposerDid) {
         return buildCompatibilityError(
           "ACTION_NOT_FOUND",
@@ -260,6 +266,14 @@ export class ProposerBridge {
     if (!record) throw new TaskNotFoundError(taskId);
     if (workflowProposerDid(record) !== this.proposerDid) {
       throw new TaskNotFoundError(taskId);
+    }
+    return record;
+  }
+
+  private visibleCompatibilityRecord(actionId: string): WorkflowRecord {
+    const record = this.store.getWorkflowByActionId(actionId);
+    if (!record || workflowProposerDid(record) !== this.proposerDid) {
+      throw new TaskNotFoundError(actionId);
     }
     return record;
   }

@@ -76,7 +76,7 @@ Tasks clients and conventional MCP clients:
 - `MpasTasksServer` — MCP discovery, exact upstream tools, and official `tasks/*` operations
 - `MpasCompatibilityServer` — conventional initialization, deferred results, and `mpas_wait_for_action_result`
 - `ProposerBridge` — creates Actions and maps one durable MPAS workflow to either client presentation
-- `BridgeWorkflowEngine` — background workflow: submission, coordination, resubmission, restart recovery
+- `BridgeWorkflowEngine` — background workflow: initial Action submission, replacement-Action coordination, completed Action submission, and restart recovery
 - `WorkflowStore`, `MemoryWorkflowStore` — durable-store contract and in-memory reference (no database dependency)
 
 A proposer bridge is dedicated to one MCP client or agent identity and holds
@@ -125,6 +125,23 @@ import { KeyManager } from "@oma3/mpas/key-manager";
 - A primary artifact is the first parameter; optional behavior and multi-field submissions use named input objects.
 - Deprecated alpha names are compatibility wrappers. New code and examples use only canonical APIs.
 - Public runtime APIs include JSDoc describing protocol scope, side effects, identity behavior, and errors.
+
+## Alpha 11 WorkflowStore Migration
+
+Alpha 11 changes the proposer-bridge workflow contract. Custom `WorkflowStore`
+implementations must be updated before adopting this release:
+
+- `taskId` is a stable bridge/MCP Task identifier and must be distinct from
+  every current or retired MPAS Action ID.
+- `CreateWorkflowInput`, `ReplaceWorkflowActionInput`, and `WorkflowRecord`
+  carry `actionIdempotencyKey`. Store it durably with the current Action and
+  replace it atomically when `replaceAction` installs A2 or a later Action.
+- Implement `replaceAction` and `getWorkflowByActionId`. Preserve aliases for
+  retired Action IDs so compatibility lookups continue to resolve the stable
+  Task.
+- Reject duplicate Action IDs and reject `taskId === actionId`. Retries of one
+  Action must reuse its stored idempotency key; a replacement Action must use a
+  new key.
 
 ## Routing and Delivery
 
@@ -226,11 +243,13 @@ The envelope may be rebuilt with fresh `createdAt`, `expiresAt`, and `audience`
 metadata; those transport fields do not change equivalence. The first accepted
 envelope remains authoritative, so rebuilding does not extend its stored expiry.
 
-When a direct or relayed Verifier returns `additionalApprovalsRequired`, explicitly
-submit that Action Package and the Verifier's requirements through the coordination workflow:
+When a direct or relayed Verifier returns `additionalApprovalsRequired` for A1,
+retire A1 and construct replacement Action A2. A2 has a new Action ID, Action
+Envelope hash, expiration, and Proposer Approval. Submit A2 and Proposer-authored,
+A2-bound requirements through the coordination workflow:
 
 ```typescript
-import { CoordinationServiceClient } from "@oma3/mpas";
+import { ActionPackageBuilder, CoordinationServiceClient } from "@oma3/mpas";
 
 if (response.result === "additionalApprovalsRequired" &&
     response.authorizationRequirements) {
@@ -238,16 +257,28 @@ if (response.result === "additionalApprovalsRequired" &&
     url: "https://coordination.example.com",
     signer: proposerSigner,
   });
-  await coordination.createApprovalWorkflow({
+  const builder = new ActionPackageBuilder({
+    applicationDid,
+    executionProfile,
+    keyManager,
+  });
+  const replacement = await builder.buildCoordinationReplacement(
     actionPackage,
-    authorizationRequirements: response.authorizationRequirements,
+    response.authorizationRequirements,
+  );
+  await coordination.createApprovalWorkflow({
+    actionPackage: replacement.actionPackage,
+    authorizationRequirements: replacement.authorizationRequirements,
     idempotencyKey: "stable-key-for-coordination-submission",
   });
 }
 ```
 
 The Action endpoint and Coordination Service are independent. Receiving the relay
-response never creates a workflow; the explicit call above does.
+response never creates a workflow; the explicit call above does. A completed A2
+package returned in `readyForSubmission` is A2's first Action-endpoint submission,
+not a retry of A1. A bridge may keep one stable local MCP Task ID across A1, A2,
+and any later replacements, but that Task ID is not an MPAS Action correlation key.
 `createApprovalWorkflow` uses `/mpas/v1/coordination/workflow`. The deprecated
 `submitAction` method uses the temporary `/mpas/v1/coordination/action` alias for
 migration compatibility; `submitActionForCoordination` is a deprecated source-level

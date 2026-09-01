@@ -348,10 +348,10 @@ export function createCoordinationApiServer(options: CoordinationHttpEndpointOpt
         state: response.state,
       });
 
-      if (response.state === "readyForResubmission") {
+      if (response.state === "readyForSubmission") {
         trace.emit("state_transition", {
           fromState: "awaitingApprovals",
-          toState: "readyForResubmission",
+          toState: "readyForSubmission",
         });
       } else if (response.state === "rejected") {
         trace.emit("state_transition", {
