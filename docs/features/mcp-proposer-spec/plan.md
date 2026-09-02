@@ -55,14 +55,18 @@ is verified.
 ### Review decisions
 
 - Confirm the profile name and reserved tool name.
-- Confirm that the bridge returns as soon as the workflow record is durable,
-  with no synchronous approval window.
+- Confirm that the request handler enqueues that Task's outbound dispatcher
+  lane and waits for the initial verifier response, returning a native result
+  on the terminal fast path and a Task for deferred processing. Distinct Tasks
+  keep independent lanes.
 - Confirm the minimum terminal retention rule.
 - Decided: result recovery is best effort; no Core or HTTP recovery mechanism
   in this feature. A read-only result endpoint or identical resolved replay
   remains a future option (feature spec Section 11).
 - Confirm that signer-server behavior remains outside this profile.
 - Confirm that the lost-initial-response limitation is deferred.
+- Confirm that the worker claim lease must exceed the Action/Coordination
+  client timeout; the HTTP profile does not fix relay wait duration.
 
 ### Exit criteria
 
@@ -222,7 +226,8 @@ Implement:
 
 - verbatim native result for synchronous native success;
 - verbatim native result for a definitive upstream `isError: true` result;
-- `MpasBridgeDeferredResult` after durable coordination;
+- deferred Task (or compatibility deferred result) after the initial attempt
+  when processing does not settle;
 - `MpasBridgeTerminalResult` for MPAS terminal outcomes with no native result;
 - `MpasBridgeErrorResult` for bridge failures.
 
@@ -376,9 +381,9 @@ Document:
 - recovery diagnostics;
 - upgrade path for existing generated bridges.
 
-Remove the temporary notify-before-submit guidance only when the deployed bridge
-can return a durable Action ID and the proposing client is configured to react
-to it.
+Remove the temporary notify-before-submit guidance only when the deployed
+bridge can return a durable Task with current-Action metadata and the proposing
+client is configured to react to it.
 
 ---
 
@@ -386,8 +391,8 @@ to it.
 
 | Feature acceptance criterion | Normative profile area | Implementation area | Primary test layer |
 | :--- | :--- | :--- | :--- |
-| Prompt deferred return | Client Profile §§4–5 | bridge request handler | client-interface conformance |
-| Action ID and envelope hash | Client Profile §5 | result serializer | client-interface conformance |
+| Fast-path result or deferred Task | Client Profile §§4–5 | request handler + per-Task outbound dispatcher | client-interface conformance |
+| Task ID, Action ID, and envelope hash | Client Profile §5 | result serializer | client-interface conformance |
 | Client notification signal | Client Profile §5 | bridge configuration | client-interface + application |
 | Action progresses without result call | Client Profile §7 | background worker | black-box client-interface test |
 | Durable restart recovery | Feature Spec §9 | workflow store | reference implementation |

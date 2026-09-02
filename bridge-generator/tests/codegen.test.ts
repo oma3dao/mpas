@@ -50,7 +50,8 @@ describe("generateBridge", () => {
     expect(source).toContain('from "./sqlite-workflow-store.js"');
     expect(source).toContain("MemoryWorkflowStore");
     expect(source).toContain("signer: keyManagerPromise");
-    expect(source).toContain("new ActionRelayClient({ url: config.url, signer: keyManagerPromise })");
+    expect(source).toContain("new ActionRelayClient({");
+    expect(source).toContain("...(timeoutMs !== undefined ? { timeoutMs } : {})");
     expect(source).toContain("client.submitAction(buildDeliveryEnvelope({");
     expect(source).toContain("new Set([config.verifierDid, ...(config.additionalRecipients ?? [])])");
     expect(source).toContain("coordinationService,");
@@ -86,7 +87,11 @@ describe("generateBridge", () => {
     expect(store).toContain('from "node:sqlite"');
     expect(store).toContain("implements WorkflowStore");
     expect(store).toContain("PRAGMA journal_mode = WAL");
-    expect(store).toContain("cancelWorkflow(actionId: string)");
+    expect(store).toContain("cancelWorkflow(taskId: string)");
+    expect(store).toContain("replaceAction(taskId: string, input: ReplaceWorkflowActionInput)");
+    expect(store).toContain("action_idempotency_key");
+    expect(store).toContain("idx_workflows_current_action_id");
+    expect(store).toContain("Task ID and Action ID must be distinct.");
     expect(store).toContain("'resolved', 'unresolvable', 'cancelled'");
     expect(generateWorkflowStore()).toBe(store);
 

@@ -1,7 +1,9 @@
+import { randomUUID } from "node:crypto";
 import type { ActionPackage, Did } from "../types/mpas.js";
 import { computeJsonHash } from "../utils/hash.js";
 import {
   buildCancelTaskResult,
+  buildCompleteToolCallResult,
   buildCreateTaskResult,
   buildGetTaskResult,
   buildUpdateTaskResult,
@@ -9,8 +11,8 @@ import {
 } from "./bridge-tasks.js";
 import type {
   CancelTaskResult,
-  CreateTaskResult,
   GetTaskResult,
+  TasksToolCallResult,
   UpdateTaskResult,
 } from "./mcp-tasks-extension.js";
 import { workflowProposerDid } from "./mpas-task-meta.js";
@@ -25,10 +27,13 @@ import {
 } from "./bridge-compatibility.js";
 import {
   BridgeWorkflowEngine,
+  DEFAULT_SUBMISSION_TIMEOUT_MS,
   type WorkflowActionEndpoint,
   type WorkflowAdapter,
   type WorkflowCoordination,
   type WorkflowCoordinationService,
+  type BuildCoordinationReplacement,
+  type ProposeResult,
 } from "./workflow-engine.js";
 import type { WorkflowRecord, WorkflowStore } from "./workflow-store.js";
 
@@ -46,6 +51,7 @@ export interface BridgeUpstreamTool {
 export interface ProposerBridgeOptions {
   tools: BridgeUpstreamTool[];
   buildActionPackage: (toolName: string, args: object) => Promise<ActionPackage>;
+  buildCoordinationReplacement: BuildCoordinationReplacement;
   store: WorkflowStore;
   /** Common Action endpoint used for initial and completed Action submission. */
   actionEndpoint?: WorkflowActionEndpoint;
@@ -66,6 +72,17 @@ export interface ProposerBridgeOptions {
   /** Deployment assigns maintainer notification outside the proposing client. */
   notificationAssignedElsewhere?: boolean;
   workerId?: string;
+  /**
+   * Maximum wait of one claimed Action or Coordination submit. Defaults to the
+   * Action endpoint or Coordination client `timeoutMs` when present, otherwise
+   * {@link DEFAULT_SUBMISSION_TIMEOUT_MS}.
+   */
+  submissionTimeoutMs?: number;
+  /**
+   * Worker claim lease. Must exceed the submission timeout. Default
+   * {@link DEFAULT_CLAIM_LEASE_MS}.
+   */
+  claimLeaseMs?: number;
   now?: () => number;
 }
 
@@ -123,8 +140,11 @@ export class ProposerBridge {
       ...(options.coordinationService !== undefined ? { coordinationService: options.coordinationService } : {}),
       ...(options.adapter !== undefined ? { adapter: options.adapter } : {}),
       ...(options.coordination !== undefined ? { coordination: options.coordination } : {}),
+      buildCoordinationReplacement: options.buildCoordinationReplacement,
       proposerDid: options.proposerDid,
       ...(options.workerId !== undefined ? { workerId: options.workerId } : {}),
+      submissionTimeoutMs: options.submissionTimeoutMs ?? inferredSubmissionTimeoutMs(options),
+      ...(options.claimLeaseMs !== undefined ? { claimLeaseMs: options.claimLeaseMs } : {}),
       ...(options.now !== undefined ? { now: options.now } : {}),
     });
   }
@@ -139,9 +159,12 @@ export class ProposerBridge {
     return structuredClone(this.compatibilityTools);
   }
 
-  /** Every accepted application call creates and returns an official Task. */
-  async handleToolCall(toolName: string, args: object): Promise<CreateTaskResult> {
-    return buildCreateTaskResult(await this.proposeToolCall(toolName, args), this.resultConfig);
+  /** Return a normal tool result on the fast path; expose a Task only when deferred. */
+  async handleToolCall(toolName: string, args: object): Promise<TasksToolCallResult> {
+    const outcome = await this.proposeToolCall(toolName, args);
+    return outcome.kind === "settled"
+      ? buildCompleteToolCallResult(outcome.record)
+      : buildCreateTaskResult(outcome.record, this.resultConfig);
   }
 
   /** Legacy application and reserved wait-tool dispatch over the same workflow. */
@@ -154,8 +177,8 @@ export class ProposerBridge {
     }
 
     try {
-      const record = await this.proposeToolCall(toolName, args);
-      return compatibilityResultForRecord(record, this.compatibilityResultConfig);
+      const outcome = await this.proposeToolCall(toolName, args);
+      return compatibilityResultForRecord(outcome.record, this.compatibilityResultConfig);
     } catch {
       return buildCompatibilityError(
         "BRIDGE_UNAVAILABLE",
@@ -207,21 +230,22 @@ export class ProposerBridge {
     this.store.purgeExpiredResults(this.resultConfig.resultRetentionSeconds * 1_000);
   }
 
-  private async proposeToolCall(toolName: string, args: object): Promise<WorkflowRecord> {
+  private async proposeToolCall(toolName: string, args: object): Promise<ProposeResult> {
     if (!this.tools.some((tool) => tool.name === toolName)) {
       throw new UnknownBridgeToolError(toolName);
     }
 
     const actionPackage = await this.buildActionPackage(toolName, args);
     const envelope = actionPackage.actionEnvelope;
-    const outcome = await this.engine.propose({
+    return this.engine.propose({
+      taskId: `urn:uuid:${randomUUID()}`,
       actionId: envelope.actionId.value,
+      actionIdempotencyKey: randomUUID(),
       actionEnvelopeHash: computeJsonHash(envelope).value,
       toolName,
       actionPackage,
       expiresAt: envelope.expiresAt,
     });
-    return outcome.record;
   }
 
   private async handleCompatibilityWait(args: object): Promise<CompatibilityToolResult> {
@@ -233,8 +257,8 @@ export class ProposerBridge {
     }
 
     try {
-      this.visibleRecord(input.actionId);
-      const record = await this.engine.waitForResult(input.actionId, input.timeoutSeconds * 1_000);
+      const visible = this.visibleCompatibilityRecord(input.actionId);
+      const record = await this.engine.waitForResult(visible.taskId, input.timeoutSeconds * 1_000);
       if (!record || workflowProposerDid(record) !== this.proposerDid) {
         return buildCompatibilityError(
           "ACTION_NOT_FOUND",
@@ -263,4 +287,32 @@ export class ProposerBridge {
     }
     return record;
   }
+
+  private visibleCompatibilityRecord(actionId: string): WorkflowRecord {
+    const record = this.store.getWorkflowByActionId(actionId);
+    if (!record || workflowProposerDid(record) !== this.proposerDid) {
+      throw new TaskNotFoundError(actionId);
+    }
+    return record;
+  }
+}
+
+function inferredSubmissionTimeoutMs(options: ProposerBridgeOptions): number {
+  const timeouts = [
+    clientTimeoutMs(options.actionEndpoint),
+    clientTimeoutMs(options.coordinationService),
+    clientTimeoutMs(options.adapter),
+    clientTimeoutMs(options.coordination),
+  ].filter((value): value is number => value !== undefined);
+  return timeouts.length > 0 ? Math.max(...timeouts) : DEFAULT_SUBMISSION_TIMEOUT_MS;
+}
+
+function clientTimeoutMs(client: object | undefined): number | undefined {
+  if (client === undefined || !("timeoutMs" in client)) {
+    return undefined;
+  }
+  const timeoutMs = (client as { timeoutMs: unknown }).timeoutMs;
+  return typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
+    ? timeoutMs
+    : undefined;
 }

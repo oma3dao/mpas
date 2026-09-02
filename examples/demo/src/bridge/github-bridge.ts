@@ -28,7 +28,6 @@ import {
 } from "@oma3/mpas";
 import type {
   BridgeUpstreamTool,
-  CreateTaskResult,
   MpasApplicationPlugin,
   ProposerConfig,
   WorkflowCoordinationService,
@@ -62,6 +61,13 @@ interface WorkflowConfig {
   maxWaitTimeoutSeconds?: number;
   /** Deployment assigns maintainer notification outside the proposing client. */
   notificationAssignedElsewhere?: boolean;
+  /**
+   * Action and Coordination HTTP wait. Must stay below claimLeaseMs.
+   * Default 30000.
+   */
+  submissionTimeoutMs?: number;
+  /** Worker claim lease. Must exceed submissionTimeoutMs. Default 60000. */
+  claimLeaseMs?: number;
 }
 
 interface BridgeConfig extends Omit<ProposerConfig, "approvalStrategy" | "approvalTimeoutMs"> {
@@ -115,12 +121,20 @@ export class GeneratedBridge {
   constructor(config: BridgeConfig) {
     this.tools = loadTools(config.tools);
     const plugin = loadPlugin(config.plugin);
-    const actionEndpoint = new ActionEndpointClient({ url: config.adapterUrl });
     const keyManagerPromise = loadKeyManager(config.agentKey);
-    const coordinationService: WorkflowCoordinationService = config.coordinationUrl
-      ? new CoordinationServiceClient({ url: config.coordinationUrl, signer: keyManagerPromise })
-      : unconfiguredCoordinationService();
     const workflow = config.workflow ?? {};
+    const submissionTimeoutMs = workflow.submissionTimeoutMs;
+    const actionEndpoint = new ActionEndpointClient({
+      url: config.adapterUrl,
+      ...(submissionTimeoutMs !== undefined ? { timeoutMs: submissionTimeoutMs } : {}),
+    });
+    const coordinationService: WorkflowCoordinationService = config.coordinationUrl
+      ? new CoordinationServiceClient({
+          url: config.coordinationUrl,
+          signer: keyManagerPromise,
+          ...(submissionTimeoutMs !== undefined ? { timeoutMs: submissionTimeoutMs } : {}),
+        })
+      : unconfiguredCoordinationService();
     this.store = workflow.dbPath ? new SqliteWorkflowStore(workflow.dbPath) : new MemoryWorkflowStore();
     if (!workflow.dbPath) {
       log("warn", "memory_workflow_store", {
@@ -133,17 +147,19 @@ export class GeneratedBridge {
         id: plugin.executionProfile.id,
         format: plugin.executionProfile.format ?? "mcp.toolsCall",
       };
+      const actionPackageBuilder = new ActionPackageBuilder({
+        applicationDid: config.applicationDid,
+        executionProfile,
+        keyManager,
+        ...(config.defaultExpirationMinutes !== undefined
+          ? { defaultExpirationMinutes: config.defaultExpirationMinutes }
+          : {}),
+      });
       return new ProposerBridge({
         tools: [...this.tools],
-        buildActionPackage: (toolName, args) =>
-          new ActionPackageBuilder({
-            applicationDid: config.applicationDid,
-            executionProfile,
-            keyManager,
-            ...(config.defaultExpirationMinutes !== undefined
-              ? { defaultExpirationMinutes: config.defaultExpirationMinutes }
-              : {}),
-          }).buildFromToolCall(toolName, args),
+        buildActionPackage: (toolName, args) => actionPackageBuilder.buildFromToolCall(toolName, args),
+        buildCoordinationReplacement: (priorPackage, verifierRequirements) =>
+          actionPackageBuilder.buildCoordinationReplacement(priorPackage, verifierRequirements),
         store: this.store,
         actionEndpoint,
         coordinationService,
@@ -155,6 +171,8 @@ export class GeneratedBridge {
         ...(workflow.notificationAssignedElsewhere !== undefined
           ? { notificationAssignedElsewhere: workflow.notificationAssignedElsewhere }
           : {}),
+        ...(submissionTimeoutMs !== undefined ? { submissionTimeoutMs } : {}),
+        ...(workflow.claimLeaseMs !== undefined ? { claimLeaseMs: workflow.claimLeaseMs } : {}),
       });
     });
   }
@@ -163,7 +181,10 @@ export class GeneratedBridge {
     return structuredClone(this.tools);
   }
 
-  async handleToolCall(toolName: string, args: object): Promise<CreateTaskResult> {
+  async handleToolCall(
+    toolName: string,
+    args: object,
+  ): Promise<Awaited<ReturnType<ProposerBridge["handleToolCall"]>>> {
     log("info", "tool_call_received", { toolName });
     const bridge = await this.bridgePromise;
     return bridge.handleToolCall(toolName, args);

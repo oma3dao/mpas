@@ -107,6 +107,21 @@ function makeBridge(adapter: WorkflowAdapter, options: { store?: MemoryWorkflowS
   return new ProposerBridge({
     tools: UPSTREAM_TOOLS,
     buildActionPackage: (name, args) => buildPackage(name, args, options.proposerDid ?? PROPOSER_DID),
+    buildCoordinationReplacement: async (priorPackage, verifierRequirements) => {
+      const payload = priorPackage.executionPayload as { name: string; arguments: object };
+      const actionPackage = await buildPackage(
+        payload.name,
+        payload.arguments,
+        options.proposerDid ?? PROPOSER_DID,
+      );
+      return {
+        actionPackage,
+        authorizationRequirements: {
+          ...structuredClone(verifierRequirements),
+          actionEnvelopeHash: actionPackage.approvalBundle.actionEnvelopeHash,
+        },
+      };
+    },
     store: options.store ?? new MemoryWorkflowStore({ now: () => Date.parse("2026-08-14T10:00:00.000Z") }),
     adapter,
     coordination: coordination(),
@@ -116,22 +131,22 @@ function makeBridge(adapter: WorkflowAdapter, options: { store?: MemoryWorkflowS
 }
 
 describe("official MCP Tasks bridge runtime", () => {
+  it("rejects construction when a client timeout outlives the claim lease", () => {
+    const adapter = Object.assign(fakeAdapter(), { timeoutMs: 120_000 });
+    expect(() => makeBridge(adapter)).toThrow(/claimLeaseMs .* must exceed submissionTimeoutMs/);
+  });
+
   it("preserves the upstream tool surface exactly and exposes no wait tool", () => {
     expect(makeBridge(fakeAdapter()).getToolDefinitions()).toEqual(UPSTREAM_TOOLS);
   });
 
-  it("returns a flat completed Task and exposes the native result through tasks/get", async () => {
+  it("returns the native MCP result directly when the initial Action settles quickly", async () => {
     const native = { content: [{ type: "text", text: "merged" }], isError: false };
     const bridge = makeBridge(fakeAdapter(response("executed", { executionResult: native })));
-    const created = await bridge.handleToolCall("merge_pull_request", { pullNumber: 42 });
+    const result = await bridge.handleToolCall("merge_pull_request", { pullNumber: 42 });
 
-    expect(created).toMatchObject({ resultType: "task", status: "completed" });
-    expect(created.taskId).toMatch(/^urn:uuid:/);
-    expect(bridge.handleTasksGet(created.taskId)).toMatchObject({
-      resultType: "complete",
-      status: "completed",
-      result: native,
-    });
+    expect(result).toEqual({ ...native, resultType: "complete" });
+    expect(result).not.toHaveProperty("taskId");
   });
 
   it("returns transparent MPAS metadata from the signed Action Package while working", async () => {
@@ -153,14 +168,16 @@ describe("official MCP Tasks bridge runtime", () => {
       ),
     );
 
-    const task = await bridge.handleToolCall("merge_pull_request", { pullNumber: 42 });
+    const result = await bridge.handleToolCall("merge_pull_request", { pullNumber: 42 });
+    if (result.resultType !== "task") throw new Error("Expected deferred Task result.");
+    const task = result;
     expect(task).toMatchObject({
       resultType: "task",
       status: "working",
       _meta: {
         "org.oma3/mpas": {
           version: "2",
-          actionId: task.taskId,
+          actionId: expect.not.stringMatching(task.taskId),
           authorizationState: "authorization_required",
           disclosure: "transparent",
           requirements,
@@ -171,13 +188,15 @@ describe("official MCP Tasks bridge runtime", () => {
     expect(meta.actionEnvelopeHash.value).not.toBe("response-hash");
   });
 
-  it("completes terminal MPAS outcomes as tool-level error results", async () => {
+  it("returns terminal MPAS outcomes directly as normal tool-level errors", async () => {
     const bridge = makeBridge(fakeAdapter(response("rejected", { error: { code: "DENIED", message: "denied" } })));
-    const created = await bridge.handleToolCall("merge_pull_request", {});
-    expect(bridge.handleTasksGet(created.taskId)).toMatchObject({
-      status: "completed",
-      result: { isError: true, structuredContent: { type: "ActionResponse", result: "rejected" } },
+    const result = await bridge.handleToolCall("merge_pull_request", {});
+    expect(result).toMatchObject({
+      resultType: "complete",
+      isError: true,
+      structuredContent: { type: "ActionResponse", result: "rejected" },
     });
+    expect(result).not.toHaveProperty("taskId");
   });
 
   it("rejects unknown tools before creating a Task", async () => {
@@ -187,26 +206,47 @@ describe("official MCP Tasks bridge runtime", () => {
 
   it("acknowledges tasks/update for a visible Task", async () => {
     const bridge = makeBridge(fakeAdapter(response("pending")));
-    const created = await bridge.handleToolCall("merge_pull_request", {});
-    expect(bridge.handleTasksUpdate(created.taskId, { ignored: {} })).toEqual({ resultType: "complete" });
+    const result = await bridge.handleToolCall("merge_pull_request", {});
+    if (result.resultType !== "task") throw new Error("Expected deferred Task result.");
+    expect(bridge.handleTasksUpdate(result.taskId, { ignored: {} })).toEqual({ resultType: "complete" });
   });
 
   it("cooperatively cancels a working Task and keeps cancellation terminal", async () => {
     const store = new MemoryWorkflowStore({ now: () => Date.parse("2026-08-14T10:00:00.000Z") });
-    const bridge = makeBridge(fakeAdapter(response("additionalApprovalsRequired")), { store });
-    const created = await bridge.handleToolCall("merge_pull_request", {});
+    const bridge = makeBridge(
+      fakeAdapter(
+        response("additionalApprovalsRequired", {
+          authorizationRequirements: {
+            version: "1",
+            type: "AuthorizationRequirements",
+            result: "additionalApprovalsRequired",
+            actionEnvelopeHash: { alg: "sha-256", value: "response-hash" },
+            verifier: { did: "did:jwk:verifier" as Did },
+            approvalRequirements: { anyOf: [] },
+          },
+        }),
+      ),
+      { store },
+    );
+    const result = await bridge.handleToolCall("merge_pull_request", {});
+    if (result.resultType !== "task") throw new Error("Expected deferred Task result.");
+    expect(store.getWorkflow(result.taskId)).toMatchObject({
+      state: "awaitingApprovals",
+    });
 
-    await expect(bridge.handleTasksCancel(created.taskId)).resolves.toEqual({ resultType: "complete" });
-    expect(bridge.handleTasksGet(created.taskId)).toMatchObject({ status: "cancelled" });
-    store.resolveWorkflow(created.taskId, { kind: "resolved", actionResponse: response("executed") });
-    expect(bridge.handleTasksGet(created.taskId)).toMatchObject({ status: "cancelled" });
+    await expect(bridge.handleTasksCancel(result.taskId)).resolves.toEqual({ resultType: "complete" });
+    expect(bridge.handleTasksGet(result.taskId)).toMatchObject({ status: "cancelled" });
+    store.resolveWorkflow(result.taskId, { kind: "resolved", actionResponse: response("executed") });
+    expect(bridge.handleTasksGet(result.taskId)).toMatchObject({ status: "cancelled" });
   });
 
   it("treats unknown and cross-DID Tasks as not found", async () => {
     const store = new MemoryWorkflowStore();
     const foreign = await buildPackage("merge_pull_request", {}, OTHER_DID);
     store.createWorkflow({
+      taskId: "urn:uuid:ffffffff-ffff-4fff-8fff-ffffffffffff",
       actionId: foreign.actionEnvelope.actionId.value,
+      actionIdempotencyKey: "foreign-action-attempt",
       actionEnvelopeHash: foreign.approvalBundle.actionEnvelopeHash.value,
       toolName: "merge_pull_request",
       actionPackage: foreign,

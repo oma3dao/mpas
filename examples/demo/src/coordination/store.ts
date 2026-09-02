@@ -309,7 +309,7 @@ export class CoordinationStore {
     if (stored.state === "awaitingApprovals") {
       const status = evaluateApprovalRequirements(stored.authorizationRequirements.approvalRequirements, stored.approvals);
       if (status === "satisfied") {
-        stored.state = "readyForResubmission";
+        stored.state = "readyForSubmission";
         stored.updatedAt = new Date().toISOString();
       } else if (status === "unreachable") {
         stored.state = "rejected";
@@ -421,7 +421,7 @@ export class CoordinationStore {
       throw new MpasServiceError(409, "ACTION_EXPIRED", "Action has expired and can no longer be cancelled.");
     }
 
-    if (stored.state === "readyForResubmission") {
+    if (stored.state === "readyForSubmission") {
       throw new MpasServiceError(409, "ACTION_READY", "Action is already ready for resubmission.");
     }
     if (stored.state === "rejected") {
@@ -647,7 +647,7 @@ function buildActionUpdate(stored: StoredAction): ActionUpdate {
   }
 
   update.progress = progressFor(stored.authorizationRequirements.approvalRequirements, stored.approvals);
-  if (stored.state === "readyForResubmission") {
+  if (stored.state === "readyForSubmission") {
     update.actionPackage = buildCompletedActionPackage(stored);
   }
 

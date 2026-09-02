@@ -86,7 +86,7 @@ export function buildActionRequest(input: BuildActionRequestInput): ActionReques
 export class ActionEndpointClient {
   private readonly url: string;
   private readonly audience: string;
-  private readonly timeoutMs: number;
+  readonly timeoutMs: number;
   private readonly signer?: Promise<MpasRfc9421Signer>;
   private readonly signatureLifetimeSeconds?: number;
 

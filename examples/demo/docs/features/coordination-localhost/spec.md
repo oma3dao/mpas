@@ -26,7 +26,7 @@ The demo supports both HTTP Profile topologies. A Proposer may submit directly t
 - Store pending Action Packages, Authorization Requirements, Approval Requests, and Approvals in memory.
 - Let maintainer bridges poll for pending work and submit Approvals.
 - Let proposer bridges poll for workflow state changes.
-- Let proposer bridges fetch a completed Action Package ready for direct resubmission to the Verifier.
+- Let proposer bridges fetch a completed replacement Action Package ready for its first submission to the Verifier.
 - Relay addressed Action requests and Verifier responses through Delivery Envelopes.
 - Offer notification-only WebSocket sessions without moving payload retrieval off the signed poll.
 - Detect `actionId` conflicts where the same action ID is submitted with a different Action Envelope hash.
@@ -83,7 +83,7 @@ Response:
 {
   "status": "ok",
   "actions": 3,
-  "readyForResubmission": 1
+  "readyForSubmission": 1
 }
 ```
 
@@ -301,7 +301,7 @@ Response:
           "value": "base64url-encoded-digest"
         }
       },
-      "state": "readyForResubmission",
+      "state": "readyForSubmission",
       "progress": {
         "required": 2,
         "collected": 2,
@@ -345,8 +345,8 @@ Rules:
 - `approvalRequests` contains pending Approval Requests for actions where the DID is listed in `eligibleSigners` and the action is in `awaitingApprovals` state. Empty array if none. Cancelled and expired actions are not included.
 - `actionUpdates` contains state and progress for actions where the DID is the proposer. Empty array if none.
 - Each action update carries `version` and `type` (`CoordinationActionUpdate`) and includes a `progress` object with `required` (threshold count), `collected` (approvals collected so far), and `pending` (eligible DIDs that haven't responded), consistent with the HTTP Profile §8.5. Progress is not present for rejected, cancelled, or expired actions.
-- When state is `readyForResubmission`, the action update includes the completed `actionPackage`.
-- `actionPackage` is only present when state is `readyForResubmission`. It contains the original Execution Payload, Action Envelope, and an updated Approval Bundle with all collected Approvals (including the Proposer's original Approval).
+- When state is `readyForSubmission`, the action update includes the completed `actionPackage`.
+- `actionPackage` is only present when state is `readyForSubmission`. It contains the original Execution Payload, Action Envelope, and an updated Approval Bundle with all collected Approvals (including the Proposer's original Approval).
 - When state is `cancelled`, the action update includes `cancelledAt` and no `progress` or `actionPackage`.
 - When state is `expired`, the action update includes no `progress` or `actionPackage`. The `expiresAt` from the original Action Envelope indicates when expiry occurred.
 - When immutable Signer decisions make the requirements unreachable, state becomes `rejected`, the update includes `rejectedAt`, and no further approval request is returned.
@@ -462,7 +462,7 @@ Rules:
 - Cancellation is final — a cancelled action cannot be re-activated. The proposer must submit a new action if they want to retry.
 - Cancellation is a coordination-workflow courtesy only. Per MPAS Core Section 6.9.2, the Verifier has no cancellation concept; the `actionId` remains pinned at the Verifier until the envelope expires.
 - Returns `404` if the action ref is unknown.
-- Returns `409` if the action is already in `readyForResubmission` state (too late to cancel — the proposer already has the completed package).
+- Returns `409` if the action is already in `readyForSubmission` state (too late to cancel — the proposer already has the completed package).
 - Returns `409` if the action is already in `expired` state.
 ---
 
@@ -473,7 +473,7 @@ The local service maintains a non-authoritative workflow view using the followin
 | State | Meaning |
 |---|---|
 | `awaitingApprovals` | The action is stored and more Approvals are needed. |
-| `readyForResubmission` | Stored Approvals appear to satisfy the Authorization Requirements threshold count. |
+| `readyForSubmission` | Stored Approvals appear to satisfy the Authorization Requirements threshold count. |
 | `rejected` | Immutable Signer decisions have made the approval expression unreachable. This is a non-authoritative coordination result. |
 | `cancelled` | The proposer cancelled the action. No longer served to signers. |
 | `expired` | The Action Envelope's `expiresAt` has passed. No longer served to signers. |
@@ -482,11 +482,11 @@ State transitions:
 
 ```text
 awaitingApprovals
-  -> readyForResubmission   (threshold met)
+  -> readyForSubmission   (threshold met)
   -> cancelled              (proposer cancels)
   -> expired                (envelope expiresAt reached)
 
-readyForResubmission
+readyForSubmission
   -> expired                (envelope expiresAt reached before proposer retrieves)
 
 cancelled (terminal)
@@ -495,7 +495,7 @@ expired (terminal)
 
 An action enters `awaitingApprovals` on submission. There is no separate `submitted` state because the coordination service only accepts actions that include Authorization Requirements.
 
-`readyForResubmission` is a hint only. It is not final authorization and does not imply adapter policy satisfaction. The Credential Adapter verifies the completed Action Package from scratch after the proposer re-submits it.
+`readyForSubmission` is a hint only. It is not final authorization and does not imply adapter policy satisfaction. The Credential Adapter verifies the completed replacement Action Package from scratch when the proposer submits it.
 
 `cancelled` is terminal. A cancelled action cannot transition to any other state.
 
@@ -537,15 +537,15 @@ The implementation MUST keep stored MPAS artifacts (Action Package, Approvals) u
 
 ---
 
-## 8. Ready-for-Resubmission Heuristic
+## 8. Ready-for-Submission Heuristic
 
-The local service determines `readyForResubmission` using a simple non-authoritative threshold count:
+The local service determines `readyForSubmission` using a simple non-authoritative threshold count:
 
 1. Read threshold requirements from `authorizationRequirements.approvalRequirements.anyOf` and `allOf`.
 2. Decode each stored Approval payload enough to find `signerDid` and `decision`.
 3. Count unique signer DIDs whose Approval decision matches the requirement decision, defaulting to `approve`.
 4. Count only signers listed in `eligibleSigners` when that list is present.
-5. Mark the action `readyForResubmission` when any `anyOf` threshold is met and all `allOf` thresholds are met.
+5. Mark the action `readyForSubmission` when any `anyOf` threshold is met and all `allOf` thresholds are met.
 
 This heuristic does not replace adapter verification. It may be conservative or optimistic; the adapter remains authoritative.
 

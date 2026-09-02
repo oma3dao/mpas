@@ -1,8 +1,10 @@
+import { randomUUID } from "node:crypto";
 import type {
   ActionId,
   ActionPackage,
   ActionRequest,
   ActionResponse,
+  AdditionalApprovalsAuthorizationRequirements,
   AuthorizationRequirements,
   CoordinationActionResponse,
   CoordinationActionUpdate,
@@ -11,6 +13,7 @@ import type {
   Did,
 } from "../types/mpas.js";
 import { CoordinationResponseError, MpasAuthError } from "./coordination-client.js";
+import { computeJsonHash } from "../utils/hash.js";
 import {
   TERMINAL_WORKFLOW_STATES,
   type CreateWorkflowInput,
@@ -22,13 +25,14 @@ import {
  * Proposer-bridge workflow engine (feature spec §6 bridge track).
  *
  * Owns the bridge track: initial submission, coordination handoff, completed
- * package resubmission, terminal storage, startup reconciliation, and expiry.
+ * replacement-Action construction and submission, terminal storage, startup
+ * reconciliation, and expiry.
  * The client track observes through {@link waitForResult}, which never
  * advances a workflow (client profile §6.4, §7.1).
  *
  * Result recovery is best effort (feature spec §11). Dispatch stays
  * at-most-once via the Verifier ledger; when a crash window loses the terminal
- * response, the identical resubmission is rejected as a replay and the engine
+ * response, the identical retry is rejected as a replay and the engine
  * marks the workflow `unresolvable` rather than fabricating an outcome.
  */
 
@@ -59,6 +63,16 @@ export interface WorkflowCoordinationService {
   cancelAction(input: { actionId: ActionId }): Promise<CoordinationCancelResponse>;
 }
 
+export interface CoordinationReplacement {
+  actionPackage: ActionPackage;
+  authorizationRequirements: AdditionalApprovalsAuthorizationRequirements;
+}
+
+export type BuildCoordinationReplacement = (
+  priorPackage: ActionPackage,
+  verifierRequirements: AdditionalApprovalsAuthorizationRequirements,
+) => Promise<CoordinationReplacement>;
+
 export interface BridgeWorkflowEngineOptions {
   store: WorkflowStore;
   /**
@@ -74,13 +88,30 @@ export interface BridgeWorkflowEngineOptions {
   adapter?: WorkflowAdapter;
   /** @deprecated Use {@link coordinationService}. */
   coordination?: WorkflowCoordination;
+  /** Constructs A2 (or a later replacement) after Verifier policy feedback. */
+  buildCoordinationReplacement: BuildCoordinationReplacement;
   proposerDid: Did;
   /** Distinguishes workers contending for the same store. */
   workerId?: string;
-  /** Worker claim lease. Default 60s. */
+  /**
+   * Maximum wait of one claimed Action or Coordination submit. Must match the
+   * Action endpoint (and Coordination) client timeout. The HTTP profile does
+   * not fix relay wait duration. Default {@link DEFAULT_SUBMISSION_TIMEOUT_MS}.
+   */
+  submissionTimeoutMs?: number;
+  /**
+   * Worker claim lease. Must exceed {@link submissionTimeoutMs} so a
+   * cross-process peer cannot take the workflow mid-submit. Default
+   * {@link DEFAULT_CLAIM_LEASE_MS}.
+   */
   claimLeaseMs?: number;
   now?: () => number;
 }
+
+/** Default Action/Coordination HTTP wait. Keep aligned with ActionEndpointClient. */
+export const DEFAULT_SUBMISSION_TIMEOUT_MS = 30_000;
+/** Default worker claim lease. Must exceed {@link DEFAULT_SUBMISSION_TIMEOUT_MS}. */
+export const DEFAULT_CLAIM_LEASE_MS = 60_000;
 
 export type ProposeResult =
   | { kind: "settled"; record: WorkflowRecord; actionResponse: ActionResponse }
@@ -89,17 +120,26 @@ export type ProposeResult =
 /** Ledger rejection codes that mean "already dispatched; outcome not retrievable". */
 const REPLAY_CODES = new Set(["REPLAY_DETECTED", "ACTION_ID_HASH_MISMATCH"]);
 
-const NONTERMINAL_RESULTS = new Set<ActionResponse["result"]>(["additionalApprovalsRequired", "pending"]);
-
 export class BridgeWorkflowEngine {
   private readonly store: WorkflowStore;
   private readonly actionEndpoint: WorkflowActionEndpoint;
   private readonly coordinationService: WorkflowCoordinationService;
+  private readonly buildCoordinationReplacement: BuildCoordinationReplacement;
   private readonly proposerDid: Did;
   private readonly workerId: string;
   private readonly claimLeaseMs: number;
   private readonly now: () => number;
   private readonly waiters = new Map<string, Set<(record: WorkflowRecord) => void>>();
+  /**
+   * Per-Task outbound lanes. Each Task ID serializes that Task's initial,
+   * replacement, Coordination, and completed submissions so the request
+   * handler and poller cannot double-submit. Distinct Task IDs run
+   * concurrently. The durable store claim extends ownership across
+   * processes; it does not serialize same-process submitters. The claim
+   * lease must exceed the submission timeout so that ownership cannot
+   * expire mid-submit.
+   */
+  private readonly outboundTails = new Map<string, Promise<void>>();
 
   constructor(options: BridgeWorkflowEngineOptions) {
     this.store = options.store;
@@ -126,9 +166,16 @@ export class BridgeWorkflowEngine {
     } else {
       throw new Error("BridgeWorkflowEngine requires coordinationService.");
     }
+    this.buildCoordinationReplacement = options.buildCoordinationReplacement;
     this.proposerDid = options.proposerDid;
     this.workerId = options.workerId ?? `worker-${process.pid}`;
-    this.claimLeaseMs = options.claimLeaseMs ?? 60_000;
+    const submissionTimeoutMs = options.submissionTimeoutMs ?? DEFAULT_SUBMISSION_TIMEOUT_MS;
+    this.claimLeaseMs = options.claimLeaseMs ?? DEFAULT_CLAIM_LEASE_MS;
+    if (!(this.claimLeaseMs > submissionTimeoutMs)) {
+      throw new Error(
+        `claimLeaseMs (${this.claimLeaseMs}) must exceed submissionTimeoutMs (${submissionTimeoutMs}).`,
+      );
+    }
     this.now = options.now ?? (() => Date.now());
   }
 
@@ -138,33 +185,53 @@ export class BridgeWorkflowEngine {
    * deferred result can be returned even when the adapter is unreachable.
    */
   async propose(input: CreateWorkflowInput): Promise<ProposeResult> {
+    if (input.taskId === input.actionId) {
+      throw new Error("Task ID and Action ID must be distinct.");
+    }
     const record = this.store.createWorkflow(input);
-    return this.submitInitial(record);
+    return this.dispatchOutbound(record.taskId, async () => {
+      const current = this.mustGet(record.taskId);
+      if (current.state !== "created") {
+        return this.resultFromRecord(current);
+      }
+      if (!this.store.claimWorkflow(current.taskId, this.workerId, this.claimLeaseMs)) {
+        return { kind: "deferred", record: this.mustGet(current.taskId) };
+      }
+      return this.submitInitial(this.mustGet(current.taskId));
+    });
   }
 
   /**
    * One background tick: expiry sweep, coordination poll, and advancement of
-   * every workflow this worker can claim.
+   * every workflow this worker can claim. Expiry and Coordination updates
+   * join each Task's outbound lane so they cannot terminate a submit that
+   * is still in flight.
    */
   async pollOnce(): Promise<void> {
-    this.sweepExpired();
+    const expiry = this.sweepExpired();
 
-    try {
-      const poll = await this.coordinationService.pollWork();
-      for (const update of poll.actionUpdates) {
-        await this.applyUpdate(update);
+    const hasCoordinationWork = this.store
+      .listRecoverableWorkflows()
+      .some((record) => record.state === "awaitingApprovals");
+    if (hasCoordinationWork) {
+      try {
+        const poll = await this.coordinationService.pollWork();
+        for (const update of poll.actionUpdates) {
+          await this.applyUpdate(update);
+        }
+      } catch {
+        // Coordination updates are one input to the engine. Independent
+        // Action retries must still run when this input is unavailable.
       }
-    } catch {
-      // Coordination updates are one input to the engine. Independent
-      // adapter retries must still run when this input is unavailable.
     }
 
     await this.advanceClaimable();
+    await expiry;
   }
 
   /** Cooperatively cancel a visible workflow without advancing it. */
-  async cancel(actionId: string): Promise<WorkflowRecord | undefined> {
-    const record = this.store.getWorkflow(actionId);
+  async cancel(taskId: string): Promise<WorkflowRecord | undefined> {
+    const record = this.store.getWorkflow(taskId);
     if (!record || proposerDidOf(record) !== this.proposerDid) {
       return undefined;
     }
@@ -173,15 +240,15 @@ export class BridgeWorkflowEngine {
     }
 
     const coordinationStarted = record.coordinationRef !== undefined;
-    if (!this.store.cancelWorkflow(actionId)) {
-      return this.store.getWorkflow(actionId);
+    if (!this.store.cancelWorkflow(taskId)) {
+      return this.store.getWorkflow(taskId);
     }
 
-    const cancelled = this.mustGet(actionId);
+    const cancelled = this.mustGet(taskId);
     this.notify(cancelled);
     if (coordinationStarted) {
       try {
-        await this.coordinationService.cancelAction({ actionId: { value: actionId } });
+        await this.coordinationService.cancelAction({ actionId: { value: record.actionId } });
       } catch {
         // Cancellation is cooperative. The durable local terminal write is
         // authoritative for future bridge work; Coordination is best effort.
@@ -192,32 +259,8 @@ export class BridgeWorkflowEngine {
 
   /** Startup reconciliation (feature spec §9.4). Idempotent. */
   async reconcile(): Promise<void> {
-    this.sweepExpired();
-
-    for (const record of this.store.listRecoverableWorkflows()) {
-      if (!this.store.claimWorkflow(record.actionId, this.workerId, this.claimLeaseMs)) {
-        continue;
-      }
-      switch (record.state) {
-        case "created":
-          await this.submitInitial(record);
-          break;
-        case "submittingToVerifier":
-          // Crash mid-submission: the identical package may or may not have
-          // been transmitted. Resubmit identically; the ledger dedups.
-          this.store.compareAndSetState(record.actionId, "submittingToVerifier", "readyForResubmission");
-          await this.submitCompleted(this.mustGet(record.actionId));
-          break;
-        case "readyForResubmission":
-          await this.submitCompleted(record);
-          break;
-        case "awaitingVerifierResult":
-          await this.submitCompleted(record);
-          break;
-        case "awaitingApprovals":
-          break; // pollOnce advances these when coordination reports progress.
-      }
-    }
+    await this.sweepExpired();
+    await this.advanceClaimable();
   }
 
   /**
@@ -225,19 +268,19 @@ export class BridgeWorkflowEngine {
    * timeout elapses; returns the current record either way, or undefined for
    * an unknown action. Never advances the workflow.
    */
-  async waitForResult(actionId: string, timeoutMs: number): Promise<WorkflowRecord | undefined> {
-    const record = this.store.getWorkflow(actionId);
+  async waitForResult(taskId: string, timeoutMs: number): Promise<WorkflowRecord | undefined> {
+    const record = this.store.getWorkflow(taskId);
     if (!record || isTerminal(record) || timeoutMs <= 0) {
       return record;
     }
 
     return new Promise<WorkflowRecord>((resolve) => {
-      const waiters = this.waiters.get(actionId) ?? new Set();
-      this.waiters.set(actionId, waiters);
+      const waiters = this.waiters.get(taskId) ?? new Set();
+      this.waiters.set(taskId, waiters);
 
       const timer = setTimeout(() => {
         waiters.delete(wake);
-        resolve(this.mustGet(actionId));
+        resolve(this.mustGet(taskId));
       }, timeoutMs);
 
       const wake = (terminal: WorkflowRecord): void => {
@@ -250,245 +293,403 @@ export class BridgeWorkflowEngine {
   }
 
   private async submitInitial(record: WorkflowRecord): Promise<ProposeResult> {
-    const current = this.store.getWorkflow(record.actionId);
-    if (!current || isTerminal(current)) {
-      return { kind: "deferred", record: current ?? record };
+    const current = this.store.getWorkflow(record.taskId);
+    if (!current || isTerminal(current) || current.state !== "created") {
+      return this.resultFromRecord(current ?? record);
     }
-
-    const priorResponse = asActionResponse(current.lastActionResponse);
-    if (priorResponse?.result === "additionalApprovalsRequired") {
-      return this.submitToCoordination(current, priorResponse.authorizationRequirements);
+    if (!this.holdClaim(current.taskId)) {
+      return this.resultFromRecord(this.mustGet(current.taskId));
     }
 
     let response: ActionResponse;
     try {
-      response = await this.actionEndpoint.submitActionRequest(actionRequestFor(record.actionPackage));
+      response = await this.actionEndpoint.submitActionRequest(actionRequestFor(record, record.actionPackage));
     } catch (error) {
-      this.store.saveAdapterAttempt(record.actionId, attempt("initial", "unreachable", error));
-      return { kind: "deferred", record: this.mustGet(record.actionId) };
+      this.store.saveAdapterAttempt(record.taskId, attempt("initial", "unreachable", error));
+      return { kind: "deferred", record: this.mustGet(record.taskId) };
     }
 
-    if (isTerminal(this.mustGet(record.actionId))) {
-      return { kind: "deferred", record: this.mustGet(record.actionId) };
+    if (isTerminal(this.mustGet(record.taskId))) {
+      return { kind: "deferred", record: this.mustGet(record.taskId) };
     }
 
     switch (response.result) {
       case "additionalApprovalsRequired": {
-        this.store.saveLastActionResponse(record.actionId, response);
-        if (response.authorizationRequirements !== undefined) {
-          this.store.saveAuthorizationRequirements(record.actionId, response.authorizationRequirements);
-        }
-        return this.submitToCoordination(this.mustGet(record.actionId), response.authorizationRequirements);
+        this.store.saveLastActionResponse(record.taskId, response);
+        return this.replaceAndSubmitToCoordination(this.mustGet(record.taskId), "created", response);
       }
       case "pending":
-        this.store.saveLastActionResponse(record.actionId, response);
-        this.store.compareAndSetState(record.actionId, "created", "awaitingVerifierResult");
-        return { kind: "deferred", record: this.mustGet(record.actionId) };
+        this.store.saveLastActionResponse(record.taskId, response);
+        this.store.compareAndSetState(record.taskId, "created", "awaitingVerifierResult");
+        return { kind: "deferred", record: this.mustGet(record.taskId) };
       default:
-        return this.settle(record.actionId, response);
+        return this.settle(record.taskId, response);
     }
   }
 
-  private async submitToCoordination(
+  private async replaceAndSubmitToCoordination(
     record: WorkflowRecord,
-    authorizationRequirements: AuthorizationRequirements | undefined,
+    fromState: "created" | "submittingToVerifier",
+    response: ActionResponse,
   ): Promise<ProposeResult> {
+    const verifierRequirements = response.authorizationRequirements;
+    if (verifierRequirements?.result !== "additionalApprovalsRequired") {
+      this.resolveUnresolvable(
+        record.taskId,
+        "INVALID_VERIFIER_RESPONSE",
+        "The Verifier requested additional Approvals without usable Authorization Requirements.",
+      );
+      return { kind: "deferred", record: this.mustGet(record.taskId) };
+    }
+
+    try {
+      const replacement = await this.buildCoordinationReplacement(
+        record.actionPackage as ActionPackage,
+        verifierRequirements,
+      );
+      const envelope = replacement.actionPackage.actionEnvelope;
+      const actionEnvelopeHash = computeJsonHash(envelope);
+      if (envelope.actionId.value === record.actionId) {
+        throw new Error("A replacement Action must use a new Action ID.");
+      }
+      if (envelope.actionId.value === record.taskId) {
+        throw new Error("Task ID and Action ID must be distinct.");
+      }
+      if (!sameHash(replacement.actionPackage.approvalBundle.actionEnvelopeHash, actionEnvelopeHash)) {
+        throw new Error("The replacement Approval Bundle does not bind to its Action Envelope.");
+      }
+      if (!sameHash(replacement.authorizationRequirements.actionEnvelopeHash, actionEnvelopeHash)) {
+        throw new Error("The replacement Authorization Requirements do not bind to the replacement Action Envelope.");
+      }
+      if (replacement.authorizationRequirements.verifier.did !== verifierRequirements.verifier.did) {
+        throw new Error("The replacement Authorization Requirements changed the intended Verifier.");
+      }
+      this.store.replaceAction(record.taskId, {
+        fromState,
+        actionId: envelope.actionId.value,
+        actionIdempotencyKey: randomUUID(),
+        actionEnvelopeHash: actionEnvelopeHash.value,
+        actionPackage: replacement.actionPackage,
+        authorizationRequirements: replacement.authorizationRequirements,
+        expiresAt: envelope.expiresAt,
+      });
+    } catch (error) {
+      const current = this.store.getWorkflow(record.taskId);
+      if (current !== undefined && isTerminal(current)) {
+        return { kind: "deferred", record: this.mustGet(record.taskId) };
+      }
+      this.resolveUnresolvable(
+        record.taskId,
+        "ACTION_REPLACEMENT_FAILED",
+        error instanceof Error ? error.message : "Could not construct the replacement Action.",
+      );
+      return { kind: "deferred", record: this.mustGet(record.taskId) };
+    }
+
+    return this.submitToCoordination(this.mustGet(record.taskId));
+  }
+
+  private async submitToCoordination(record: WorkflowRecord): Promise<ProposeResult> {
+    if (!this.holdClaim(record.taskId)) {
+      return this.resultFromRecord(this.mustGet(record.taskId));
+    }
     try {
       const coordination = await this.coordinationService.createApprovalWorkflow({
         actionPackage: record.actionPackage as ActionPackage,
-        authorizationRequirements,
+        authorizationRequirements: record.authorizationRequirements as AuthorizationRequirements,
       });
-      this.store.saveCoordinationReference(record.actionId, coordination.actionRef);
-      if (this.mustGet(record.actionId).state === "cancelled") {
+      this.store.saveCoordinationReference(record.taskId, coordination.actionRef);
+      if (this.mustGet(record.taskId).state === "cancelled") {
         try {
           await this.coordinationService.cancelAction({ actionId: { value: record.actionId } });
         } catch {
           // Cancellation won while Coordination submission was in flight.
           // The local terminal state still prevents any later execution.
         }
-        return { kind: "deferred", record: this.mustGet(record.actionId) };
+        return { kind: "deferred", record: this.mustGet(record.taskId) };
       }
-      this.store.compareAndSetState(record.actionId, "created", "awaitingApprovals");
+      this.store.compareAndSetState(record.taskId, "submittingToCoordination", "awaitingApprovals");
     } catch (error) {
       const permanent = permanentCoordinationFailure(error);
       this.store.saveAdapterAttempt(
-        record.actionId,
+        record.taskId,
         attempt("coordination", permanent ? "rejected" : "unreachable", error),
       );
       if (permanent) {
         const resolution = coordinationFailureResolution(error);
-        this.resolveUnresolvable(record.actionId, resolution.errorCode, resolution.errorMessage);
+        this.resolveUnresolvable(record.taskId, resolution.errorCode, resolution.errorMessage);
       }
     }
-    return { kind: "deferred", record: this.mustGet(record.actionId) };
+    return { kind: "deferred", record: this.mustGet(record.taskId) };
   }
 
   private async applyUpdate(update: CoordinationActionUpdate): Promise<void> {
     const actionId = update.actionRef.actionId.value;
-    const record = this.store.getWorkflow(actionId);
+    const record = this.store.getWorkflowByActionId(actionId);
     if (!record || isTerminal(record)) {
       return;
     }
 
-    switch (update.state) {
-      case "readyForResubmission":
-        if (update.actionPackage !== undefined) {
-          this.store.saveCompletedPackage(actionId, update.actionPackage);
-          this.store.compareAndSetState(actionId, "awaitingApprovals", "readyForResubmission");
-        }
-        break;
-      case "expired":
-        this.resolveUnresolvable(actionId, "ACTION_EXPIRED_BEFORE_RESOLUTION", "The Action expired before Approvals completed.");
-        break;
-      case "rejected":
-        this.resolveUnresolvable(
-          actionId,
-          "COORDINATION_REJECTED",
-          "The coordination workflow was rejected before completion.",
-        );
-        break;
-      case "executed":
-        this.resolveUnresolvable(
-          actionId,
-          "RESULT_UNAVAILABLE",
-          "Coordination reports execution, but the authoritative Verifier result is unavailable.",
-        );
-        break;
-      case "cancelled":
-        if (this.store.cancelWorkflow(actionId)) {
-          this.notify(this.mustGet(actionId));
-        }
-        break;
-      case "awaitingApprovals":
-        break;
-    }
+    await this.dispatchOutbound(record.taskId, async () => {
+      const current = this.store.getWorkflow(record.taskId);
+      if (!current || isTerminal(current)) {
+        return;
+      }
+
+      switch (update.state) {
+        case "readyForSubmission":
+          if (update.actionPackage !== undefined) {
+            this.store.saveCompletedPackage(current.taskId, update.actionPackage);
+            this.store.compareAndSetState(current.taskId, "awaitingApprovals", "readyForSubmission");
+          }
+          break;
+        case "expired":
+          this.resolveUnresolvable(current.taskId, "ACTION_EXPIRED_BEFORE_RESOLUTION", "The Action expired before Approvals completed.");
+          break;
+        case "rejected":
+          this.resolveUnresolvable(
+            current.taskId,
+            "COORDINATION_REJECTED",
+            "The coordination workflow was rejected before completion.",
+          );
+          break;
+        case "executed":
+          this.resolveUnresolvable(
+            current.taskId,
+            "RESULT_UNAVAILABLE",
+            "Coordination reports execution, but the authoritative Verifier result is unavailable.",
+          );
+          break;
+        case "cancelled":
+          if (this.store.cancelWorkflow(current.taskId)) {
+            this.notify(this.mustGet(current.taskId));
+          }
+          break;
+        case "awaitingApprovals":
+          break;
+      }
+    });
   }
 
   private async advanceClaimable(): Promise<void> {
-    for (const record of this.store.listRecoverableWorkflows()) {
-      if (
-        record.state !== "created" &&
-        record.state !== "readyForResubmission" &&
-        record.state !== "awaitingVerifierResult"
-      ) {
-        continue;
-      }
-      if (!this.store.claimWorkflow(record.actionId, this.workerId, this.claimLeaseMs)) {
-        continue;
-      }
-      if (record.state === "created") {
-        await this.submitInitial(record);
-      } else {
-        await this.submitCompleted(record);
-      }
-    }
+    await Promise.all(
+      this.store
+        .listRecoverableWorkflows()
+        .filter((record) => record.state !== "awaitingApprovals")
+        .map((record) => this.dispatchClaimable(record)),
+    );
   }
 
   /**
-   * Submit (or identically resubmit) the completed Action Package. The ledger
+   * Enqueue one recoverable row on its Task lane. Claim and submit happen
+   * only after joining that lane, so a concurrent `propose` for the same
+   * Task cannot double-submit, and other Tasks are not blocked.
+   */
+  private async dispatchClaimable(record: WorkflowRecord): Promise<void> {
+    await this.dispatchOutbound(record.taskId, async () => {
+      const current = this.store.getWorkflow(record.taskId);
+      if (!current || isTerminal(current)) {
+        return;
+      }
+      switch (current.state) {
+        case "created":
+        case "submittingToCoordination":
+        case "readyForSubmission":
+        case "submittingToVerifier":
+        case "awaitingVerifierResult":
+          break;
+        default:
+          return;
+      }
+      if (!this.store.claimWorkflow(current.taskId, this.workerId, this.claimLeaseMs)) {
+        return;
+      }
+      const claimed = this.mustGet(current.taskId);
+      switch (claimed.state) {
+        case "created":
+          await this.submitInitial(claimed);
+          break;
+        case "submittingToCoordination":
+          await this.submitToCoordination(claimed);
+          break;
+        case "readyForSubmission":
+        case "submittingToVerifier":
+        case "awaitingVerifierResult":
+          await this.submitCompleted(claimed);
+          break;
+      }
+    });
+  }
+
+  private resultFromRecord(record: WorkflowRecord): ProposeResult {
+    if (record.state === "resolved") {
+      const resolution = record.resolution;
+      if (resolution?.kind === "resolved") {
+        const actionResponse = asActionResponse(resolution.actionResponse);
+        if (actionResponse !== undefined) {
+          return { kind: "settled", record, actionResponse };
+        }
+      }
+    }
+    return { kind: "deferred", record };
+  }
+
+  /**
+   * Submit (or identically retry) the completed Action Package. The ledger
    * guarantees at most one dispatch; a replay rejection here means the outcome
    * was produced but lost, which resolves as `unresolvable`, never as the
    * Action's outcome.
    */
   private async submitCompleted(record: WorkflowRecord): Promise<void> {
+    if (!this.holdClaim(record.taskId)) {
+      return;
+    }
     const pkg = record.completedPackage ?? record.actionPackage;
-    if (record.state === "readyForResubmission") {
-      if (!this.store.compareAndSetState(record.actionId, "readyForResubmission", "submittingToVerifier")) {
+    if (record.state === "readyForSubmission") {
+      if (!this.store.compareAndSetState(record.taskId, "readyForSubmission", "submittingToVerifier")) {
         return;
       }
     }
 
     let response: ActionResponse;
     try {
-      response = await this.actionEndpoint.submitActionRequest(actionRequestFor(pkg));
+      response = await this.actionEndpoint.submitActionRequest(actionRequestFor(record, pkg));
     } catch (error) {
-      this.store.saveAdapterAttempt(record.actionId, attempt("completed", "unreachable", error));
-      this.store.compareAndSetState(record.actionId, "submittingToVerifier", "readyForResubmission");
+      this.store.saveAdapterAttempt(record.taskId, attempt("completed", "unreachable", error));
+      this.store.compareAndSetState(record.taskId, "submittingToVerifier", "readyForSubmission");
       return;
     }
 
-    if (isTerminal(this.mustGet(record.actionId))) {
+    if (isTerminal(this.mustGet(record.taskId))) {
       return;
     }
 
     if (response.result === "pending") {
-      this.store.saveLastActionResponse(record.actionId, response);
-      this.store.compareAndSetState(record.actionId, "submittingToVerifier", "awaitingVerifierResult");
+      this.store.saveLastActionResponse(record.taskId, response);
+      this.store.compareAndSetState(record.taskId, "submittingToVerifier", "awaitingVerifierResult");
       return;
     }
 
     if (response.result === "rejected" && REPLAY_CODES.has(response.error?.code ?? "")) {
       this.resolveUnresolvable(
-        record.actionId,
+        record.taskId,
         "RESULT_UNAVAILABLE",
         "The Action was already dispatched and its result is not retrievable from the Verifier.",
       );
       return;
     }
 
-    if (NONTERMINAL_RESULTS.has(response.result)) {
-      // additionalApprovalsRequired on a completed package: policy changed or
-      // approvals no longer satisfy it. Send it back through coordination on a
-      // later tick rather than guessing here.
-      this.store.saveLastActionResponse(record.actionId, response);
-      this.store.compareAndSetState(record.actionId, "submittingToVerifier", "awaitingApprovals");
+    if (response.result === "additionalApprovalsRequired") {
+      this.store.saveLastActionResponse(record.taskId, response);
+      await this.replaceAndSubmitToCoordination(
+        this.mustGet(record.taskId),
+        "submittingToVerifier",
+        response,
+      );
       return;
     }
 
-    this.settle(record.actionId, response);
+    this.settle(record.taskId, response);
   }
 
-  private settle(actionId: string, response: ActionResponse): ProposeResult {
-    this.store.resolveWorkflow(actionId, {
+  private settle(taskId: string, response: ActionResponse): ProposeResult {
+    this.store.resolveWorkflow(taskId, {
       kind: "resolved",
       actionResponse: response,
       ...(response.executionReceipt !== undefined ? { executionReceipt: response.executionReceipt } : {}),
     });
-    const record = this.mustGet(actionId);
+    const record = this.mustGet(taskId);
     this.notify(record);
     return { kind: "settled", record, actionResponse: response };
   }
 
-  private resolveUnresolvable(actionId: string, errorCode: string, errorMessage: string): void {
-    this.store.resolveWorkflow(actionId, { kind: "unresolvable", errorCode, errorMessage });
-    this.notify(this.mustGet(actionId));
+  private resolveUnresolvable(taskId: string, errorCode: string, errorMessage: string): void {
+    this.store.resolveWorkflow(taskId, { kind: "unresolvable", errorCode, errorMessage });
+    this.notify(this.mustGet(taskId));
   }
 
-  private sweepExpired(): void {
+  /**
+   * Expire overdue workflows on each Task's outbound lane. Same-worker claims
+   * can be renewed, so a claim alone does not exclude in-process expiry from
+   * an in-flight submit; joining the lane does.
+   */
+  private async sweepExpired(): Promise<void> {
     const nowMs = this.now();
-    for (const record of this.store.listRecoverableWorkflows()) {
-      if (Date.parse(record.expiresAt) < nowMs) {
-        if (this.store.claimWorkflow(record.actionId, this.workerId, this.claimLeaseMs)) {
-          this.resolveUnresolvable(
-            record.actionId,
-            "ACTION_EXPIRED_BEFORE_RESOLUTION",
-            "The Action Envelope expired without a terminal Verifier response.",
-          );
+    await Promise.all(
+      this.store.listRecoverableWorkflows().map((record) => {
+        if (Date.parse(record.expiresAt) >= nowMs) {
+          return Promise.resolve();
         }
-      }
-    }
+        return this.dispatchOutbound(record.taskId, async () => {
+          const current = this.store.getWorkflow(record.taskId);
+          if (!current || isTerminal(current)) {
+            return;
+          }
+          if (Date.parse(current.expiresAt) >= this.now()) {
+            return;
+          }
+          if (this.store.claimWorkflow(current.taskId, this.workerId, this.claimLeaseMs)) {
+            this.resolveUnresolvable(
+              current.taskId,
+              "ACTION_EXPIRED_BEFORE_RESOLUTION",
+              "The Action Envelope expired without a terminal Verifier response.",
+            );
+          }
+        });
+      }),
+    );
   }
 
   private notify(record: WorkflowRecord): void {
     if (!isTerminal(record)) {
       return;
     }
-    const waiters = this.waiters.get(record.actionId);
+    const waiters = this.waiters.get(record.taskId);
     if (!waiters) {
       return;
     }
-    this.waiters.delete(record.actionId);
+    this.waiters.delete(record.taskId);
     for (const wake of waiters) {
       wake(record);
     }
   }
 
-  private mustGet(actionId: string): WorkflowRecord {
-    const record = this.store.getWorkflow(actionId);
+  private mustGet(taskId: string): WorkflowRecord {
+    const record = this.store.getWorkflow(taskId);
     if (!record) {
-      throw new Error(`Workflow not found for action ${actionId}.`);
+      throw new Error(`Workflow not found for task ${taskId}.`);
     }
     return record;
+  }
+
+  /**
+   * Refresh this worker's claim immediately before an outbound wait. Same-worker
+   * renew is required so an Action submit followed by a Coordination submit
+   * does not stack two HTTP waits against one lease.
+   */
+  private holdClaim(taskId: string): boolean {
+    return this.store.claimWorkflow(taskId, this.workerId, this.claimLeaseMs);
+  }
+
+  /**
+   * Enqueue outbound work on one Task's lane and run it as soon as that
+   * lane is free. Rejections do not poison the lane; the map entry is
+   * dropped when this tail is still current so idle Tasks do not leak.
+   */
+  private dispatchOutbound<T>(taskId: string, operation: () => Promise<T>): Promise<T> {
+    const previous = this.outboundTails.get(taskId) ?? Promise.resolve();
+    const dispatched = previous.then(operation, operation);
+    const tail = dispatched.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.outboundTails.set(taskId, tail);
+    void tail.then(() => {
+      if (this.outboundTails.get(taskId) === tail) {
+        this.outboundTails.delete(taskId);
+      }
+    });
+    return dispatched;
   }
 }
 
@@ -533,12 +734,17 @@ function coordinationFailureResolution(error: unknown): { errorCode: string; err
   };
 }
 
-function actionRequestFor(actionPackage: unknown): ActionRequest {
+function actionRequestFor(record: WorkflowRecord, actionPackage: unknown): ActionRequest {
   return {
     version: "1",
     type: "ActionRequest",
+    idempotencyKey: record.actionIdempotencyKey,
     actionPackage: actionPackage as ActionPackage,
   };
+}
+
+function sameHash(left: { alg: string; value: string }, right: { alg: string; value: string }): boolean {
+  return left.alg === right.alg && left.value === right.value;
 }
 
 function attempt(stage: string, outcome: string, error: unknown): unknown {

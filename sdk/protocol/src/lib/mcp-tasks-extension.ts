@@ -7,6 +7,7 @@
  * package is published. See docs/features/mcp-tasks/plan.md Appendix A.
  */
 import { z } from "zod";
+import type { ToolCallResult } from "../types/mcp.js";
 
 export const MCP_TASKS_EXTENSION_ID = "io.modelcontextprotocol/tasks";
 export const MPAS_MCP_PROFILE_EXTENSION_ID = "org.oma3/mpas";
@@ -53,6 +54,9 @@ export interface CancelledTask extends Task {
 export type DetailedTask = WorkingTask | InputRequiredTask | CompletedTask | FailedTask | CancelledTask;
 
 export type CreateTaskResult = Task & { resultType: "task" };
+/** A tools/call that completed during the bridge's synchronous fast path. */
+export type CompleteToolCallResult = ToolCallResult & { resultType: "complete" };
+export type TasksToolCallResult = CreateTaskResult | CompleteToolCallResult;
 export type GetTaskResult = DetailedTask & { resultType: "complete" };
 export type UpdateTaskResult = { resultType: "complete"; _meta?: Record<string, unknown> };
 export type CancelTaskResult = { resultType: "complete"; _meta?: Record<string, unknown> };

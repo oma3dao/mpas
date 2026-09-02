@@ -4,6 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import type {
   BridgeWorkflowState,
   CreateWorkflowInput,
+  ReplaceWorkflowActionInput,
   WorkflowRecord,
   WorkflowResolution,
   WorkflowStore,
@@ -22,7 +23,7 @@ import type {
  * - no credentials or adapter secrets stored.
  */
 
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 3;
 
 const TERMINAL_STATES: ReadonlySet<BridgeWorkflowState> = new Set(["resolved", "unresolvable", "cancelled"]);
 
@@ -46,43 +47,114 @@ export class SqliteWorkflowStore implements WorkflowStore {
   }
 
   createWorkflow(input: CreateWorkflowInput): WorkflowRecord {
+    if (input.taskId === input.actionId) {
+      throw new Error("Task ID and Action ID must be distinct.");
+    }
     const at = this.timestamp();
     try {
+      this.db.exec("BEGIN IMMEDIATE");
       this.db
         .prepare(
           `INSERT INTO workflows (
-             action_id, envelope_hash, tool_name, state, action_package,
+             action_id, current_action_id, action_idempotency_key, envelope_hash, tool_name, state, action_package,
              adapter_attempts, expires_at, created_at, updated_at
-           ) VALUES (?, ?, ?, 'created', ?, '[]', ?, ?, ?)`,
+           ) VALUES (?, ?, ?, ?, ?, 'created', ?, '[]', ?, ?, ?)`,
         )
-        .run(input.actionId, input.actionEnvelopeHash, input.toolName, toJson(input.actionPackage), input.expiresAt, at, at);
+        .run(
+          input.taskId,
+          input.actionId,
+          input.actionIdempotencyKey,
+          input.actionEnvelopeHash,
+          input.toolName,
+          toJson(input.actionPackage),
+          input.expiresAt,
+          at,
+          at,
+        );
+      this.db
+        .prepare("INSERT INTO workflow_action_aliases (action_id, task_id) VALUES (?, ?)")
+        .run(input.actionId, input.taskId);
+      this.db.exec("COMMIT");
     } catch (error) {
+      rollback(this.db);
       if (isUniqueViolation(error)) {
-        throw new Error(`Workflow already exists for action ${input.actionId}.`);
+        throw new Error(`Workflow already exists for task ${input.taskId} or action ${input.actionId}.`);
       }
       throw error;
     }
-    return this.mustGet(input.actionId);
+    return this.mustGet(input.taskId);
   }
 
-  getWorkflow(actionId: string): WorkflowRecord | undefined {
-    const row = this.db.prepare("SELECT * FROM workflows WHERE action_id = ?").get(actionId) as
+  getWorkflow(taskId: string): WorkflowRecord | undefined {
+    const row = this.db.prepare("SELECT * FROM workflows WHERE action_id = ?").get(taskId) as
       | Record<string, unknown>
       | undefined;
     return row ? rowToRecord(row) : undefined;
   }
 
-  compareAndSetState(actionId: string, from: BridgeWorkflowState, to: BridgeWorkflowState): boolean {
+  getWorkflowByActionId(actionId: string): WorkflowRecord | undefined {
+    const row = this.db
+      .prepare(
+        `SELECT workflows.*
+           FROM workflow_action_aliases
+           JOIN workflows ON workflows.action_id = workflow_action_aliases.task_id
+          WHERE workflow_action_aliases.action_id = ?`,
+      )
+      .get(actionId) as Record<string, unknown> | undefined;
+    return row ? rowToRecord(row) : undefined;
+  }
+
+  replaceAction(taskId: string, input: ReplaceWorkflowActionInput): WorkflowRecord {
+    if (taskId === input.actionId) {
+      throw new Error("Task ID and Action ID must be distinct.");
+    }
+    try {
+      this.db.exec("BEGIN IMMEDIATE");
+      this.db
+        .prepare("INSERT INTO workflow_action_aliases (action_id, task_id) VALUES (?, ?)")
+        .run(input.actionId, taskId);
+      const result = this.db
+        .prepare(
+          `UPDATE workflows
+              SET current_action_id = ?, action_idempotency_key = ?, envelope_hash = ?, action_package = ?,
+                  authorization_requirements = ?, coordination_ref = NULL,
+                  completed_package = NULL, expires_at = ?,
+                  state = 'submittingToCoordination', updated_at = ?
+            WHERE action_id = ? AND state = ?`,
+        )
+        .run(
+          input.actionId,
+          input.actionIdempotencyKey,
+          input.actionEnvelopeHash,
+          toJson(input.actionPackage),
+          toJson(input.authorizationRequirements),
+          input.expiresAt,
+          this.timestamp(),
+          taskId,
+          input.fromState,
+        );
+      if (result.changes !== 1) {
+        throw new Error(`Workflow ${taskId} is not in replacement state ${input.fromState}.`);
+      }
+      this.db.exec("COMMIT");
+    } catch (error) {
+      rollback(this.db);
+      throw error;
+    }
+    return this.mustGet(taskId);
+  }
+
+  compareAndSetState(taskId: string, from: BridgeWorkflowState, to: BridgeWorkflowState): boolean {
     if (TERMINAL_STATES.has(from) || TERMINAL_STATES.has(to)) {
       return false;
     }
     const result = this.db
       .prepare("UPDATE workflows SET state = ?, updated_at = ? WHERE action_id = ? AND state = ?")
-      .run(to, this.timestamp(), actionId, from);
+      .run(to, this.timestamp(), taskId, from);
     return result.changes === 1;
   }
 
-  claimWorkflow(actionId: string, workerId: string, leaseMs: number): boolean {
+  claimWorkflow(taskId: string, workerId: string, leaseMs: number): boolean {
     const nowMs = this.now();
     const result = this.db
       .prepare(
@@ -92,37 +164,37 @@ export class SqliteWorkflowStore implements WorkflowStore {
            AND state NOT IN ('resolved', 'unresolvable', 'cancelled')
            AND (claimed_by IS NULL OR claimed_by = ? OR claim_expires_ms <= ?)`,
       )
-      .run(workerId, nowMs + leaseMs, this.timestamp(), actionId, workerId, nowMs);
+      .run(workerId, nowMs + leaseMs, this.timestamp(), taskId, workerId, nowMs);
     return result.changes === 1;
   }
 
-  saveCoordinationReference(actionId: string, ref: unknown): void {
-    this.setColumn(actionId, "coordination_ref", toJson(ref));
+  saveCoordinationReference(taskId: string, ref: unknown): void {
+    this.setColumn(taskId, "coordination_ref", toJson(ref));
   }
 
-  saveCompletedPackage(actionId: string, completedPackage: unknown): void {
-    this.setColumn(actionId, "completed_package", toJson(completedPackage));
+  saveCompletedPackage(taskId: string, completedPackage: unknown): void {
+    this.setColumn(taskId, "completed_package", toJson(completedPackage));
   }
 
-  saveAuthorizationRequirements(actionId: string, requirements: unknown): void {
-    this.setColumn(actionId, "authorization_requirements", toJson(requirements));
+  saveAuthorizationRequirements(taskId: string, requirements: unknown): void {
+    this.setColumn(taskId, "authorization_requirements", toJson(requirements));
   }
 
-  saveLastActionResponse(actionId: string, response: unknown): void {
-    this.setColumn(actionId, "last_action_response", toJson(response));
+  saveLastActionResponse(taskId: string, response: unknown): void {
+    this.setColumn(taskId, "last_action_response", toJson(response));
   }
 
-  saveAdapterAttempt(actionId: string, attempt: unknown): void {
+  saveAdapterAttempt(taskId: string, attempt: unknown): void {
     this.db
       .prepare(
         `UPDATE workflows
            SET adapter_attempts = json_insert(adapter_attempts, '$[#]', json(?)), updated_at = ?
          WHERE action_id = ?`,
       )
-      .run(toJson(attempt), this.timestamp(), actionId);
+      .run(toJson(attempt), this.timestamp(), taskId);
   }
 
-  resolveWorkflow(actionId: string, resolution: WorkflowResolution): void {
+  resolveWorkflow(taskId: string, resolution: WorkflowResolution): void {
     const state: BridgeWorkflowState = resolution.kind;
     const at = this.timestamp();
     this.db
@@ -132,10 +204,10 @@ export class SqliteWorkflowStore implements WorkflowStore {
          WHERE action_id = ?
            AND state NOT IN ('resolved', 'unresolvable', 'cancelled')`,
       )
-      .run(state, toJson(resolution), at, at, actionId);
+      .run(state, toJson(resolution), at, at, taskId);
   }
 
-  cancelWorkflow(actionId: string): boolean {
+  cancelWorkflow(taskId: string): boolean {
     const at = this.timestamp();
     const resolution: WorkflowResolution = { kind: "cancelled", cancelledAt: at };
     const result = this.db
@@ -145,7 +217,7 @@ export class SqliteWorkflowStore implements WorkflowStore {
          WHERE action_id = ?
            AND state NOT IN ('resolved', 'unresolvable', 'cancelled')`,
       )
-      .run(toJson(resolution), at, at, actionId);
+      .run(toJson(resolution), at, at, taskId);
     return result.changes === 1;
   }
 
@@ -158,34 +230,35 @@ export class SqliteWorkflowStore implements WorkflowStore {
 
   purgeExpiredResults(retentionMs: number = 24 * 60 * 60 * 1000): number {
     const rows = this.db
-      .prepare("SELECT action_id, expires_at, resolved_at FROM workflows WHERE state IN ('resolved', 'unresolvable', 'cancelled')")
-      .all() as { action_id: string; expires_at: string; resolved_at: string }[];
+      .prepare("SELECT action_id AS task_id, expires_at, resolved_at FROM workflows WHERE state IN ('resolved', 'unresolvable', 'cancelled')")
+      .all() as { task_id: string; expires_at: string; resolved_at: string }[];
 
     const nowMs = this.now();
     let purged = 0;
     for (const row of rows) {
       const keepUntil = Math.max(Date.parse(row.expires_at), Date.parse(row.resolved_at) + retentionMs);
       if (nowMs > keepUntil) {
-        purged += this.db.prepare("DELETE FROM workflows WHERE action_id = ?").run(row.action_id).changes as number;
+        this.db.prepare("DELETE FROM workflow_action_aliases WHERE task_id = ?").run(row.task_id);
+        purged += this.db.prepare("DELETE FROM workflows WHERE action_id = ?").run(row.task_id).changes as number;
       }
     }
     return purged;
   }
 
   private setColumn(
-    actionId: string,
+    taskId: string,
     column: "coordination_ref" | "completed_package" | "authorization_requirements" | "last_action_response",
     json: string,
   ): void {
     this.db
       .prepare(`UPDATE workflows SET ${column} = ?, updated_at = ? WHERE action_id = ?`)
-      .run(json, this.timestamp(), actionId);
+      .run(json, this.timestamp(), taskId);
   }
 
-  private mustGet(actionId: string): WorkflowRecord {
-    const record = this.getWorkflow(actionId);
+  private mustGet(taskId: string): WorkflowRecord {
+    const record = this.getWorkflow(taskId);
     if (!record) {
-      throw new Error(`Workflow not found for action ${actionId}.`);
+      throw new Error(`Workflow not found for task ${taskId}.`);
     }
     return record;
   }
@@ -195,7 +268,7 @@ export class SqliteWorkflowStore implements WorkflowStore {
   }
 
   private migrate(): void {
-    const { user_version: version } = this.db.prepare("PRAGMA user_version").get() as { user_version: number };
+    let { user_version: version } = this.db.prepare("PRAGMA user_version").get() as { user_version: number };
     if (version > SCHEMA_VERSION) {
       this.db.close();
       throw new Error(
@@ -206,9 +279,46 @@ export class SqliteWorkflowStore implements WorkflowStore {
       return;
     }
 
+    // Legacy schemas (v1, v2) stored action_id as both the Task ID and
+    // Action ID, which is incompatible with the current model where they
+    // must be distinct. Synthesizing Task IDs for existing rows would
+    // create aliases that conflict with the new uniqueness constraints.
+    //
+    // This migration assumes no outstanding legacy workflows require
+    // preservation. If active workflows exist, the store refuses to start
+    // unless explicitly overridden via MPAS_ALLOW_LEGACY_WORKFLOW_RESET=1.
+    // Operators should cancel affected Coordination workflows first.
+    if (version >= 1 && version < SCHEMA_VERSION) {
+      const row = this.db.prepare("SELECT COUNT(*) AS cnt FROM workflows").get() as { cnt: number };
+      if (row.cnt > 0) {
+        // v1 has only action_id; v2 added current_action_id. Query the
+        // columns that exist in every legacy schema.
+        const active = this.db.prepare(
+          "SELECT action_id FROM workflows WHERE state NOT IN ('resolved', 'unresolvable', 'cancelled')",
+        ).all() as { action_id: string }[];
+        if (active.length > 0 && !process.env.MPAS_ALLOW_LEGACY_WORKFLOW_RESET) {
+          const ids = active.map((r) => r.action_id).join(", ");
+          this.db.close();
+          throw new Error(
+            `Legacy workflow store (schema v${version}) contains ${active.length} active workflow(s) that will be discarded: ${ids}. ` +
+            "Cancel them via the Coordination Service before upgrading, or set MPAS_ALLOW_LEGACY_WORKFLOW_RESET=1 to accept the loss.",
+          );
+        }
+      }
+      this.db.exec(`
+        BEGIN IMMEDIATE;
+        DROP TABLE IF EXISTS workflow_action_aliases;
+        DROP TABLE IF EXISTS workflows;
+        COMMIT;
+      `);
+      version = 0;
+    }
+
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS workflows (
         action_id                  TEXT PRIMARY KEY,
+        current_action_id          TEXT NOT NULL,
+        action_idempotency_key     TEXT NOT NULL,
         envelope_hash              TEXT NOT NULL,
         tool_name                  TEXT NOT NULL,
         state                      TEXT NOT NULL,
@@ -227,6 +337,13 @@ export class SqliteWorkflowStore implements WorkflowStore {
         resolution                 TEXT
       );
       CREATE INDEX IF NOT EXISTS idx_workflows_state ON workflows (state);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_workflows_current_action_id
+        ON workflows (current_action_id);
+      CREATE TABLE IF NOT EXISTS workflow_action_aliases (
+        action_id TEXT PRIMARY KEY,
+        task_id   TEXT NOT NULL REFERENCES workflows(action_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_workflow_action_aliases_task ON workflow_action_aliases (task_id);
     `);
     this.db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
   }
@@ -245,7 +362,9 @@ function fromJson(value: unknown): unknown {
 
 function rowToRecord(row: Record<string, unknown>): WorkflowRecord {
   const record: WorkflowRecord = {
-    actionId: String(row.action_id),
+    taskId: String(row.action_id),
+    actionId: String(row.current_action_id),
+    actionIdempotencyKey: String(row.action_idempotency_key),
     actionEnvelopeHash: String(row.envelope_hash),
     toolName: String(row.tool_name),
     state: String(row.state) as BridgeWorkflowState,
@@ -271,6 +390,14 @@ function rowToRecord(row: Record<string, unknown>): WorkflowRecord {
   if (resolution !== undefined) record.resolution = resolution as WorkflowResolution;
 
   return record;
+}
+
+function rollback(db: DatabaseSync): void {
+  try {
+    db.exec("ROLLBACK");
+  } catch {
+    // No active transaction.
+  }
 }
 
 function isUniqueViolation(error: unknown): boolean {

@@ -60,20 +60,24 @@ and cooperative cancellation without changing application tool schemas.
    restores them only on a separately negotiated compatibility surface over
    the same MPAS workflow.
 
-3. **Every accepted application call returns a task.** The bridge always
-   returns a flat `CreateTaskResult`, including when the MPAS workflow reaches
-   a terminal state during the original request. A client that does not
-   declare the required extensions receives a missing-capability error.
+3. **Fast-path calls look synchronous.** The bridge durably creates an internal
+   Task and Action before dispatch, but returns a normal complete MCP tool
+   result when A1 reaches a terminal outcome during the original request. It
+   returns a flat `CreateTaskResult` only when processing is deferred because
+   Approvals are required, the Verifier reports `pending`, or a retryable
+   failure prevents a terminal response. A client that does not declare the
+   required extensions receives a missing-capability error.
 
-4. **Task ID reuses Action ID.** `taskId` equals
-   `actionEnvelope.actionId.value`. MPAS creates Action IDs with
-   cryptographically random UUIDs, so they satisfy the Tasks uniqueness and
-   entropy requirements. Clients MUST use the `taskId` field for task
-   operations and MUST NOT rely on other MPAS fields as task handles.
+4. **Task ID is stable and distinct from Action IDs.** The bridge assigns a
+   cryptographically random `taskId` that remains unchanged when approval
+   collection replaces A1 with A2. The bridge MUST NOT reuse an MPAS Action ID
+   as a Task ID. Clients MUST use the `taskId` field for task operations and
+   MUST NOT rely on current or retired MPAS Action IDs as task handles.
 
-5. **Server-directed creation.** Clients do not send a `task` request field.
-   The bridge decides to return a task after verifying per-request extension
-   capabilities.
+5. **Server-directed exposure.** Clients do not send a `task` request field.
+   The bridge decides whether to return a complete result or expose the
+   already-durable internal operation as a Task after verifying per-request
+   extension capabilities.
 
 6. **No application-tool modification.** Names, descriptions, input schemas,
    output schemas, annotations, and other upstream fields pass through
@@ -99,7 +103,7 @@ and cooperative cancellation without changing application tool schemas.
     already-dispatched application operation.
 
 12. **MCP polling does not drive MPAS.** `tasks/get` only observes stored
-    state. Existing background Coordination polling, verifier resubmission,
+    state. Existing background Coordination polling, Action submission,
     reconciliation, and transient-operation retry continue independently.
 
 ---
@@ -183,7 +187,7 @@ Required Client Capability) with the missing entries in
 
 | MCP Task status | MPAS workflow state | Meaning |
 |---|---|---|
-| `working` | `created`, `awaitingApprovals`, `readyForResubmission`, `submittingToVerifier`, `awaitingVerifierResult` | MPAS processing continues. |
+| `working` | `created`, `submittingToCoordination`, `awaitingApprovals`, `readyForSubmission`, `submittingToVerifier`, `awaitingVerifierResult` | MPAS processing continues. |
 | `completed` | `resolved`, `unresolvable` | A `CallToolResult` is available in `tasks/get.result`; it may have `isError: true`. |
 | `cancelled` | `cancelled` | The bridge accepted cancellation and stopped future work where possible. |
 | `failed` | Reserved for a stored JSON-RPC execution error | `tasks/get.error` contains the JSON-RPC error. |
@@ -196,27 +200,29 @@ from the proposing client.
 
 The official Tasks extension reserves `failed` for JSON-RPC execution errors.
 MPAS outcomes such as `rejected`, `expired`, `malformed`, or
-`policyUnavailable` are therefore represented as `completed` tasks whose
-`result` is a `CallToolResult` with `isError: true`.
+`policyUnavailable` are represented as a normal complete `CallToolResult`
+with `isError: true` when known on the fast path, or as a completed Task when
+the outcome arrives after a Task was exposed.
 
 ### 5.2 Initial `tools/call` Mapping
 
-| Verifier or bridge result | Initial task status | MPAS authorization state |
+| Verifier or bridge result | Initial `tools/call` result | MPAS authorization state |
 |---|---|---|
-| `executed` with `executionResult` | `completed` | — |
-| `additionalApprovalsRequired` | `working` | `authorization_required` |
-| `pending` | `working` | `pending` |
-| Terminal MPAS outcome without a native result | `completed` | — |
-| Transient adapter or Coordination failure | `working` | `submitted` or `authorization_required` |
+| `executed` with `executionResult` | Complete native `CallToolResult` | — |
+| `additionalApprovalsRequired` | Working `CreateTaskResult` | `authorization_required` |
+| `pending` | Working `CreateTaskResult` | `pending` |
+| Terminal MPAS outcome without a native result | Complete error `CallToolResult` | — |
+| Transient adapter or Coordination failure | Working `CreateTaskResult` | `submitted` or `authorization_required` |
 
 Transient failures remain `working` only because the bridge retries the
 failed internal operation in the background. Retries are bounded by the
 Action Envelope expiration. Once the workflow can no longer produce a native
 result, it completes with an error `CallToolResult`.
 
-### 5.3 `CreateTaskResult`
+### 5.3 Deferred `CreateTaskResult`
 
-The official extension uses a flat result with `resultType: "task"`:
+When processing cannot finish on the fast path, the official extension uses a
+flat result with `resultType: "task"`:
 
 ```json
 {
@@ -405,7 +411,7 @@ Rules:
 |---|---|
 | `created` before a usable Verifier response | `submitted` |
 | `awaitingApprovals` | `authorization_required` |
-| `readyForResubmission`, `submittingToVerifier` | `approvals_collected` |
+| `readyForSubmission`, `submittingToVerifier` | `approvals_collected` |
 | `awaitingVerifierResult` | `pending` |
 
 ---
@@ -463,8 +469,8 @@ An unknown or invisible Task returns `-32602`.
 
 For a known, visible Task, cancellation:
 
-1. Atomically marks an active workflow `cancelled`, preventing later polling,
-   resubmission, or retry by the bridge.
+1. Atomically marks an active workflow `cancelled`, preventing later
+   Coordination polling, Action submission, or transport retry by the bridge.
 2. If Coordination started, best-effort calls the existing
    `/mpas/v1/coordination/action-cancel` endpoint.
 3. Returns an empty acknowledgement:
@@ -490,7 +496,8 @@ MCP task polling and MPAS workflow progression are independent:
 
 - `tasks/get` is read-only.
 - The bridge background tick polls Coordination for updates.
-- Completed approval packages are resubmitted to the Verifier.
+- Completed approval packages are submitted to the Verifier as the current
+  Action's first submission.
 - `pending` verifier work continues to be checked using the existing workflow
   mechanism.
 - Transient adapter and Coordination failures are retried while the Action
@@ -573,7 +580,7 @@ this specification.
 | `MpasBridgeDeferredResult` | Flat `CreateTaskResult` with `resultType: "task"` |
 | `MpasBridgeActionOutcome` | Completed Task with `result.isError: true` |
 | `MpasBridgeError` after task creation | Completed error result or Task JSON-RPC error |
-| Action reference as client handle | `taskId` (same value as Action ID) |
+| Action reference as client handle | Stable `taskId`, distinct from every current or retired Action ID |
 | Output-schema unions | Upstream schema unchanged |
 | Tool description notices | Upstream description unchanged |
 | `notificationRequired` | Human-readable `statusMessage` when needed |
@@ -623,20 +630,22 @@ regenerated in a later rollout.
 1. Include `io.modelcontextprotocol/tasks` and `org.oma3/mpas` in the
    per-request client capabilities for every bridge request.
 2. Call the application tool normally; do not include a `task` field.
-3. Read the flat `CreateTaskResult` and retain its `taskId`.
-4. If its status is `working`, poll `tasks/get` no faster than
-   `pollIntervalMs`.
+3. If `tools/call` returns `resultType: "complete"`, consume the normal native
+   `CallToolResult`; no Task operation is required.
+4. If it returns a flat `CreateTaskResult`, retain its `taskId` and poll
+   `tasks/get` no faster than `pollIntervalMs` while it is `working`.
 5. When `tasks/get` returns `completed`, read the native `CallToolResult` from
    its `result` field.
-6. Treat `result.isError: true` as a completed tool-level error.
-7. Call `tasks/cancel` if the result is no longer needed.
+6. Treat `isError: true` on a direct or Task result as a completed tool-level
+   error.
+7. Call `tasks/cancel` if a deferred result is no longer needed.
 8. Never repeat the original application tool call to check status; that
    creates a new Action.
 
 ```text
-tools/call -> CreateTaskResult
-  working   -> tasks/get -> ... -> completed.result
-  completed -> tasks/get -> completed.result
-  cancelled -> stop
-  failed    -> tasks/get.error
+tools/call -> complete CallToolResult
+           -> CreateTaskResult
+                working   -> tasks/get -> ... -> completed.result
+                cancelled -> stop
+                failed    -> tasks/get.error
 ```

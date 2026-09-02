@@ -104,15 +104,15 @@ The MPAS MVP demonstrates multi-party agent governance end-to-end. Multiple agen
 ### 1.3 Default Flow (Proposer → Coordination → Signers → Adapter → Execute)
 
 1. **Agent A calls a tool** (e.g., `delete_branch_demo`) on its Proposer Bridge.
-2. **Proposer Bridge constructs an Action Package** — Execution Payload + Action Envelope + Proposer Approval (signed with Agent A's key).
-3. **Proposer Bridge submits to the Credential Adapter** directly. The adapter pins the `actionId` (lifecycle: `open`), verifies, evaluates policy → returns `additionalApprovalsRequired`. The `actionId` remains `open` (bundle-level failure does not consume it per Core Section 6.9.2).
-4. **Proposer Bridge submits to the Coordination Service** (default `approvalStrategy: "coordinate"`). The coordination service stores the pending action (`awaitingApprovals` — a non-authoritative workflow state).
+2. **Proposer Bridge constructs A1** — Execution Payload + Action Envelope + Proposer Approval (signed with Agent A's key).
+3. **Proposer Bridge submits A1 to the Credential Adapter** directly. The adapter verifies and evaluates policy, then returns advisory `additionalApprovalsRequired`. The response is stateless; the bridge retires A1.
+4. **Proposer Bridge constructs A2** with a new Action ID, hash, expiration, and Proposer Approval, authors A2-bound requirements, and submits A2 to the Coordination Service (default `approvalStrategy: "coordinate"`). The coordination service stores A2 (`awaitingApprovals` — a non-authoritative workflow state).
 5. **Agent B's Maintainer Bridge polls the Coordination Service** — sees the pending action via `mpas_list_pending`.
 6. **Agent B reviews and approves** — calls `mpas_review_action` then `mpas_approve`. The Maintainer Bridge signs an Approval with Agent B's key and submits it to the Coordination Service.
 7. **Agent C does the same** — reviews and approves.
-8. **Coordination Service detects threshold is met** (2 maintainer approvals collected). Assembles the full Approval Bundle into a completed Action Package. Transitions to `readyForResubmission`.
-9. **Proposer Bridge polls, fetches the completed Action Package, and resubmits to the Credential Adapter** using the same `actionId` and same Action Envelope hash. Per Core Section 6.9.2, this resubmission is accepted because the action is `open` with matching hash.
-10. **Credential Adapter performs full re-verification** of the newly submitted package — signatures, hash bindings, expiration, policy. Policy satisfied → transitions to `executing`.
+8. **Coordination Service detects threshold is met** (2 maintainer approvals collected). Assembles the full Approval Bundle into a completed Action Package. Transitions to `readyForSubmission`.
+9. **Proposer Bridge polls, fetches the completed A2 Action Package, and submits A2 to the Credential Adapter for the first time.** The bridge's stable MCP Task ID remains unchanged across A1 and A2.
+10. **Credential Adapter performs full verification of A2** — signatures, hash bindings, expiration, policy. Policy satisfied → transitions to `executing`.
 11. **Policy satisfied → Adapter retrieves credentials** and dispatches `delete_branch_demo` to the real GitHub MCP server.
 12. **Adapter issues an Execution Receipt** (lifecycle: `resolved(executed)`) and returns it to the Proposer Bridge.
 13. **Proposer Bridge returns the result to Agent A.** The Coordination Service learns the outcome when the Proposer relays it.

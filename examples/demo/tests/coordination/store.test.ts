@@ -99,8 +99,8 @@ describe("CoordinationStore", () => {
     });
     const readyUpdate = store.poll(request.actionPackage.actionEnvelope.proposer.did).actionUpdates[0];
 
-    expect(ready.state).toBe("readyForResubmission");
-    expect(readyUpdate.state).toBe("readyForResubmission");
+    expect(ready.state).toBe("readyForSubmission");
+    expect(readyUpdate.state).toBe("readyForSubmission");
     expect(readyUpdate.expiresAt).toBe(request.actionPackage.actionEnvelope.expiresAt);
     expect(readyUpdate.actionPackage?.approvalBundle.approvals).toHaveLength(3);
     expect(store.poll(maintainerB.did).approvalRequests).toHaveLength(0);

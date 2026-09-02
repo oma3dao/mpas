@@ -293,16 +293,16 @@ tool call:
 
    - **`return`**: Return immediately with pending status, action ref,
      and authorization requirements
-   - **`coordinate`**: Submit to Coordination Service, return
+   - **`coordinate`**: Construct a replacement Action and submit it to Coordination Service, return
      immediately with coordination action ref
-   - **`wait`** (default): Submit to Coordination Service, then poll
+   - **`wait`** (default): Construct a replacement Action, submit it to Coordination Service, then poll
      until resolved or timeout
 
 5. **Wait/Poll Loop** (strategy = `wait`)
    - Poll `CoordinationClient.poll(agentDid)` every 2 seconds
    - Look for matching `actionUpdate` by `actionEnvelopeHash`
-   - On `readyForResubmission`: resubmit the coordinated Action
-     Package to the Adapter, return the terminal result
+   - On `readyForSubmission`: submit the coordinated replacement Action
+     Package to the Adapter for the first time, then return the terminal result
    - On `cancelled`: return error
    - On `expired`: return error
    - On timeout (`approvalTimeoutMs`, default 300000ms): return
@@ -535,7 +535,7 @@ The generated bridge MUST:
 |---|----------|-------|----------|
 | B1 | tools/list returns all tools | `tools/list` request | Response with all hardcoded tools |
 | B2 | Executed result | Adapter returns `executed` | Tool result relayed to agent |
-| B3 | Additional approvals → coordinate → wait → resubmit | Adapter returns `additionalApprovalsRequired`, coordination succeeds, poll finds `readyForResubmission` | Resubmit, return terminal result |
+| B3 | Additional approvals → replace → coordinate → submit | Adapter returns `additionalApprovalsRequired`, bridge creates A2, coordination succeeds, poll finds `readyForSubmission` | Submit A2, return terminal result |
 | B4 | Additional approvals → timeout | Poll never returns ready | Return pending after timeout |
 | B5 | Additional approvals → cancelled | Poll returns `cancelled` | Return error |
 | B6 | Additional approvals → expired | Poll returns `expired` | Return error |

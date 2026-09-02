@@ -107,6 +107,10 @@ function makeBridge(
           throw new Error("secret-bearing internal error");
         }
       : buildPackage,
+    buildCoordinationReplacement: async (priorPackage, verifierRequirements) => ({
+      actionPackage: priorPackage,
+      authorizationRequirements: verifierRequirements,
+    }),
     store: options.store ?? new MemoryWorkflowStore({ now: () => Date.parse("2026-08-23T10:00:00.000Z") }),
     adapter: workflowAdapter,
     coordination: coordination(),
@@ -119,6 +123,10 @@ function makeBridge(
 
 function actionId(result: Record<string, any>): string {
   return result.structuredContent.actionRef.actionId.value as string;
+}
+
+function taskId(result: Record<string, any>): string {
+  return result.structuredContent.taskId as string;
 }
 
 describe("legacy MCP compatibility bridge surface", () => {
@@ -164,6 +172,8 @@ describe("legacy MCP compatibility bridge surface", () => {
         lastActionResponse: { result: "pending" },
       },
     });
+    expect(taskId(proposed)).toMatch(/^urn:uuid:/);
+    expect(taskId(proposed)).not.toBe(actionId(proposed));
 
     const observed = await bridge.handleCompatibilityToolCall(MPAS_WAIT_TOOL_NAME, {
       actionId: actionId(proposed),
@@ -183,7 +193,7 @@ describe("legacy MCP compatibility bridge surface", () => {
   it("maps cancelled records to a terminal compatibility error", async () => {
     const bridge = makeBridge(adapter(response("pending")));
     const proposed = await bridge.handleCompatibilityToolCall("merge_pull_request", {});
-    await bridge.handleTasksCancel(actionId(proposed));
+    await bridge.handleTasksCancel(taskId(proposed));
 
     await expect(
       bridge.handleCompatibilityToolCall(MPAS_WAIT_TOOL_NAME, {
@@ -200,7 +210,9 @@ describe("legacy MCP compatibility bridge surface", () => {
     const store = new MemoryWorkflowStore();
     const foreign = await buildPackage("merge_pull_request", {}, OTHER_DID);
     store.createWorkflow({
+      taskId: "urn:uuid:ffffffff-ffff-4fff-8fff-ffffffffffff",
       actionId: foreign.actionEnvelope.actionId.value,
+      actionIdempotencyKey: "foreign-action-attempt",
       actionEnvelopeHash: foreign.approvalBundle.actionEnvelopeHash.value,
       toolName: "merge_pull_request",
       actionPackage: foreign,

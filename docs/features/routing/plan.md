@@ -44,7 +44,7 @@ The demo Action Relay uses an in-memory, recipient-indexed reference store. It d
 - A signed session request and DID-bound, one-use upgrade ticket.
 - Action-specific recipient authorization from authenticated Verifier `AuthorizationRequirements`, administrator additions, and auditable routing decisions.
 - Initial Verifier routing through a `DeliveryEnvelope` whose payload is `ActionRequest` containing the initial Action Package, with the designated Verifier selected by trusted endpoint or Action Relay configuration.
-- Explicit Coordination Service workflow creation after `additionalApprovalsRequired`, followed by client-controlled resubmission of a ready Action Package.
+- Explicit Coordination Service workflow creation after `additionalApprovalsRequired`, followed by client-controlled first submission of the completed replacement Action Package.
 - An asynchronous Verifier result path using the existing `ActionResponse` and `ExecutionReceipt` types.
 - Body-level idempotency on `ActionRequest` and the existing coordination mutation requests, without adding it to `DeliveryEnvelope` or portable artifact schemas.
 - Layered request equivalence that ignores regenerated routing metadata while retaining sender, recipient-set, and Action identity changes.
@@ -57,7 +57,7 @@ The demo Action Relay uses an in-memory, recipient-indexed reference store. It d
 - One canonical Action submission body and response state machine for direct-Verifier and Action-Relay topologies.
 - No direct Proposer-to-Verifier network requirement when the configured Action origin is an Action Relay; the relay is the durable intermediary for that topology.
 - The Action Relay delivery endpoint is the Verifier response return path and initially accepts `DeliveryEnvelope<ActionResponse>`; arbitrary payload relay is not required.
-- A relay response never creates a Coordination Service workflow, and a ready Action Package is returned to the Proposer for explicit resubmission rather than automatically delivered to a Verifier.
+- A relay response never creates a Coordination Service workflow, and a ready replacement Action Package is returned to the Proposer for explicit first submission rather than automatically delivered to a Verifier.
 - A direct Verifier validates its configured DID and its membership in `recipients`; it does not require a single-recipient envelope or forward to other recipients unless it also implements routing.
 - No WebSocket payload delivery or acknowledgement protocol.
 - No Coordination Service DID requirement.
@@ -330,7 +330,7 @@ An idempotent retry of such a request uses the same `idempotencyKey` and a new R
 - Verifier response binding `signature keyid == DeliveryEnvelope.sender == ActionResponse.verifier.did == recorded relayed-Action Verifier DID`.
 - `RelayPollResponse.deliveries` from `POST /mpas/v1/relay/poll`.
 - Expiration and existing cursor handling.
-- No relay hook that creates a workflow or submits a ready package. The existing Coordination Service returns `readyForResubmission` to the Proposer, which controls the next Action submission.
+- No relay hook that creates a workflow or submits a ready package. The Coordination Service returns `readyForSubmission` to the Proposer, which controls the replacement Action's first Verifier submission.
 - Pending-request and stored-result handling that completes the relayed `/mpas/v1/verifier/action` call with the first authenticated Verifier `ActionResponse`.
 - A deployment-configurable bounded HTTP wait returning retryable `503 timeout` while retaining the pending relay record.
 - Capped delivery pages whose cursor is an acknowledgement checkpoint for delivery position only.
@@ -417,9 +417,9 @@ An idempotent retry of such a request uses the same `idempotencyKey` and a new R
 4. The Verifier is notified on its authenticated relay WebSocket and polls the Action Relay for the initial package.
 5. The Verifier submits an `additionalApprovalsRequired` `ActionResponse` through an RFC 9421-authenticated delivery whose sender equals both the recorded designated Verifier DID and `verifier.did` and whose requirements are bound to the Action Envelope hash.
 6. The Action Relay stores that first qualifying response and completes the pending `/mpas/v1/verifier/action` call with the unchanged Verifier-authored `ActionResponse`; an equivalent retry receives the stored response if the original connection ended.
-7. The Proposer explicitly submits `CoordinationActionRequest` to `/mpas/v1/coordination/workflow`. The Coordination Service applies its own authorization without trusting co-located relay state, then eligible Signers retrieve Approval Requests and submit sufficient Approvals.
-8. The workflow reaches `readyForResubmission` and returns the completed Action Package to the Proposer through the existing action update without creating a relay delivery.
-9. The Proposer explicitly submits the completed package to the same logical Verifier endpoint. The Verifier reevaluates its current policy, verifies, and processes the package.
+7. The Proposer retires A1, constructs A2 with a new Action ID and hash, authors A2-bound requirements, and explicitly submits `CoordinationActionRequest` for A2 to `/mpas/v1/coordination/workflow`. The Coordination Service applies its own authorization without trusting co-located relay state, then eligible Signers retrieve Approval Requests and submit sufficient Approvals.
+8. The workflow reaches `readyForSubmission` and returns completed A2 to the Proposer through the existing action update without creating a relay delivery.
+9. The Proposer explicitly submits completed A2 to the same logical Verifier endpoint for the first time. The Verifier reevaluates its current policy, verifies, and processes A2.
 10. The Verifier creates the resulting `ActionResponse`, including the applicable signed `ExecutionReceipt`, and returns it directly or through the Action Relay according to the selected topology.
 11. The Proposer receives the final Verifier-authored response through the same Action call contract.
 12. Duplicate Action Package or response delivery is handled using existing action and receipt identities.
@@ -446,7 +446,7 @@ An idempotent retry of such a request uses the same `idempotencyKey` and a new R
 - Authenticated response equality `signature keyid == DeliveryEnvelope.sender == ActionResponse.verifier.did`.
 - Delivery authorization does not modify `eligibleSigners` or threshold calculations.
 - A relayed `additionalApprovalsRequired` response creates no workflow until the client calls `/coordination/workflow`.
-- `readyForResubmission` creates no relay delivery; completed-package submission is a separate client-controlled Action mutation with a new idempotency key.
+- `readyForSubmission` creates no relay delivery; completed A2 submission is a separate client-controlled Action mutation with A2's own Action ID, hash, and idempotency key.
 - Relay and coordination polling, sessions, and notification types remain isolated, and relay delivery cursors never enter coordination responses, when the services use different origins and stores.
 - Multi-recipient independent retrieval.
 - Cursor retry and duplicate delivery.

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { ActionPackage, Did } from "../../src/index.js";
 import {
   buildCancelTaskResult,
+  buildCompleteToolCallResult,
   buildCreateTaskResult,
   buildGetTaskResult,
   buildUpdateTaskResult,
@@ -9,6 +10,7 @@ import {
 import { CreateTaskResultSchema, GetTaskResultSchema } from "../../src/lib/mcp-tasks-extension.js";
 import type { WorkflowRecord } from "../../src/lib/workflow-store.js";
 
+const TASK_ID = "urn:uuid:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const ACTION_ID = "urn:uuid:11111111-1111-4111-8111-111111111111";
 const PROPOSER_DID = "did:jwk:proposer" as Did;
 const CREATED_AT = "2026-08-14T10:00:00.000Z";
@@ -26,7 +28,7 @@ describe("official MCP Task result builders", () => {
     expect(CreateTaskResultSchema.safeParse(result).success).toBe(true);
     expect(result).toMatchObject({
       resultType: "task",
-      taskId: ACTION_ID,
+      taskId: TASK_ID,
       status: "working",
       ttlMs: 1_800_000,
       pollIntervalMs: 2_500,
@@ -98,6 +100,29 @@ describe("official MCP Task result builders", () => {
       result: nativeResult,
     });
     expect(result).not.toHaveProperty("_meta");
+  });
+
+  it("returns the native result directly when the initial Action settles synchronously", () => {
+    const nativeResult = { content: [{ type: "text", text: "merged" }], isError: false };
+    const record = workflow({
+      state: "resolved",
+      updatedAt: RESOLVED_AT,
+      resolvedAt: RESOLVED_AT,
+      resolution: {
+        kind: "resolved",
+        actionResponse: {
+          version: "1",
+          type: "ActionResponse",
+          result: "executed",
+          executionResult: nativeResult,
+        },
+      },
+    });
+
+    expect(buildCompleteToolCallResult(record)).toEqual({
+      ...nativeResult,
+      resultType: "complete",
+    });
   });
 
   it("maps a terminal MPAS rejection to a completed tool-level error", () => {
@@ -174,7 +199,9 @@ describe("official MCP Task result builders", () => {
 
 function workflow(overrides: Partial<WorkflowRecord> = {}): WorkflowRecord {
   return {
+    taskId: TASK_ID,
     actionId: ACTION_ID,
+    actionIdempotencyKey: "initial-action-attempt",
     actionEnvelopeHash: "signed-envelope-digest",
     toolName: "merge_pull_request",
     state: "created",

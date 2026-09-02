@@ -17,7 +17,7 @@ export type AdditionalApprovalRequirements = Extract<
   { result: "additionalApprovalsRequired" }
 >;
 
-export type CoordinationState = "awaitingApprovals" | "readyForResubmission" | "rejected" | "cancelled" | "expired";
+export type CoordinationState = "awaitingApprovals" | "readyForSubmission" | "rejected" | "cancelled" | "expired";
 
 export interface ActionRef {
   version: "1";

@@ -51,6 +51,9 @@ function makeBridge(): ProposerBridge {
   return new ProposerBridge({
     tools: [{ name: "deploy", description: "Deploy.", inputSchema: { type: "object" } }],
     buildActionPackage: buildPackage,
+    buildCoordinationReplacement: async () => {
+      throw new Error("unused");
+    },
     store: new MemoryWorkflowStore(),
     adapter: {
       async submit(): Promise<ActionResponse> {

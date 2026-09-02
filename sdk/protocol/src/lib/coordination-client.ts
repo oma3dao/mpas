@@ -170,12 +170,15 @@ export class CoordinationServiceClient {
   private readonly transport: MpasHttpTransport;
   private readonly webSocketFactory?: CoordinationWebSocketFactory;
   private readonly participantDid?: Did;
+  readonly timeoutMs: number;
 
   /** Creates a client bound to one Coordination Service origin and participant signer. */
   constructor(config: CoordinationServiceClientConfig) {
     this.url = config.url.replace(/\/+$/, "");
+    this.timeoutMs = config.timeoutMs ?? 30_000;
     this.transport = new MpasHttpTransport({
       ...config,
+      timeoutMs: this.timeoutMs,
       errors: {
         identityMismatch: (requiredDid, signerDid) => new CoordinationResponseError(
           `Coordination request identity ${requiredDid} does not match signer DID ${signerDid}.`,

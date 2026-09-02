@@ -48,7 +48,7 @@ This section defines the core terms used throughout MPAS.
 | Approval                   | Any signed artifact or reference showing that a Signer approved, rejected, or contributed to authorization of an Action Envelope.                                                                                   |
 | Approval Bundle            | An object containing all Approvals and other metadata.                                                                                                                                                              |
 | Action Package             | The portable package delivered to a Verifier, containing the Execution Payload, Action Envelope, and Approval Bundle.                                                                                               |
-| Authorization Requirements | Verifier-returned requirements describing what approvals are required for an Action.                                                                                                                                |
+| Authorization Requirements | Requirements describing the approvals expected for one Action Envelope. A Verifier may return them as advisory policy feedback, and a Proposer may author them as Coordination input for a replacement Action. |
 | Proposer                   | The actor that initiates an Action. The Proposer creates the Execution Payload, constructs the Action Envelope, produces an initial Approval, assembles the Action Package, and delivers the package for execution. |
 | Verifier                   | The component that determines whether an Action Package satisfies the applicable policy and may be executed. Can be part of an Application or a Credential Adapter.                                                 |
 | Application                | The component that executes the Action desired by the Proposer.                                                                                                                                                     |
@@ -109,14 +109,19 @@ These concerns belong to relying applications, policy engines, enterprises, wall
 
 A typical high-level MPAS flow proceeds as follows:
 
-1. Proposer constructs a profile-native Execution Payload and an Action Envelope (identifying target, execution profile, and binding to the payload by hash), then assembles an Action Package with the Proposer's own Approval and submits it to the Verifier.
-2. Verifier evaluates the Action Package against policy. If the Proposer's Approval alone is insufficient, the Verifier responds with Authorization Requirements.
-3. Proposer makes the Action Envelope and Execution Payload available to eligible Signers. A Coordination Service may be used to facilitate this exchange.
-4. Each Signer verifies the Action Envelope and Execution Payload using the declared execution profile.
-5. Signer signs an Approval and returns it to the Proposer.
-6. Once the Proposer has collected the required Approvals, it assembles a completed Action Package with an updated Approval Bundle and submits it to the Verifier.
-7. Verifier approves the Action Package and instructs the Application to execute based on the Execution Payload.
-8. Application returns an Execution Receipt to the Proposer.
+1. Proposer constructs a profile-native Execution Payload and a first Action Envelope (A1), then assembles an Action Package with the Proposer's own Approval and submits it to the Verifier.
+2. Verifier evaluates A1 against current policy. If the Proposer's Approval alone is insufficient, the Verifier responds with advisory Authorization Requirements bound to A1's Action Envelope hash (H1).
+3. After receiving `additionalApprovalsRequired`, the Proposer retires A1 and constructs a replacement Action (A2) with a new `actionId`, a new Action Envelope and hash (H2), and a fresh Proposer Approval bound to H2. A2 MAY carry the same Execution Payload as A1.
+4. The Proposer authors Authorization Requirements for A2, normally by deriving the approval conditions from the Verifier's advisory response while replacing the binding with H2, and makes A2 available to eligible Signers. A Coordination Service may facilitate this exchange.
+5. Each Signer verifies A2's Action Envelope and Execution Payload using the declared execution profile.
+6. Signers create Approvals bound to H2 and return them to the Proposer.
+7. Once the Proposer has collected the required Approvals, it assembles a completed A2 Action Package and submits A2 to the Verifier.
+8. Verifier evaluates A2 against current policy and, if authorized, instructs the Application to execute based on the Execution Payload.
+9. Application returns an Execution Receipt to the Proposer.
+
+A1 and A2 are independent Actions. MPAS defines no protocol-level parent or continuation reference between them. A Proposer or bridge MAY retain a local operation identifier to associate them for user experience and audit purposes, but that identifier is not an Action ID and is not used by a Verifier, Action Relay, or Coordination Service to authorize or correlate either Action.
+
+If the Verifier returns `additionalApprovalsRequired` for A2, the same rule repeats: the Proposer retires A2 and constructs A3 with a new Action ID, new Action Envelope hash, and fresh Approvals. Requirements and Approvals from an earlier Action never carry forward because they remain bound to that earlier Action Envelope hash.
 
 ### 4.2 Coordination and Relay Services
 
@@ -132,7 +137,7 @@ A Coordination Service may:
 * collect Approvals and Rejections;
 * synchronize approval status;
 * assemble Approval Bundles;
-* assemble completed Action Packages ready for resubmission to the Verifier;
+* assemble completed Action Packages ready for submission to the Verifier;
 * make assembled Approval Bundles or completed Action Packages available to the Proposer;
 * publish audit logs;
 * distribute Execution Receipts.
@@ -535,7 +540,7 @@ Signers SHOULD understand or obtain rendering support for the declared `actionEn
 | type                      | Yes      | MUST be `SignerReviewSet`.                                                         |
 | executionPayload          | Yes      | The profile-native Execution Payload the Signer is being asked to review.          |
 | actionEnvelope            | Yes      | The Action Envelope the Signer is being asked to approve, reject, or abstain from. |
-| authorizationRequirements | Optional | Verifier-provided requirements included for signer context only.                   |
+| authorizationRequirements | Optional | Proposer-supplied coordination requirements included for signer context only.       |
 | createdAt                 | Optional | Timestamp when the Signer Review Set was assembled.                                |
 | expiresAt                 | Optional | Timestamp after which the review request is no longer valid.                       |
 
@@ -858,7 +863,16 @@ A Verifier MUST reject an Action Package if:
 
 #### 5.8.1 Purpose
 
-**Authorization Requirements** describe what additional approvals or authorization conditions are needed for a proposed Action to be accepted by the Verifier. They are typically returned by a Verifier after receiving an Action Package that is not yet authorized. They help the Proposer understand which Approvals to collect before resubmitting.
+**Authorization Requirements** describe what additional approvals or authorization conditions are expected for one Action Envelope. The same object type has two uses:
+
+* A Verifier SHOULD return Authorization Requirements as advisory policy feedback after receiving an Action Package that lacks sufficient Approvals. Those requirements bind to the submitted Action Envelope.
+* A Proposer MAY author Authorization Requirements as input to an approval-coordination workflow. Those requirements bind to the replacement Action Envelope whose Approvals the workflow will collect.
+
+An Authorization Requirements object does not identify its author and is not, by itself, proof that the named Verifier produced or endorsed it. Transport authentication or an enclosing signed message may establish provenance for a particular exchange, but that provenance is not portable merely because the object is later forwarded. The `verifier.did` field identifies the Verifier whose anticipated policy the requirements are intended to satisfy.
+
+When a Verifier returns Authorization Requirements inside a Verifier-authored response, `authorizationRequirements.verifier.did` MUST equal the enclosing response's `verifier.did`. Where the transport authenticates the response sender, that binding establishes the Verifier identity for that hop. After the Proposer derives a new requirements object for A2, the copied `verifier.did` is only the Proposer's statement of the intended Verifier and carries none of the earlier response's provenance.
+
+When a Verifier returns `additionalApprovalsRequired` for A1, its returned requirements MUST remain bound to A1's hash H1. A conforming Proposer MUST NOT submit any subsequent Action Package that reuses A1's `actionId`. Before requesting Approvals, it MUST construct A2 with a new `actionId` and hash H2 and create a new Authorization Requirements object bound to H2. The Proposer MAY derive A2's approval conditions, `policyRef`, and target `verifier.did` from the A1 response, but MUST NOT present the H2-bound object as Verifier-authored. The Coordination Service operates only on A2 and does not need A1 or the Verifier's H1-bound object.
 
 Authorization Requirements are not a guarantee of future execution. A Verifier MAY reject a later Action Package even if the Proposer collected the Approvals described in earlier Authorization Requirements. Reasons include:
 
@@ -873,12 +887,13 @@ Authorization Requirements are not a guarantee of future execution. A Verifier M
 #### 5.8.2 Requirements
 
 An Authorization Requirements object MUST bind to the Action Envelope it applies to using `actionEnvelopeHash`.
-An Authorization Requirements object MUST identify the Verifier that returned it.
+An Authorization Requirements object MUST identify the Verifier whose anticipated policy it is intended to satisfy.
 An Authorization Requirements object MUST include a result status.
 An Authorization Requirements object MUST include a `version` field.
 An Authorization Requirements object SHOULD include approval requirements when additional approvals can satisfy policy.
 An Authorization Requirements object MAY include a policy reference.
 An Authorization Requirements object SHOULD include expiration.
+An Authorization Requirements object authored by a Proposer for Coordination MUST use result `additionalApprovalsRequired`.
 
 If a Verifier cannot compute `actionEnvelopeHash` because the Action Envelope is missing, malformed, or not canonicalizable, the Verifier SHOULD return a response with result `malformed` rather than an Authorization Requirements object.
 
@@ -889,8 +904,8 @@ If a Verifier cannot compute `actionEnvelopeHash` because the Action Envelope is
 | version              | Yes         | MUST be `"1"`.                                                                                         |
 | type                 | Yes         | MUST be `AuthorizationRequirements`.                                                                   |
 | actionEnvelopeHash   | Yes         | Hash of the Action Envelope to which the requirements apply. This is the sole normative binding field. |
-| result               | Yes         | Verifier response status.                                                                              |
-| verifier.did         | Yes         | DID of the Verifier returning the requirements.                                                        |
+| result               | Yes         | Requirements status. This version uses `additionalApprovalsRequired` for coordination input.           |
+| verifier.did         | Yes         | DID of the Verifier whose anticipated policy the requirements are intended to satisfy. This field does not assert authorship. |
 | approvalRequirements | Conditional | Required when `result` is `additionalApprovalsRequired`.                                               |
 | policyRef            | Optional    | Non-authoritative reference to the Verifier's policy.                                                  |
 | createdAt            | Recommended | Timestamp when the requirements were created.                                                          |
@@ -900,7 +915,7 @@ If a Verifier cannot compute `actionEnvelopeHash` because the Action Envelope is
 
 | Value                       | Meaning                                                                                   |
 | :-------------------------- | :---------------------------------------------------------------------------------------- |
-| additionalApprovalsRequired | The request may be authorized if the Proposer collects the required Approvals.            |
+| additionalApprovalsRequired | A replacement Action may be authorized if the Proposer collects the described Approvals and the Verifier's current policy accepts it. |
 | rejected                    | The request is rejected and cannot be satisfied by collecting additional Approvals.       |
 | notSupported                | The Verifier does not support the requested Application, operation, or verification mode. |
 | malformed                   | The request is structurally invalid.                                                      |
@@ -1137,7 +1152,7 @@ Evaluate the Action Package against current policy using only verified Approvals
 | Response                    | Meaning                                                                                                     |
 | :-------------------------- | :---------------------------------------------------------------------------------------------------------- |
 | proceed to execution        | The Action Package satisfies current policy. The Verifier transitions to `executing` and dispatches.        |
-| additionalApprovalsRequired | The Action Package does not yet satisfy policy but may be authorized if additional Approvals are collected. |
+| additionalApprovalsRequired | The Action Package does not satisfy current policy; the Proposer may construct a replacement Action and collect the described Approvals. |
 | rejected                    | The Action Package is rejected.                                                                             |
 | notSupported                | The Verifier does not support the requested Application, operation, or verification mode.                   |
 | malformed                   | The Action Package is structurally invalid.                                                                 |
@@ -1147,11 +1162,11 @@ When the response is `additionalApprovalsRequired`, the Verifier SHOULD return a
 
 ### 6.3 Phase 3: Signer Review Set Distribution
 
-When the Verifier returns Authorization Requirements indicating additional Approvals are needed, the Proposer or coordinating participant sends the Signer Review Set to eligible Signers.
+When the Verifier returns Authorization Requirements indicating additional Approvals are needed for A1, the Proposer MUST first construct replacement Action A2 as specified in Section 5.8. The Proposer or coordinating participant then sends a Signer Review Set containing A2 to eligible Signers.
 
 The Proposer or coordinating participant SHOULD identify the Signers who may satisfy the Authorization Requirements and send the Signer Review Set to eligible Signers or make it available through a coordination method where eligible Signers monitor for review requests.
 
-The Proposer SHOULD avoid distributing more sensitive information than necessary for Signer review. If Authorization Requirements or the Action Envelope expire before sufficient Approvals are collected, the Proposer SHOULD request updated requirements or restart the protocol.
+The Proposer SHOULD avoid distributing more sensitive information than necessary for Signer review. If A2's Authorization Requirements or Action Envelope expire before sufficient Approvals are collected, the Proposer SHOULD retire A2 and restart with a replacement Action.
 
 ### 6.4 Phase 4: Signer Review and Approval Response
 
@@ -1195,11 +1210,11 @@ The Signer MUST create an Approval object as defined in Section 5.5. The Approva
 
 The Signer SHOULD return the Approval to the participant, channel, or system from which the Signer Review Set was received, unless coordination metadata specifies another return path.
 
-### 6.5 Phase 5: Approval Bundle Assembly and Completed Action Package Submission
+### 6.5 Phase 5: Approval Bundle Assembly and Execution-Candidate Action Submission
 
-The Proposer assembles collected Approvals into an updated Approval Bundle and submits a completed Action Package to the Verifier. The completed Action Package uses the same structure as the initial Action Package. The Proposer MUST NOT modify Approval objects received from Signers.
+The Proposer assembles the Approvals collected for A2 into A2's Approval Bundle and submits the completed A2 Action Package to the Verifier. This is A2's first Verifier submission; it is not a resubmission of A1. The completed Action Package uses the same structure as every Action Package. The Proposer MUST NOT modify Approval objects received from Signers, and every Approval MUST bind to A2's Action Envelope hash.
 
-The Proposer is always responsible for submitting the completed Action Package to the Verifier, even when a Coordination Service was used to collect Approvals. The Proposer MAY fetch collected Approvals from a Coordination Service, assemble the Approval Bundle, and re-submit directly to the Verifier.
+The Proposer is always responsible for submitting the completed Action Package to the Verifier, even when a Coordination Service was used to collect Approvals. The Proposer MAY fetch collected Approvals from a Coordination Service, assemble the Approval Bundle, and submit to the Verifier.
 
 ### 6.6 Credential Adapter Processing
 
@@ -1226,17 +1241,17 @@ For MCP, this means converting the profile-native MCP tool-call parameter object
 
 ### 6.7 Resolution and Retry Behavior
 
-#### 6.7.1 Non-Final Responses
+#### 6.7.1 Non-Execution Responses
 
-A non-final response (e.g., `additionalApprovalsRequired`, temporary `policyUnavailable`, Signer non-response) indicates the Action has not been resolved and may continue under the same Action Envelope if permitted by policy.
+Some responses do not resolve execution and do not create a dispatch-ledger entry. A temporary `policyUnavailable` response permits an exact retry of the same Action. An `additionalApprovalsRequired` response is also stateless at the Verifier, but after receiving it a conforming Proposer MUST NOT submit any subsequent Action Package that reuses that Action ID and MUST use a new Action ID for the replacement Action submitted to Coordination and later to the Verifier.
 
 #### 6.7.2 Final Resolution
 
-An Action is resolved when it is executed, rejected, failed, indeterminate, expired, cancelled, or revoked. Once resolved, an Execution Receipt SHOULD be issued. Exactly one Execution Receipt is ever issued per `actionId`. The same Action ID MUST NOT be reused for a different Action Envelope (see Section 6.9 Action Lifecycle for the complete rules governing `actionId` reuse and resubmission).
+An Action is resolved when it is executed, rejected, failed, indeterminate, expired, cancelled, or revoked. Once resolved, an Execution Receipt SHOULD be issued. Exactly one Execution Receipt is ever issued per `actionId`. The same Action ID MUST NOT be reused for a different Action Envelope (see Section 6.9 Action Lifecycle for the complete rules governing `actionId` reuse and retry).
 
 #### 6.7.3 Retry and Restart
 
-If an Action Package is rejected as `malformed` or `notSupported`, the Proposer SHOULD correct the structural issue and submit a new Action Package with a new Action ID. If policy changes or expiration occurs, the Proposer SHOULD restart with a fresh Action Envelope.
+Before a protocol response has been received, a retry caused by transport failure or `503 timeout` MUST repeat the exact Action request with the same Action ID and transport idempotency key. After receiving `additionalApprovalsRequired` or `rejected`, the Proposer MUST NOT reuse that Action ID in a later logical submission. If an Action Package is `malformed` or `notSupported`, the Proposer SHOULD correct the structural issue and submit a new Action Package with a new Action ID. If policy changes or expiration occurs, the Proposer SHOULD restart with a fresh Action Envelope.
 
 ### 6.8 Coordination Topologies
 
@@ -1246,11 +1261,12 @@ MPAS is transport-neutral. The same artifacts may be exchanged through different
 
 The Proposer communicates directly with the Verifier and Signers:
 
-* Proposer → Verifier: initial Action Package
-* Verifier → Proposer: Authorization Requirements or response
-* Proposer → Signers: Signer Review Sets
+* Proposer → Verifier: A1 Action Package
+* Verifier → Proposer: H1-bound Authorization Requirements or response
+* Proposer constructs A2 with a new Action ID and H2-bound coordination requirements
+* Proposer → Signers: A2 Signer Review Sets
 * Signers → Proposer: Approvals
-* Proposer → Verifier: completed Action Package
+* Proposer → Verifier: completed A2 Action Package
 * Verifier / Credential Adapter → Proposer: response or Execution Receipt
 
 Direct Coordination works well when the Proposer knows the required Signers and can reach them reliably.
@@ -1263,7 +1279,7 @@ The Proposer may post the Signer Review Set or a reference to it. Signers return
 
 #### 6.8.3 Coordination Service Coordination
 
-A Coordination Service manages approval workflow state and makes review work and completed Action Packages available to the appropriate participants. The Proposer explicitly creates the workflow after receiving Authorization Requirements and remains responsible for submitting the completed Action Package to the Verifier.
+A Coordination Service manages approval workflow state and makes review work and completed Action Packages available to the appropriate participants. After receiving H1-bound Verifier feedback for A1, the Proposer constructs A2 and H2-bound Authorization Requirements, explicitly creates the A2 workflow, and remains responsible for submitting the completed A2 Action Package to the Verifier.
 
 #### 6.8.4 Action Relay
 
@@ -1283,7 +1299,7 @@ Regardless of topology:
 
 #### 6.9.1 Stateless Verification and the Dispatch Ledger (Normative)
 
-**The Verifier is stateless with respect to verification.** Evaluation of an Action Package — structural validation, hash binding, Approval Bundle verification, and policy evaluation — is deterministic over the submitted package. A `rejected`, `expired`, `malformed`, or `additionalApprovalsRequired` outcome is a **response**, not recorded state. An identical resubmission yields the identical verdict; determinism, not memory, is the protection.
+**The Verifier is stateless with respect to verification.** Evaluation of an Action Package — structural validation, hash binding, Approval Bundle verification, and policy evaluation — is deterministic over the submitted package. A `rejected`, `expired`, `malformed`, or `additionalApprovalsRequired` outcome is a **response**, not recorded state. An identical retry yields the identical verdict; determinism, not memory, is the protection. This statelessness does not relax the Proposer rule: after receiving `additionalApprovalsRequired` or `rejected`, a conforming Proposer retires that Action ID. The Verifier is not required to record or enforce client-side retirement.
 
 The Verifier's only protocol state is the **dispatch ledger**, which exists to enforce a single invariant:
 
@@ -1318,7 +1334,7 @@ For every submission the Verifier computes the Action Envelope hash and consults
 3. **`actionId` in the ledger, same hash, `executing`** — MUST NOT transmit again; respond `pending`.
 4. **`actionId` in the ledger, `resolved`** — MUST reject as replay (any hash).
 
-**A. Dispatch sequencing.** All fallible, side-effect-free preparation — credential resolution, target process launch or connection establishment — MUST occur BEFORE the ledger write. A failure during preparation is a **stateless error**: nothing is recorded, no receipt is issued, and an identical resubmission simply retries. "Dispatch" is defined as transmission of the request; the `executing` entry is written immediately before transmission. (Consequence: "credential handle not found" and "target unavailable" are stateless rejections with no receipt and no ledger entry — they occur pre-ledger.)
+**A. Dispatch sequencing.** All fallible, side-effect-free preparation — credential resolution, target process launch or connection establishment — MUST occur BEFORE the ledger write. A failure during preparation is a **stateless error**: nothing is recorded, no receipt is issued, and an identical retry simply retries. "Dispatch" is defined as transmission of the request; the `executing` entry is written immediately before transmission. (Consequence: "credential handle not found" and "target unavailable" are stateless rejections with no receipt and no ledger entry — they occur pre-ledger.)
 
 **B. Ledger immutability — no rollback, ever.** Entries are never deleted or rolled back. The only permitted transition is `executing → resolved(executed | failed | indeterminate)`. Any failure that lands after the write resolves the entry: `failed` if the target definitively reported failure, `indeterminate` if the outcome is unconfirmed. Re-attempting requires a NEW Action Envelope with a new `actionId` and fresh approvals. *Rationale:* rolling back after a `failed` response is itself a double-dispatch vector — the call may have had partial side effects — and, given rule A, the only failures landing after the write are rare mid-transmission ones; an invariant with no judgment calls is worth that price.
 
@@ -1337,7 +1353,7 @@ For every submission the Verifier computes the Action Envelope hash and consults
 
 #### 6.9.4 Why Pinning Is Unnecessary
 
-Approvals bind to the Action Envelope hash, so a second envelope claiming the same `actionId` needs its own valid approvals; the ledger ensures only the first submission to authorize ever dispatches. Determinism makes rejection memory worthless and eliminates the bundle-stripping denial-of-service: because rejections consume nothing, an observer of an in-flight package cannot resubmit a stripped bundle to brick a viable multi-party action. The `actionId` remains the nonce MPAS supplies; the dispatch ledger is what spends it.
+Approvals bind to the Action Envelope hash, so every replacement Action needs fresh Approvals. The ledger ensures only the first authorized submission for a ledgered Action ID ever dispatches. Determinism makes rejection memory worthless and eliminates the bundle-stripping denial-of-service: because rejections consume nothing, an observer of an in-flight package cannot submit a stripped bundle to brick a later replacement Action with a new ID and fresh approvals. The `actionId` remains the nonce MPAS supplies; the dispatch ledger is what spends it when dispatch begins.
 
 #### 6.9.5 Component Views and Naming Consistency
 
@@ -1351,17 +1367,17 @@ The Coordination Service never observes Verifier state directly — it learns ou
 
 | Time  | Coordination Service (non-authoritative)            | Verifier (authoritative)                                                              |
 | :---: | :-------------------------------------------------- | :------------------------------------------------------------------------------------ |
-| t0    | —                                                   | Proposer submits initial Action Package                                               |
-| t1    | —                                                   | Stateless: insufficient approvals → `additionalApprovalsRequired` (no ledger entry)   |
-| t2    | Proposer submits to Coordination Service → `awaitingApprovals` | (no interaction with Verifier)                                                        |
-| t3–t4 | Signers A, B submit Approvals to Coordination Service          | (no interaction with Verifier)                                                        |
-| t5    | Threshold met → `readyForResubmission`              | (no interaction with Verifier)                                                        |
-| t6    | —                                                   | Proposer resubmits completed package (same actionId, same hash)                       |
-| t7    | —                                                   | Stateless re-verification → policy satisfied → prepare → write `executing` → transmit |
+| t0    | —                                                   | Proposer submits A1 (Action ID 1, hash H1)                                             |
+| t1    | —                                                   | Stateless: insufficient approvals → H1-bound `additionalApprovalsRequired`; A1 retired |
+| t2    | Proposer creates workflow for A2 (new Action ID 2, hash H2) → `awaitingApprovals` | (no interaction with Verifier)                                     |
+| t3–t4 | Signers A, B submit H2-bound Approvals to Coordination Service | (no interaction with Verifier)                                                        |
+| t5    | Threshold met → `readyForSubmission`                | (no interaction with Verifier)                                                        |
+| t6    | —                                                   | Proposer submits completed A2 for the first time                                      |
+| t7    | —                                                   | Stateless verification → policy satisfied → prepare → write `executing` → transmit    |
 | t8    | —                                                   | Dispatch succeeds → `resolved(executed)` — receipt issued                             |
 | t9    | Proposer relays receipt; Coordination Service may record `executed` | —                                                                                     |
 
-If the Proposer never resubmits and the envelope expires, the Verifier never created a ledger entry; a late submission is the stateless deterministic rejection `expired`. If the Proposer cancels coordination, the Coordination Service records `cancelled` as a workflow convenience only; the Verifier, having no ledger entry, is unaffected.
+If the Proposer never submits completed A2 and its envelope expires, the Verifier never created a ledger entry for A2; a late submission is the stateless deterministic rejection `expired`. If the Proposer cancels coordination, the Coordination Service records `cancelled` as a workflow convenience only; the Verifier, having no ledger entry for A2, is unaffected. A1 likewise has no ledger entry because it never reached dispatch.
 
 #### 6.9.6 Future Work: Verifier-Side Cancellation
 
@@ -1626,7 +1642,7 @@ Signature verification proves control of a key. It does not always prove that th
 
 ### 8.5 Replay, Expiration, and Reuse
 
-Replay protection is required for MPAS safety. The Action Envelope `actionId` must be globally unique or unique within its scope. Replay protection is governed by the dispatch ledger (Section 6.9): an `actionId` already present in the ledger is never dispatched again — a ledgered-with-different-hash or already-`resolved` submission MUST be rejected, and an identical `executing` resubmission receives `pending`. Verification itself is stateless and deterministic, so repeating a rejected submission simply repeats the verdict. A Verifier MUST retain ledger state for an `actionId` at least until `actionEnvelope.expiresAt` plus the deployment's timestamp tolerance. Previously collected Approvals do not apply to a changed Action Envelope unless they bind to the new Action Envelope.
+Replay protection is required for MPAS safety. The Action Envelope `actionId` must be globally unique or unique within its scope. Replay protection is governed by the dispatch ledger (Section 6.9): an `actionId` already present in the ledger is never dispatched again — a ledgered-with-different-hash or already-`resolved` submission MUST be rejected, and an identical `executing` retry receives `pending`. Verification itself is stateless and deterministic, so repeating a rejected submission simply repeats the verdict. A Verifier MUST retain ledger state for an `actionId` at least until `actionEnvelope.expiresAt` plus the deployment's timestamp tolerance. After receiving `additionalApprovalsRequired` or `rejected`, a conforming Proposer MUST NOT submit any subsequent Action Package that reuses that Action ID; this is a client construction rule rather than Verifier state. A replacement Action MUST have a new Action ID, new Action Envelope hash, fresh Proposer Approval, and fresh Signer Approvals. Previously collected Approvals never apply to the replacement Action because they bind to the earlier Action Envelope.
 
 ### 8.6 Multiple Verifiers and Duplicate Execution
 
@@ -2215,7 +2231,7 @@ All standalone schemas use `$ref` to definitions. The combined `mpas-base-0.2.sc
     "actionEnvelope": { "$ref": "action-envelope.json" },
     "authorizationRequirements": {
       "$ref": "authorization-requirements.json",
-      "description": "Optional. Verifier-provided requirements included for signer context only."
+      "description": "Optional. Proposer-supplied coordination requirements included for signer context only."
     }
   },
   "required": ["version", "type", "executionPayload", "actionEnvelope"],
@@ -2354,7 +2370,7 @@ All standalone schemas use `$ref` to definitions. The combined `mpas-base-0.2.sc
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://oma3.org/schemas/mpas/base/0.2/authorization-requirements.json",
   "title": "MPAS Authorization Requirements",
-  "description": "Describes what approvals or conditions are needed for a proposed Action to be accepted by the Verifier. Not a guarantee of future execution.",
+  "description": "Describes anticipated approval conditions for one Action Envelope. May be returned by a Verifier as advisory feedback or authored by a Proposer as Coordination input. Not proof of authorship or a guarantee of future execution.",
   "type": "object",
   "properties": {
     "version": { "$ref": "definitions.json#/$defs/Version" },
@@ -2376,7 +2392,10 @@ All standalone schemas use `$ref` to definitions. The combined `mpas-base-0.2.sc
     "verifier": {
       "type": "object",
       "properties": {
-        "did": { "$ref": "definitions.json#/$defs/DID" }
+        "did": {
+          "$ref": "definitions.json#/$defs/DID",
+          "description": "Verifier whose anticipated policy these requirements are intended to satisfy; does not assert authorship."
+        }
       },
       "required": ["did"],
       "additionalProperties": false

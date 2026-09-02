@@ -121,7 +121,7 @@ describe("coordination HTTP endpoint", () => {
     });
 
     expect(poll.json().actionUpdates[0]).toMatchObject({
-      state: "readyForResubmission",
+      state: "readyForSubmission",
       actionPackage: {
         type: "ActionPackage",
       },

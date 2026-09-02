@@ -69,7 +69,7 @@ describe("coordination daemon", () => {
     expect(proposerPoll).toMatchObject({
       actionUpdates: [
         expect.objectContaining({
-          state: "readyForResubmission",
+          state: "readyForSubmission",
           actionPackage: expect.objectContaining({
             type: "ActionPackage",
           }),

@@ -194,7 +194,7 @@ export type ActionStatus = "pending" | "approved" | "rejected" | "executed" | "f
 
 export type CoordinationState =
   | "awaitingApprovals"
-  | "readyForResubmission"
+  | "readyForSubmission"
   | "executed"
   | "rejected"
   | "cancelled"

@@ -135,7 +135,7 @@ describe("coordination RFC 9421 authentication", () => {
       pollRequest(proposer.fixture.did),
       proposer.signer,
     );
-    expect(proposerPoll.json().actionUpdates[0]).toMatchObject({ state: "readyForResubmission" });
+    expect(proposerPoll.json().actionUpdates[0]).toMatchObject({ state: "readyForSubmission" });
     expect(proposerPoll.json().actionUpdates[0].actionPackage.approvalBundle.approvals).toHaveLength(3);
   });
 

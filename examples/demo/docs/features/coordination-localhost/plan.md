@@ -30,7 +30,7 @@ It does not produce:
 - Execution receipt production.
 - WebSocket, SSE, or webhook delivery.
 
-The proposer always submits Action Packages directly to the Credential Adapter. The coordination service stores pending workflows, collects Approvals, and assembles completed Action Packages for the proposer to fetch and resubmit.
+The proposer always submits Action Packages directly to the Credential Adapter. After an initial Action receives advisory requirements, the proposer constructs a replacement Action. The coordination service stores that replacement workflow, collects its Approvals, and assembles its completed Action Package for the proposer to fetch and submit.
 
 ---
 
@@ -53,7 +53,7 @@ The proposer always submits Action Packages directly to the Credential Adapter. 
 
 Add coordination types under `src/coordination/types.ts`:
 
-- `CoordinationState` — `awaitingApprovals | readyForResubmission | cancelled`
+- `CoordinationState` — `awaitingApprovals | readyForSubmission | cancelled`
 - `ActionRef` — `{ actionId, actionEnvelopeHash }`
 - `CoordinationActionRequest` — contains `actionPackage` and `authorizationRequirements`
 - `CoordinationActionResponse` — contains `actionRef`, `state`, `createdAt`
@@ -195,7 +195,7 @@ Implement simple threshold readiness:
 - default required decision to `approve`;
 - count unique eligible signer DIDs whose Approval decision matches;
 - track `approved`, `rejected`, and `pending` DIDs for progress reporting;
-- transition to `readyForResubmission` when thresholds appear satisfied.
+- transition to `readyForSubmission` when thresholds appear satisfied.
 - transition the non-authoritative workflow to `rejected` when immutable decisions make every required path unreachable.
 
 This is a hint only.
@@ -214,14 +214,14 @@ Implement assembly of a completed Action Package from stored data:
 
 Do not modify original Approval objects.
 
-**Done when:** When state is `readyForResubmission`, the store can produce a completed Action Package whose Approval Bundle contains the Proposer's original Approval plus all collected Approvals, and whose payload/envelope match the originals.
+**Done when:** When state is `readyForSubmission`, the store can produce a completed Action Package whose Approval Bundle contains the Proposer's original Approval plus all collected Approvals, and whose payload/envelope match the originals.
 
 #### Task 1.7: Cancel action
 
 Implement cancellation:
 
 - verify the requesting DID matches `actionPackage.actionEnvelope.proposer.did`;
-- reject if action is already `readyForResubmission` (`409`);
+- reject if action is already `readyForSubmission` (`409`);
 - reject if action ref is unknown (`404`);
 - transition to `cancelled`;
 - set `cancelledAt`.
@@ -235,7 +235,7 @@ Implement the unified poll:
 - accept a DID;
 - find all actions in `awaitingApprovals` where the DID is in `eligibleSigners` → build `approvalRequests`;
 - find all actions where the DID matches the proposer → build `actionUpdates` with progress and state;
-- include completed `actionPackage` in updates where state is `readyForResubmission`;
+- include completed `actionPackage` in updates where state is `readyForSubmission`;
 - include `cancelledAt` in updates where state is `cancelled`;
 - return both arrays (either may be empty).
 
@@ -273,7 +273,7 @@ Return status and basic in-memory counters:
 
 - total actions;
 - awaiting approvals;
-- ready for resubmission.
+- ready for submission.
 
 **Done when:** Fastify `inject()` test returns `200` and expected counters.
 
@@ -347,7 +347,7 @@ Behavior:
 - return cancel response on success;
 - return `404` for unknown action ref;
 - return `403` if DID does not match proposer;
-- return `409` if action is already `readyForResubmission`.
+- return `409` if action is already `readyForSubmission`.
 
 **Done when:** Fastify `inject()` tests cover successful cancel, non-proposer rejected, ready action rejected, unknown action.
 
@@ -395,13 +395,13 @@ Create an integration test using Fastify `inject()` and existing fixtures:
 3. Poll as an eligible signer and receive an Approval Request with Signer Review Set.
 4. Submit a valid maintainer Approval via `POST /approval`.
 5. Poll as a second eligible signer and submit a second Approval.
-6. Poll as proposer and see `readyForResubmission` with a completed Action Package.
+6. Poll as proposer and see `readyForSubmission` with a completed Action Package.
 7. Take the completed Action Package from the poll response and submit it directly to the adapter.
 8. Verify the adapter returns an Execution Receipt.
 
 The coordination service must not call the adapter in this flow; the test orchestrates both services as the proposer would.
 
-**Done when:** Integration test proves the full approval collection and direct adapter resubmission flow.
+**Done when:** Integration test proves the full approval collection and direct replacement-Action submission flow.
 
 #### Task 3.4: Integration test: cancellation flow
 
@@ -438,13 +438,13 @@ Update `README.md` or daemon docs with:
 - [ ] Store rejects same action ID with different Action Envelope hash using `409 Conflict`.
 - [ ] Signer poll returns Approval Requests only for eligible signers on non-cancelled actions.
 - [ ] Approval submissions are stored unmodified and do not double-count duplicates.
-- [ ] State transitions from `awaitingApprovals` to `readyForResubmission` when threshold count appears satisfied.
+- [ ] State transitions from `awaitingApprovals` to `readyForSubmission` when threshold count appears satisfied.
 - [ ] Proposer poll returns progress (approved/rejected/pending DIDs and counts).
-- [ ] Proposer poll returns a completed Action Package when `readyForResubmission`.
+- [ ] Proposer poll returns a completed Action Package when `readyForSubmission`.
 - [ ] Completed Action Package contains original payload, envelope, and updated bundle with Proposer's original Approval + all collected Approvals.
 - [ ] Proposer can cancel an action in `awaitingApprovals` state.
 - [ ] Cancelled actions are not served to signers.
-- [ ] Cancel returns `409` for actions already in `readyForResubmission`.
+- [ ] Cancel returns `409` for actions already in `readyForSubmission`.
 - [ ] Coordination service never calls the Credential Adapter or any Verifier.
 - [ ] Coordination service runs as a separate process from the adapter.
 - [ ] `mpas coordination start` starts the coordination service independently.
@@ -460,4 +460,4 @@ Update `README.md` or daemon docs with:
 - Keep readiness evaluation intentionally simple and non-authoritative.
 - Preserve stored MPAS artifacts exactly as received.
 - Prefer small pure functions for Action Ref extraction, hash computation, threshold counting, progress computation, and Action Package assembly.
-- The poll response should be efficient: do not re-assemble the Action Package on every poll. Cache the assembled package when the state transitions to `readyForResubmission`.
+- The poll response should be efficient: do not re-assemble the Action Package on every poll. Cache the assembled package when the state transitions to `readyForSubmission`.

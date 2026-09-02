@@ -19,7 +19,7 @@ export function buildMpasTaskMeta(record: WorkflowRecord): MpasTaskMeta {
     typeof actionEnvelopeHash.value !== "string" ||
     actionEnvelopeHash.value !== record.actionEnvelopeHash
   ) {
-    throw new Error(`Workflow ${record.actionId} has an inconsistent Action Envelope hash.`);
+    throw new Error(`Workflow ${record.taskId} has an inconsistent Action Envelope hash.`);
   }
 
   const authorizationState = authorizationStateOf(record);
@@ -40,7 +40,7 @@ export function buildMpasTaskMeta(record: WorkflowRecord): MpasTaskMeta {
 export function workflowProposerDid(record: WorkflowRecord): string {
   const did = actionPackageOf(record).actionEnvelope.proposer?.did;
   if (typeof did !== "string" || did.length === 0) {
-    throw new Error(`Workflow ${record.actionId} has no proposer DID.`);
+    throw new Error(`Workflow ${record.taskId} has no proposer DID.`);
   }
   return did;
 }
@@ -50,14 +50,15 @@ function authorizationStateOf(record: WorkflowRecord): MpasTaskMeta["authorizati
     case "created":
       return "submitted";
     case "awaitingApprovals":
+    case "submittingToCoordination":
       return "authorization_required";
-    case "readyForResubmission":
+    case "readyForSubmission":
     case "submittingToVerifier":
       return "approvals_collected";
     case "awaitingVerifierResult":
       return "pending";
     default:
-      throw new Error(`Cannot build active MPAS metadata for terminal workflow ${record.actionId}.`);
+      throw new Error(`Cannot build active MPAS metadata for terminal workflow ${record.taskId}.`);
   }
 }
 
@@ -73,11 +74,11 @@ function approvalRequirementsOf(record: WorkflowRecord): ApprovalRequirements | 
 function actionPackageOf(record: WorkflowRecord): ActionPackage {
   const value = record.actionPackage;
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new Error(`Workflow ${record.actionId} has no stored Action Package.`);
+    throw new Error(`Workflow ${record.taskId} has no stored Action Package.`);
   }
   const pkg = value as Partial<ActionPackage>;
   if (!pkg.actionEnvelope || !pkg.approvalBundle) {
-    throw new Error(`Workflow ${record.actionId} has an invalid stored Action Package.`);
+    throw new Error(`Workflow ${record.taskId} has an invalid stored Action Package.`);
   }
   return pkg as ActionPackage;
 }

@@ -173,6 +173,30 @@ function parseActionResponseAt(value: unknown, path: string): ActionResponse {
   if (typeof object.result !== "string" || !ACTION_RESPONSE_RESULTS.has(object.result)) {
     throw new RoutingValidationError("ActionResponse.result is invalid.", `${path}.result`);
   }
+  if (object.authorizationRequirements !== undefined) {
+    const verifier = requireRecord(object.verifier, `${path}.verifier`, "ActionResponse.verifier is required.");
+    const verifierDid = requireDid(verifier.did, `${path}.verifier.did`);
+    const requirements = requireRecord(
+      object.authorizationRequirements,
+      `${path}.authorizationRequirements`,
+      "ActionResponse.authorizationRequirements must be an object.",
+    );
+    const requirementsVerifier = requireRecord(
+      requirements.verifier,
+      `${path}.authorizationRequirements.verifier`,
+      "AuthorizationRequirements.verifier is required.",
+    );
+    const requirementsVerifierDid = requireDid(
+      requirementsVerifier.did,
+      `${path}.authorizationRequirements.verifier.did`,
+    );
+    if (requirementsVerifierDid !== verifierDid) {
+      throw new RoutingValidationError(
+        "AuthorizationRequirements.verifier.did must equal ActionResponse.verifier.did.",
+        `${path}.authorizationRequirements.verifier.did`,
+      );
+    }
+  }
   return object as unknown as ActionResponse;
 }
 
