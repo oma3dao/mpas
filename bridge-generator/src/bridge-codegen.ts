@@ -680,9 +680,32 @@ export class SqliteWorkflowStore implements WorkflowStore {
       return;
     }
 
-    // Legacy schemas (v1, v2) used action_id as both Task ID and Action ID.
-    // Discard expired workflow rows and initialize the current schema.
+    // Legacy schemas (v1, v2) stored action_id as both the Task ID and
+    // Action ID, which is incompatible with the current model where they
+    // must be distinct. Synthesizing Task IDs for existing rows would
+    // create aliases that conflict with the new uniqueness constraints.
+    //
+    // This migration assumes no outstanding legacy workflows require
+    // preservation. If active workflows exist, the store refuses to start
+    // unless explicitly overridden via MPAS_ALLOW_LEGACY_WORKFLOW_RESET=1.
+    // Operators should cancel affected Coordination workflows first.
     if (version >= 1 && version < SCHEMA_VERSION) {
+      const row = this.db.prepare("SELECT COUNT(*) AS cnt FROM workflows").get() as { cnt: number };
+      if (row.cnt > 0) {
+        // v1 has only action_id; v2 added current_action_id. Query the
+        // columns that exist in every legacy schema.
+        const active = this.db.prepare(
+          "SELECT action_id FROM workflows WHERE state NOT IN ('resolved', 'unresolvable', 'cancelled')",
+        ).all() as { action_id: string }[];
+        if (active.length > 0 && !process.env.MPAS_ALLOW_LEGACY_WORKFLOW_RESET) {
+          const ids = active.map((r) => r.action_id).join(", ");
+          this.db.close();
+          throw new Error(
+            \`Legacy workflow store (schema v\${version}) contains \${active.length} active workflow(s) that will be discarded: \${ids}. \` +
+            "Cancel them via the Coordination Service before upgrading, or set MPAS_ALLOW_LEGACY_WORKFLOW_RESET=1 to accept the loss.",
+          );
+        }
+      }
       this.db.exec(\`
         BEGIN IMMEDIATE;
         DROP TABLE IF EXISTS workflow_action_aliases;

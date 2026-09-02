@@ -313,7 +313,7 @@ describe("durability across restart", () => {
     expect(store.claimWorkflow(TASK_ID, "worker-b", HOUR)).toBe(true);
   });
 
-  it("discards legacy v1 workflow rows and initializes the current schema cleanly", () => {
+  it("refuses to open a legacy v1 store with active workflows unless overridden", () => {
     store.close();
     rmSync(dbPath, { force: true });
     const legacy = new DatabaseSync(dbPath);
@@ -355,21 +355,103 @@ describe("durability across restart", () => {
     );
     legacy.close();
 
-    // Legacy rows are discarded; the store opens with a clean schema.
+    expect(() => openStore()).toThrow(/MPAS_ALLOW_LEGACY_WORKFLOW_RESET/);
+    // The error message includes the action ID being discarded.
+    expect(() => openStore()).toThrow(ACTION_ID);
+    store = { close() {} } as SqliteWorkflowStore;
+  });
+
+  it("discards legacy v1 workflow rows when MPAS_ALLOW_LEGACY_WORKFLOW_RESET is set", () => {
+    store.close();
+    rmSync(dbPath, { force: true });
+    const legacy = new DatabaseSync(dbPath);
+    legacy.exec(`
+      CREATE TABLE workflows (
+        action_id                  TEXT PRIMARY KEY,
+        envelope_hash              TEXT NOT NULL,
+        tool_name                  TEXT NOT NULL,
+        state                      TEXT NOT NULL,
+        action_package             TEXT NOT NULL,
+        authorization_requirements TEXT,
+        coordination_ref           TEXT,
+        completed_package          TEXT,
+        adapter_attempts           TEXT NOT NULL DEFAULT '[]',
+        last_action_response       TEXT,
+        expires_at                 TEXT NOT NULL,
+        created_at                 TEXT NOT NULL,
+        updated_at                 TEXT NOT NULL,
+        claimed_by                 TEXT,
+        claim_expires_ms           INTEGER,
+        resolved_at                TEXT,
+        resolution                 TEXT
+      );
+      PRAGMA user_version = 1;
+    `);
+    legacy.prepare(
+      `INSERT INTO workflows (
+         action_id, envelope_hash, tool_name, state, action_package,
+         adapter_attempts, expires_at, created_at, updated_at
+       ) VALUES (?, ?, ?, 'created', ?, '[]', ?, ?, ?)`,
+    ).run(
+      ACTION_ID,
+      HASH,
+      "merge_pull_request_mirror",
+      JSON.stringify({ fake: "legacy-action-package", actionId: ACTION_ID }),
+      EXPIRES_AT,
+      "2026-07-26T18:00:00.000Z",
+      "2026-07-26T18:00:00.000Z",
+    );
+    legacy.close();
+
+    process.env.MPAS_ALLOW_LEGACY_WORKFLOW_RESET = "1";
+    try {
+      store = openStore();
+      expect(store.getWorkflow(ACTION_ID)).toBeUndefined();
+      expect(store.listRecoverableWorkflows()).toHaveLength(0);
+
+      store.close();
+      const upgraded = new DatabaseSync(dbPath);
+      const { user_version } = upgraded.prepare("PRAGMA user_version").get() as { user_version: number };
+      expect(user_version).toBe(3);
+      upgraded.close();
+      store = openStore();
+    } finally {
+      delete process.env.MPAS_ALLOW_LEGACY_WORKFLOW_RESET;
+    }
+  });
+
+  it("silently migrates a legacy v1 store with only terminal workflows", () => {
+    store.close();
+    rmSync(dbPath, { force: true });
+    const legacy = new DatabaseSync(dbPath);
+    legacy.exec(`
+      CREATE TABLE workflows (
+        action_id TEXT PRIMARY KEY, envelope_hash TEXT NOT NULL,
+        tool_name TEXT NOT NULL, state TEXT NOT NULL,
+        action_package TEXT NOT NULL, adapter_attempts TEXT NOT NULL DEFAULT '[]',
+        expires_at TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+        resolved_at TEXT, resolution TEXT
+      );
+      PRAGMA user_version = 1;
+    `);
+    legacy.prepare(
+      `INSERT INTO workflows (action_id, envelope_hash, tool_name, state, action_package,
+       adapter_attempts, expires_at, created_at, updated_at, resolved_at, resolution)
+       VALUES (?, ?, ?, 'resolved', '{}', '[]', ?, ?, ?, ?, ?)`,
+    ).run(
+      ACTION_ID, HASH, "some_tool", EXPIRES_AT,
+      "2026-07-26T18:00:00.000Z", "2026-07-26T18:00:00.000Z",
+      "2026-07-26T18:01:00.000Z", JSON.stringify({ kind: "resolved", actionResponse: { result: "executed" } }),
+    );
+    legacy.close();
+
+    // No active workflows → migrates silently without the env var.
     store = openStore();
     expect(store.getWorkflow(ACTION_ID)).toBeUndefined();
     expect(store.listRecoverableWorkflows()).toHaveLength(0);
-
-    // Verify schema is current: the PRAGMA user_version is SCHEMA_VERSION (3).
-    store.close();
-    const upgraded = new DatabaseSync(dbPath);
-    const { user_version } = upgraded.prepare("PRAGMA user_version").get() as { user_version: number };
-    expect(user_version).toBe(3);
-    upgraded.close();
-    store = openStore();
   });
 
-  it("discards legacy v2 workflow rows including aliases", () => {
+  it("discards legacy v2 workflow rows including aliases when overridden", () => {
     store.close();
     rmSync(dbPath, { force: true });
     const legacy = new DatabaseSync(dbPath);
@@ -410,10 +492,15 @@ describe("durability across restart", () => {
     legacy.prepare("INSERT INTO workflow_action_aliases (action_id, task_id) VALUES (?, ?)").run(OTHER_ID, ACTION_ID);
     legacy.close();
 
-    store = openStore();
-    expect(store.getWorkflow(ACTION_ID)).toBeUndefined();
-    expect(store.getWorkflowByActionId(OTHER_ID)).toBeUndefined();
-    expect(store.listRecoverableWorkflows()).toHaveLength(0);
+    process.env.MPAS_ALLOW_LEGACY_WORKFLOW_RESET = "1";
+    try {
+      store = openStore();
+      expect(store.getWorkflow(ACTION_ID)).toBeUndefined();
+      expect(store.getWorkflowByActionId(OTHER_ID)).toBeUndefined();
+      expect(store.listRecoverableWorkflows()).toHaveLength(0);
+    } finally {
+      delete process.env.MPAS_ALLOW_LEGACY_WORKFLOW_RESET;
+    }
   });
 
   it("creates a workflow with distinct taskId and actionId after a legacy upgrade", () => {
@@ -436,12 +523,17 @@ describe("durability across restart", () => {
     ).run("legacy-action", HASH, "some_tool", EXPIRES_AT, "2026-07-26T18:00:00.000Z", "2026-07-26T18:00:00.000Z");
     legacy.close();
 
-    store = openStore();
-    const record = createDefault(store);
-    expect(record.taskId).toBe(TASK_ID);
-    expect(record.actionId).toBe(ACTION_ID);
-    expect(record.taskId).not.toBe(record.actionId);
-    expect(store.getWorkflowByActionId(ACTION_ID)?.taskId).toBe(TASK_ID);
+    process.env.MPAS_ALLOW_LEGACY_WORKFLOW_RESET = "1";
+    try {
+      store = openStore();
+      const record = createDefault(store);
+      expect(record.taskId).toBe(TASK_ID);
+      expect(record.actionId).toBe(ACTION_ID);
+      expect(record.taskId).not.toBe(record.actionId);
+      expect(store.getWorkflowByActionId(ACTION_ID)?.taskId).toBe(TASK_ID);
+    } finally {
+      delete process.env.MPAS_ALLOW_LEGACY_WORKFLOW_RESET;
+    }
   });
 
   it("enforces Action-ID uniqueness and alias behavior after a legacy reset", () => {
