@@ -93,10 +93,25 @@ export interface BridgeWorkflowEngineOptions {
   proposerDid: Did;
   /** Distinguishes workers contending for the same store. */
   workerId?: string;
-  /** Worker claim lease. Default 60s. */
+  /**
+   * Maximum wait of one claimed Action or Coordination submit. Must match the
+   * Action endpoint (and Coordination) client timeout. The HTTP profile does
+   * not fix relay wait duration. Default {@link DEFAULT_SUBMISSION_TIMEOUT_MS}.
+   */
+  submissionTimeoutMs?: number;
+  /**
+   * Worker claim lease. Must exceed {@link submissionTimeoutMs} so a
+   * cross-process peer cannot take the workflow mid-submit. Default
+   * {@link DEFAULT_CLAIM_LEASE_MS}.
+   */
   claimLeaseMs?: number;
   now?: () => number;
 }
+
+/** Default Action/Coordination HTTP wait. Keep aligned with ActionEndpointClient. */
+export const DEFAULT_SUBMISSION_TIMEOUT_MS = 30_000;
+/** Default worker claim lease. Must exceed {@link DEFAULT_SUBMISSION_TIMEOUT_MS}. */
+export const DEFAULT_CLAIM_LEASE_MS = 60_000;
 
 export type ProposeResult =
   | { kind: "settled"; record: WorkflowRecord; actionResponse: ActionResponse }
@@ -116,12 +131,15 @@ export class BridgeWorkflowEngine {
   private readonly now: () => number;
   private readonly waiters = new Map<string, Set<(record: WorkflowRecord) => void>>();
   /**
-   * One process-local outbound dispatcher owns every Action submission. The
-   * durable store claim extends that ownership across bridge processes.
-   * Request handlers and polling code enqueue work here; neither submits an
-   * Action directly.
+   * Per-Task outbound lanes. Each Task ID serializes that Task's initial,
+   * replacement, Coordination, and completed submissions so the request
+   * handler and poller cannot double-submit. Distinct Task IDs run
+   * concurrently. The durable store claim extends ownership across
+   * processes; it does not serialize same-process submitters. The claim
+   * lease must exceed the submission timeout so that ownership cannot
+   * expire mid-submit.
    */
-  private outboundTail: Promise<void> = Promise.resolve();
+  private readonly outboundTails = new Map<string, Promise<void>>();
 
   constructor(options: BridgeWorkflowEngineOptions) {
     this.store = options.store;
@@ -151,7 +169,13 @@ export class BridgeWorkflowEngine {
     this.buildCoordinationReplacement = options.buildCoordinationReplacement;
     this.proposerDid = options.proposerDid;
     this.workerId = options.workerId ?? `worker-${process.pid}`;
-    this.claimLeaseMs = options.claimLeaseMs ?? 60_000;
+    const submissionTimeoutMs = options.submissionTimeoutMs ?? DEFAULT_SUBMISSION_TIMEOUT_MS;
+    this.claimLeaseMs = options.claimLeaseMs ?? DEFAULT_CLAIM_LEASE_MS;
+    if (!(this.claimLeaseMs > submissionTimeoutMs)) {
+      throw new Error(
+        `claimLeaseMs (${this.claimLeaseMs}) must exceed submissionTimeoutMs (${submissionTimeoutMs}).`,
+      );
+    }
     this.now = options.now ?? (() => Date.now());
   }
 
@@ -165,10 +189,10 @@ export class BridgeWorkflowEngine {
       throw new Error("Task ID and Action ID must be distinct.");
     }
     const record = this.store.createWorkflow(input);
-    return this.dispatchOutbound(async () => {
+    return this.dispatchOutbound(record.taskId, async () => {
       const current = this.mustGet(record.taskId);
       if (current.state !== "created") {
-        return { kind: "deferred", record: current };
+        return this.resultFromRecord(current);
       }
       if (!this.store.claimWorkflow(current.taskId, this.workerId, this.claimLeaseMs)) {
         return { kind: "deferred", record: this.mustGet(current.taskId) };
@@ -199,7 +223,7 @@ export class BridgeWorkflowEngine {
       }
     }
 
-    await this.dispatchOutbound(() => this.advanceClaimable());
+    await this.advanceClaimable();
   }
 
   /** Cooperatively cancel a visible workflow without advancing it. */
@@ -232,37 +256,8 @@ export class BridgeWorkflowEngine {
 
   /** Startup reconciliation (feature spec §9.4). Idempotent. */
   async reconcile(): Promise<void> {
-    await this.dispatchOutbound(async () => {
-      this.sweepExpired();
-
-      for (const record of this.store.listRecoverableWorkflows()) {
-        if (!this.store.claimWorkflow(record.taskId, this.workerId, this.claimLeaseMs)) {
-          continue;
-        }
-        switch (record.state) {
-          case "created":
-            await this.submitInitial(record);
-            break;
-          case "submittingToCoordination":
-            await this.submitToCoordination(record);
-            break;
-          case "submittingToVerifier":
-            // Crash mid-submission: the identical package may or may not have
-            // been transmitted. Resubmit identically; the ledger dedups.
-            this.store.compareAndSetState(record.taskId, "submittingToVerifier", "readyForSubmission");
-            await this.submitCompleted(this.mustGet(record.taskId));
-            break;
-          case "readyForSubmission":
-            await this.submitCompleted(record);
-            break;
-          case "awaitingVerifierResult":
-            await this.submitCompleted(record);
-            break;
-          case "awaitingApprovals":
-            break; // pollOnce advances these when coordination reports progress.
-        }
-      }
-    });
+    this.sweepExpired();
+    await this.advanceClaimable();
   }
 
   /**
@@ -297,7 +292,10 @@ export class BridgeWorkflowEngine {
   private async submitInitial(record: WorkflowRecord): Promise<ProposeResult> {
     const current = this.store.getWorkflow(record.taskId);
     if (!current || isTerminal(current) || current.state !== "created") {
-      return { kind: "deferred", record: current ?? record };
+      return this.resultFromRecord(current ?? record);
+    }
+    if (!this.holdClaim(current.taskId)) {
+      return this.resultFromRecord(this.mustGet(current.taskId));
     }
 
     let response: ActionResponse;
@@ -389,6 +387,9 @@ export class BridgeWorkflowEngine {
   }
 
   private async submitToCoordination(record: WorkflowRecord): Promise<ProposeResult> {
+    if (!this.holdClaim(record.taskId)) {
+      return this.resultFromRecord(this.mustGet(record.taskId));
+    }
     try {
       const coordination = await this.coordinationService.createApprovalWorkflow({
         actionPackage: record.actionPackage as ActionPackage,
@@ -461,26 +462,66 @@ export class BridgeWorkflowEngine {
   }
 
   private async advanceClaimable(): Promise<void> {
-    for (const record of this.store.listRecoverableWorkflows()) {
-      if (
-        record.state !== "created" &&
-        record.state !== "submittingToCoordination" &&
-        record.state !== "readyForSubmission" &&
-        record.state !== "awaitingVerifierResult"
-      ) {
-        continue;
+    await Promise.all(
+      this.store
+        .listRecoverableWorkflows()
+        .filter((record) => record.state !== "awaitingApprovals")
+        .map((record) => this.dispatchClaimable(record)),
+    );
+  }
+
+  /**
+   * Enqueue one recoverable row on its Task lane. Claim and submit happen
+   * only after joining that lane, so a concurrent `propose` for the same
+   * Task cannot double-submit, and other Tasks are not blocked.
+   */
+  private async dispatchClaimable(record: WorkflowRecord): Promise<void> {
+    await this.dispatchOutbound(record.taskId, async () => {
+      const current = this.store.getWorkflow(record.taskId);
+      if (!current || isTerminal(current)) {
+        return;
       }
-      if (!this.store.claimWorkflow(record.taskId, this.workerId, this.claimLeaseMs)) {
-        continue;
+      switch (current.state) {
+        case "created":
+        case "submittingToCoordination":
+        case "readyForSubmission":
+        case "submittingToVerifier":
+        case "awaitingVerifierResult":
+          break;
+        default:
+          return;
       }
-      if (record.state === "created") {
-        await this.submitInitial(record);
-      } else if (record.state === "submittingToCoordination") {
-        await this.submitToCoordination(record);
-      } else {
-        await this.submitCompleted(record);
+      if (!this.store.claimWorkflow(current.taskId, this.workerId, this.claimLeaseMs)) {
+        return;
+      }
+      const claimed = this.mustGet(current.taskId);
+      switch (claimed.state) {
+        case "created":
+          await this.submitInitial(claimed);
+          break;
+        case "submittingToCoordination":
+          await this.submitToCoordination(claimed);
+          break;
+        case "readyForSubmission":
+        case "submittingToVerifier":
+        case "awaitingVerifierResult":
+          await this.submitCompleted(claimed);
+          break;
+      }
+    });
+  }
+
+  private resultFromRecord(record: WorkflowRecord): ProposeResult {
+    if (record.state === "resolved") {
+      const resolution = record.resolution;
+      if (resolution?.kind === "resolved") {
+        const actionResponse = asActionResponse(resolution.actionResponse);
+        if (actionResponse !== undefined) {
+          return { kind: "settled", record, actionResponse };
+        }
       }
     }
+    return { kind: "deferred", record };
   }
 
   /**
@@ -490,6 +531,9 @@ export class BridgeWorkflowEngine {
    * Action's outcome.
    */
   private async submitCompleted(record: WorkflowRecord): Promise<void> {
+    if (!this.holdClaim(record.taskId)) {
+      return;
+    }
     const pkg = record.completedPackage ?? record.actionPackage;
     if (record.state === "readyForSubmission") {
       if (!this.store.compareAndSetState(record.taskId, "readyForSubmission", "submittingToVerifier")) {
@@ -592,15 +636,32 @@ export class BridgeWorkflowEngine {
   }
 
   /**
-   * Enqueue outbound work and wake the dispatcher immediately. Rejections do
-   * not poison the queue; the next durable workflow remains dispatchable.
+   * Refresh this worker's claim immediately before an outbound wait. Same-worker
+   * renew is required so an Action submit followed by a Coordination submit
+   * does not stack two HTTP waits against one lease.
    */
-  private dispatchOutbound<T>(operation: () => Promise<T>): Promise<T> {
-    const dispatched = this.outboundTail.then(operation, operation);
-    this.outboundTail = dispatched.then(
+  private holdClaim(taskId: string): boolean {
+    return this.store.claimWorkflow(taskId, this.workerId, this.claimLeaseMs);
+  }
+
+  /**
+   * Enqueue outbound work on one Task's lane and run it as soon as that
+   * lane is free. Rejections do not poison the lane; the map entry is
+   * dropped when this tail is still current so idle Tasks do not leak.
+   */
+  private dispatchOutbound<T>(taskId: string, operation: () => Promise<T>): Promise<T> {
+    const previous = this.outboundTails.get(taskId) ?? Promise.resolve();
+    const dispatched = previous.then(operation, operation);
+    const tail = dispatched.then(
       () => undefined,
       () => undefined,
     );
+    this.outboundTails.set(taskId, tail);
+    void tail.then(() => {
+      if (this.outboundTails.get(taskId) === tail) {
+        this.outboundTails.delete(taskId);
+      }
+    });
     return dispatched;
   }
 }

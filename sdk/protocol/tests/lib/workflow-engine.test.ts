@@ -7,9 +7,11 @@ import {
   type ActionResponse,
   type CoordinationActionUpdate,
 } from "../../src/index.js";
-import { MemoryWorkflowStore, type WorkflowStore } from "../../src/lib/workflow-store.js";
+import { MemoryWorkflowStore, type CreateWorkflowInput, type WorkflowStore } from "../../src/lib/workflow-store.js";
 import {
   BridgeWorkflowEngine,
+  DEFAULT_CLAIM_LEASE_MS,
+  DEFAULT_SUBMISSION_TIMEOUT_MS,
   type WorkflowActionEndpoint,
   type WorkflowAdapter,
   type WorkflowCoordination,
@@ -26,7 +28,9 @@ import {
  */
 
 const TASK_ID = "urn:uuid:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+const TASK_ID_B = "urn:uuid:bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 const ACTION_ID = "urn:uuid:11111111-1111-4111-8111-111111111111";
+const ACTION_ID_B = "urn:uuid:33333333-3333-4333-8333-333333333333";
 const REPLACEMENT_ACTION_ID = "urn:uuid:22222222-2222-4222-8222-222222222222";
 const HASH = "b64url-envelope-digest";
 const IDEMPOTENCY_KEY = "initial-action-attempt";
@@ -130,6 +134,8 @@ function makeEngine(opts: {
   coordination?: WorkflowCoordination;
   store?: WorkflowStore;
   now?: () => number;
+  claimLeaseMs?: number;
+  submissionTimeoutMs?: number;
 }) {
   const store = opts.store ?? new MemoryWorkflowStore({ now: opts.now });
   const engine = new BridgeWorkflowEngine({
@@ -166,6 +172,8 @@ function makeEngine(opts: {
     },
     workerId: "test-worker",
     now: opts.now,
+    ...(opts.claimLeaseMs !== undefined ? { claimLeaseMs: opts.claimLeaseMs } : {}),
+    ...(opts.submissionTimeoutMs !== undefined ? { submissionTimeoutMs: opts.submissionTimeoutMs } : {}),
   });
   return { engine, store };
 }
@@ -184,6 +192,31 @@ function proposalInput() {
     expiresAt: EXPIRES_AT,
   };
 }
+
+describe("claim lease", () => {
+  it("accepts the default lease above the default submission timeout", () => {
+    expect(() => makeEngine({ adapter: fakeAdapter(response("executed")) })).not.toThrow();
+  });
+
+  it("rejects a lease that does not exceed the submission timeout", () => {
+    expect(() =>
+      makeEngine({
+        adapter: fakeAdapter(response("executed")),
+        claimLeaseMs: DEFAULT_SUBMISSION_TIMEOUT_MS,
+        submissionTimeoutMs: DEFAULT_SUBMISSION_TIMEOUT_MS,
+      }),
+    ).toThrow(/claimLeaseMs .* must exceed submissionTimeoutMs/);
+  });
+
+  it("rejects the default lease when the submission timeout is raised past it", () => {
+    expect(() =>
+      makeEngine({
+        adapter: fakeAdapter(response("executed")),
+        submissionTimeoutMs: DEFAULT_CLAIM_LEASE_MS,
+      }),
+    ).toThrow(/claimLeaseMs .* must exceed submissionTimeoutMs/);
+  });
+});
 
 describe("propose", () => {
   it("rejects a Task ID reused as the Action ID", async () => {
@@ -295,6 +328,76 @@ describe("propose", () => {
       actionId: REPLACEMENT_ACTION_ID,
     });
     expect(store.getWorkflow(TASK_ID)?.resolution).toBeUndefined();
+  });
+
+  it("submits independent Tasks concurrently", async () => {
+    let inFlight = 0;
+    let maxInFlight = 0;
+    let markBothStarted!: () => void;
+    const bothStarted = new Promise<void>((resolve) => {
+      markBothStarted = resolve;
+    });
+    let releaseResponses!: () => void;
+    const responseGate = new Promise<void>((resolve) => {
+      releaseResponses = resolve;
+    });
+    const actionEndpoint: WorkflowActionEndpoint = {
+      async submitActionRequest() {
+        inFlight += 1;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        if (inFlight === 2) {
+          markBothStarted();
+        }
+        await responseGate;
+        inFlight -= 1;
+        return response("executed");
+      },
+    };
+    const { engine } = makeEngine({ actionEndpoint });
+
+    const first = engine.propose(proposalInput());
+    const second = engine.propose({
+      ...proposalInput(),
+      taskId: TASK_ID_B,
+      actionId: ACTION_ID_B,
+      actionIdempotencyKey: "other-action-attempt",
+      actionPackage: {
+        fake: "other-package",
+        actionEnvelope: { proposer: { did: PROPOSER_DID }, actionId: { value: ACTION_ID_B } },
+      },
+    });
+    await bothStarted;
+    expect(maxInFlight).toBe(2);
+    releaseResponses();
+    const [firstOutcome, secondOutcome] = await Promise.all([first, second]);
+
+    expect(firstOutcome.kind).toBe("settled");
+    expect(secondOutcome.kind).toBe("settled");
+  });
+
+  it("returns settled when the same Task already resolved on its lane", async () => {
+    class CreateHookStore extends MemoryWorkflowStore {
+      onCreate: (() => void) | undefined;
+      override createWorkflow(input: CreateWorkflowInput) {
+        const record = super.createWorkflow(input);
+        this.onCreate?.();
+        return record;
+      }
+    }
+    const store = new CreateHookStore();
+    const adapter = fakeAdapter(response("executed", { executionResult: { content: [] } }));
+    const { engine } = makeEngine({ adapter, store });
+    store.onCreate = () => {
+      void engine.pollOnce();
+    };
+
+    const outcome = await engine.propose(proposalInput());
+
+    expect(outcome.kind).toBe("settled");
+    if (outcome.kind === "settled") {
+      expect(outcome.actionResponse.result).toBe("executed");
+    }
+    expect(adapter.calls).toHaveLength(1);
   });
 
   it("defers on additionalApprovalsRequired and hands the action to coordination", async () => {

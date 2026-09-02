@@ -141,7 +141,7 @@ The OMA3 GitHub proposer bridge implements the MPAS Proposer role on behalf of
 the MCP client. Its reference implementation:
 
 - creates and signs the initial Action Package;
-- durably queues it for the bridge's sole outbound dispatcher;
+- durably queues it on that Task's outbound dispatcher lane;
 - waits for the initial Credential Adapter response;
 - submits approval-gated actions to the Coordination Service;
 - returns the native result when the initial Action settles quickly, otherwise
@@ -183,9 +183,10 @@ own; the client track is asynchronous relative to it and may be empty.
 1. Client calls an upstream-named tool on the proposer bridge.
 2. Bridge creates and durably records the stable Task, initial Action Package,
    and queued submission.
-3. The request handler wakes the bridge's sole outbound dispatcher and waits
-   for its initial result. The dispatcher submits A1; neither the request
-   handler nor the Coordination poller submits Actions.
+3. The request handler enqueues that Task's outbound dispatcher lane and waits
+   for its initial result. The lane submits A1 for this Task; neither the
+   request handler nor the Coordination poller submits Actions. Distinct Tasks
+   keep independent lanes and may submit concurrently.
 
    If the adapter answers immediately with a native terminal result, the
    bridge stores it and returns the normal native MCP result. If processing is
@@ -197,8 +198,8 @@ own; the client track is asynchronous relative to it and may be empty.
 5. A bridge-owned Coordination poller continues polling or reconciliation.
 6. Maintainers submit signed Approvals.
 7. Coordination Service exposes the completed Action Package.
-8. The poller durably queues the completed package and wakes the outbound
-   dispatcher, which submits it to the adapter.
+8. The poller durably queues the completed package on that Task's outbound
+   dispatcher lane, which submits it to the adapter.
 9. Adapter verifies, dispatches, and returns the terminal ActionResponse.
 10. Bridge durably stores the complete terminal result.
 ```
@@ -366,15 +367,27 @@ Recovery must be idempotent. Multiple workers must not independently advance
 the same workflow without a lease, compare-and-swap transition, transactional
 claim, or equivalent exclusion mechanism.
 
-Within a bridge process, one serialized outbound dispatcher owns all initial
-and completed Action submissions. Request handlers and Coordination polling
-signal that dispatcher after durable state is committed. A periodic scan is a
-recovery mechanism for lost wakeups, not a second submission path.
+Within a bridge process, each Task has a serialized outbound dispatcher lane
+that owns that Task's initial, replacement, Coordination, and completed Action
+submissions. Distinct Task IDs run concurrently; one Task's A1, replacement,
+handoff, completed submission, and retries stay ordered. Request handlers and
+Coordination polling enqueue that Task's lane after durable state is committed.
+A periodic scan is a recovery mechanism for lost wakeups, not a second
+submission path.
 
 The periodic worker MUST inspect durable local workflow state before making a
 remote Coordination poll. It polls Coordination only while at least one local
 workflow is awaiting Approvals; expiry and outbound recovery scans continue
 locally even when the remote poll is skipped.
+
+The worker claim lease MUST outlive every claimed outbound wait. That wait is
+the Action endpoint client timeout, or the Coordination client timeout when a
+Coordination submit is claimed. The HTTP profile does not fix relay wait
+duration; a deployment that lengthens the relay wait and matching client
+timeout MUST lengthen the claim lease so it still expires only after that
+submit returns. An expired lease during an in-flight submit lets another
+bridge process claim the same workflow and write local resolution state. The
+Verifier dispatch ledger still prevents duplicate target execution.
 
 ### 9.5 Availability
 
@@ -646,8 +659,12 @@ not weaken at-most-once dispatch for any individual Action ID.
 ## 16. Acceptance Criteria
 
 - [ ] GitHub upstream-named calls do not block for the approval window.
-- [ ] The request handler durably records A1, wakes the sole outbound
-      dispatcher, and never submits an Action itself.
+- [ ] The request handler durably records A1, enqueues that Task's outbound
+      dispatcher lane, and never submits an Action itself.
+- [ ] Distinct Tasks may submit concurrently; one Task's submissions remain
+      serialized.
+- [ ] The worker claim lease exceeds the Action and Coordination client
+      timeouts so a submit cannot outlive cross-process ownership.
 - [ ] A terminal initial response returns the normal native MCP result without
       exposing a Task.
 - [ ] Approval-required, pending, or failed initial processing returns a

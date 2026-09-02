@@ -61,6 +61,13 @@ interface WorkflowConfig {
   maxWaitTimeoutSeconds?: number;
   /** Deployment assigns maintainer notification outside the proposing client. */
   notificationAssignedElsewhere?: boolean;
+  /**
+   * Action and Coordination HTTP wait. Must stay below claimLeaseMs.
+   * Default 30000.
+   */
+  submissionTimeoutMs?: number;
+  /** Worker claim lease. Must exceed submissionTimeoutMs. Default 60000. */
+  claimLeaseMs?: number;
 }
 
 interface BridgeConfig extends Omit<ProposerConfig, "approvalStrategy" | "approvalTimeoutMs"> {
@@ -114,12 +121,20 @@ export class GeneratedBridge {
   constructor(config: BridgeConfig) {
     this.tools = loadTools(config.tools);
     const plugin = loadPlugin(config.plugin);
-    const actionEndpoint = new ActionEndpointClient({ url: config.adapterUrl });
     const keyManagerPromise = loadKeyManager(config.agentKey);
-    const coordinationService: WorkflowCoordinationService = config.coordinationUrl
-      ? new CoordinationServiceClient({ url: config.coordinationUrl, signer: keyManagerPromise })
-      : unconfiguredCoordinationService();
     const workflow = config.workflow ?? {};
+    const submissionTimeoutMs = workflow.submissionTimeoutMs;
+    const actionEndpoint = new ActionEndpointClient({
+      url: config.adapterUrl,
+      ...(submissionTimeoutMs !== undefined ? { timeoutMs: submissionTimeoutMs } : {}),
+    });
+    const coordinationService: WorkflowCoordinationService = config.coordinationUrl
+      ? new CoordinationServiceClient({
+          url: config.coordinationUrl,
+          signer: keyManagerPromise,
+          ...(submissionTimeoutMs !== undefined ? { timeoutMs: submissionTimeoutMs } : {}),
+        })
+      : unconfiguredCoordinationService();
     this.store = workflow.dbPath ? new SqliteWorkflowStore(workflow.dbPath) : new MemoryWorkflowStore();
     if (!workflow.dbPath) {
       log("warn", "memory_workflow_store", {
@@ -156,6 +171,8 @@ export class GeneratedBridge {
         ...(workflow.notificationAssignedElsewhere !== undefined
           ? { notificationAssignedElsewhere: workflow.notificationAssignedElsewhere }
           : {}),
+        ...(submissionTimeoutMs !== undefined ? { submissionTimeoutMs } : {}),
+        ...(workflow.claimLeaseMs !== undefined ? { claimLeaseMs: workflow.claimLeaseMs } : {}),
       });
     });
   }

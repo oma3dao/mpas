@@ -126,11 +126,14 @@ export class ActionRelayClient {
   private readonly transport: MpasHttpTransport;
   private readonly participantDid?: Did;
   private readonly webSocketFactory?: ActionRelayWebSocketFactory;
+  readonly timeoutMs: number;
 
   constructor(config: ActionRelayClientConfig) {
     this.url = config.url.replace(/\/+$/, "");
+    this.timeoutMs = config.timeoutMs ?? 30_000;
     this.transport = new MpasHttpTransport({
       ...config,
+      timeoutMs: this.timeoutMs,
       errors: {
         identityMismatch: (requiredDid, signerDid) => new ActionRelayResponseError(
           `Relay request identity ${requiredDid} does not match signer DID ${signerDid}.`,

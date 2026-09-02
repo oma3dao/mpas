@@ -146,8 +146,8 @@ retry behavior explicit:
 - A Coordination polling failure must not prevent independent retry or
   advancement of other claimable workflows.
 - Retry ends when the Action expires or another terminal state wins.
-- Ready packages and pending verifier work continue through the outbound
-  dispatcher submission path.
+- Ready packages and pending verifier work continue through that Task's
+  outbound dispatcher lane.
 
 No detailed approval-progress persistence is added.
 
@@ -257,12 +257,13 @@ Remove:
 Change:
 
 - `getToolDefinitions()` returns exact upstream definitions.
-- `handleToolCall()` durably stores the Task and Action, wakes the sole
-  outbound dispatcher, and waits for the initial result. It returns a normal
-  complete MCP result when A1 settles on that fast path and a flat
+- `handleToolCall()` durably stores the Task and Action, enqueues that Task's
+  outbound dispatcher lane, and waits for the initial result. It returns a
+  normal complete MCP result when A1 settles on that fast path and a flat
   `CreateTaskResult` only when processing is deferred.
 - The request handler and background poller never submit Actions directly;
-  both enqueue work through the outbound dispatcher.
+  both enqueue work through that Task's outbound dispatcher lane. Distinct
+  Tasks keep independent lanes.
 - A background tick polls the remote Coordination Service only when the local
   store contains an `awaitingApprovals` workflow; idle ticks remain local.
 - Existing workflow background `pollIntervalMs` continues to control internal

@@ -27,6 +27,7 @@ import {
 } from "./bridge-compatibility.js";
 import {
   BridgeWorkflowEngine,
+  DEFAULT_SUBMISSION_TIMEOUT_MS,
   type WorkflowActionEndpoint,
   type WorkflowAdapter,
   type WorkflowCoordination,
@@ -71,6 +72,17 @@ export interface ProposerBridgeOptions {
   /** Deployment assigns maintainer notification outside the proposing client. */
   notificationAssignedElsewhere?: boolean;
   workerId?: string;
+  /**
+   * Maximum wait of one claimed Action or Coordination submit. Defaults to the
+   * Action endpoint or Coordination client `timeoutMs` when present, otherwise
+   * {@link DEFAULT_SUBMISSION_TIMEOUT_MS}.
+   */
+  submissionTimeoutMs?: number;
+  /**
+   * Worker claim lease. Must exceed the submission timeout. Default
+   * {@link DEFAULT_CLAIM_LEASE_MS}.
+   */
+  claimLeaseMs?: number;
   now?: () => number;
 }
 
@@ -131,6 +143,8 @@ export class ProposerBridge {
       buildCoordinationReplacement: options.buildCoordinationReplacement,
       proposerDid: options.proposerDid,
       ...(options.workerId !== undefined ? { workerId: options.workerId } : {}),
+      submissionTimeoutMs: options.submissionTimeoutMs ?? inferredSubmissionTimeoutMs(options),
+      ...(options.claimLeaseMs !== undefined ? { claimLeaseMs: options.claimLeaseMs } : {}),
       ...(options.now !== undefined ? { now: options.now } : {}),
     });
   }
@@ -281,4 +295,24 @@ export class ProposerBridge {
     }
     return record;
   }
+}
+
+function inferredSubmissionTimeoutMs(options: ProposerBridgeOptions): number {
+  const timeouts = [
+    clientTimeoutMs(options.actionEndpoint),
+    clientTimeoutMs(options.coordinationService),
+    clientTimeoutMs(options.adapter),
+    clientTimeoutMs(options.coordination),
+  ].filter((value): value is number => value !== undefined);
+  return timeouts.length > 0 ? Math.max(...timeouts) : DEFAULT_SUBMISSION_TIMEOUT_MS;
+}
+
+function clientTimeoutMs(client: object | undefined): number | undefined {
+  if (client === undefined || !("timeoutMs" in client)) {
+    return undefined;
+  }
+  const timeoutMs = (client as { timeoutMs: unknown }).timeoutMs;
+  return typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
+    ? timeoutMs
+    : undefined;
 }

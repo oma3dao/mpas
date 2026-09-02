@@ -56,7 +56,7 @@ export class AdapterRequestError extends Error {
  */
 export class CredentialAdapterClient {
   private readonly url: string;
-  private readonly timeoutMs: number;
+  readonly timeoutMs: number;
   private readonly actionEndpoint: ActionEndpointClient;
 
   constructor(config: CredentialAdapterClientConfig) {

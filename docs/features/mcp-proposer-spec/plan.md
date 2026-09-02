@@ -55,15 +55,18 @@ is verified.
 ### Review decisions
 
 - Confirm the profile name and reserved tool name.
-- Confirm that the request handler wakes the sole outbound dispatcher and
-  waits for the initial verifier response, returning a native result on the
-  terminal fast path and a Task for deferred processing.
+- Confirm that the request handler enqueues that Task's outbound dispatcher
+  lane and waits for the initial verifier response, returning a native result
+  on the terminal fast path and a Task for deferred processing. Distinct Tasks
+  keep independent lanes.
 - Confirm the minimum terminal retention rule.
 - Decided: result recovery is best effort; no Core or HTTP recovery mechanism
   in this feature. A read-only result endpoint or identical resolved replay
   remains a future option (feature spec Section 11).
 - Confirm that signer-server behavior remains outside this profile.
 - Confirm that the lost-initial-response limitation is deferred.
+- Confirm that the worker claim lease must exceed the Action/Coordination
+  client timeout; the HTTP profile does not fix relay wait duration.
 
 ### Exit criteria
 
@@ -387,7 +390,7 @@ client is configured to react to it.
 
 | Feature acceptance criterion | Normative profile area | Implementation area | Primary test layer |
 | :--- | :--- | :--- | :--- |
-| Fast-path result or deferred Task | Client Profile §§4–5 | request handler + outbound dispatcher | client-interface conformance |
+| Fast-path result or deferred Task | Client Profile §§4–5 | request handler + per-Task outbound dispatcher | client-interface conformance |
 | Task ID, Action ID, and envelope hash | Client Profile §5 | result serializer | client-interface conformance |
 | Client notification signal | Client Profile §5 | bridge configuration | client-interface + application |
 | Action progresses without result call | Client Profile §7 | background worker | black-box client-interface test |

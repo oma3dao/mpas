@@ -131,6 +131,11 @@ function makeBridge(adapter: WorkflowAdapter, options: { store?: MemoryWorkflowS
 }
 
 describe("official MCP Tasks bridge runtime", () => {
+  it("rejects construction when a client timeout outlives the claim lease", () => {
+    const adapter = Object.assign(fakeAdapter(), { timeoutMs: 120_000 });
+    expect(() => makeBridge(adapter)).toThrow(/claimLeaseMs .* must exceed submissionTimeoutMs/);
+  });
+
   it("preserves the upstream tool surface exactly and exposes no wait tool", () => {
     expect(makeBridge(fakeAdapter()).getToolDefinitions()).toEqual(UPSTREAM_TOOLS);
   });
