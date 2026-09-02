@@ -210,7 +210,9 @@ session, as often as it likes, or never:
 ```text
 a. Client notifies maintainers if notificationRequired is true (meaningful
    only once a Verifier response is present).
-b. Client calls mpas_wait_for_action_result(actionId, timeoutSeconds).
+b. Tasks clients observe with tasks/get using the stable Task ID.
+   Compatibility clients call mpas_wait_for_action_result with the current
+   Action ID.
 c. Bridge returns the stored terminal result if one exists, otherwise an
    updated deferred result when the wait elapses.
 d. Client repeats (b) as needed.
@@ -372,7 +374,9 @@ that owns that Task's initial, replacement, Coordination, and completed Action
 submissions. Distinct Task IDs run concurrently; one Task's A1, replacement,
 handoff, completed submission, and retries stay ordered. Request handlers and
 Coordination polling enqueue that Task's lane after durable state is committed.
-A periodic scan is a recovery mechanism for lost wakeups, not a second
+Expiry sweeps and Coordination state updates enqueue that same lane; they MUST
+NOT mark a Task terminal while that Task's outbound submit is in flight. A
+periodic scan is a recovery mechanism for lost wakeups, not a second
 submission path.
 
 The periodic worker MUST inspect durable local workflow state before making a
@@ -427,25 +431,29 @@ support appropriate encryption-at-rest controls for their deployment.
 
 ## 10. Returning Control
 
-The bridge returns `MpasBridgeDeferredResult` as soon as the workflow record
-is durable. It does not hold the application tool call open hoping that
-Approvals arrive quickly.
+The bridge waits for the initial Action submission's result before returning
+from the application tool call. If that attempt settles with a native terminal
+result, the bridge returns the normal native MCP result. If processing is
+deferred — additional Approvals, pending, an unreachable adapter, or another
+non-terminal outcome — it returns a durable Task (or a compatibility deferred
+result). It does not hold the application tool call open hoping that Approvals
+arrive quickly.
 
 An earlier draft of this feature defined a configurable synchronous window
 (default 5 seconds) for that purpose. It was removed. The client already has
-`mpas_wait_for_action_result` with a caller-chosen timeout, and the client is
-the only party that knows whether it can afford to block. A bridge-side window
-duplicates that choice, makes it for the client, and conflicts with the
-profile's requirement to return promptly.
+a bounded observation call (`tasks/get` or `mpas_wait_for_action_result`)
+with a caller-chosen timeout, and the client is the only party that knows
+whether it can afford to block. A bridge-side window duplicates that choice,
+makes it for the client, and conflicts with the profile's requirement to
+return promptly.
 
 The bridge still awaits the adapter's response to the *initial* submission
 where that response is immediate — a single HTTP round trip is not an approval
 window. When the adapter answers with a native terminal result before the
 bridge has returned, the bridge relays it directly.
 
-The explicit `mpas_wait_for_action_result` call may block for its caller-chosen
-bounded timeout because the client invoked that operation specifically to
-wait.
+The explicit observation call may block for its caller-chosen bounded timeout
+because the client invoked that operation specifically to wait.
 
 ---
 
@@ -510,9 +518,10 @@ Once the Verifier has reported `additionalApprovalsRequired`, the safe default
 is `true`. A bridge returns `false` only when deployment configuration assigns
 notification elsewhere or explicitly says no client notification is required.
 
-The flag is meaningful only alongside a Verifier response. When the bridge
-returns a deferred result before hearing back, there is no verdict to notify
-about; `lastActionResponse` is absent and the client ignores the flag. The
+The flag is meaningful only alongside a Verifier response. If the initial
+attempt did not produce a Verifier `ActionResponse` (`lastActionResponse` is
+absent), there is no verdict to notify about and the client ignores the flag.
+That includes an unreachable adapter after the initial attempt completes. The
 GitHub bridge returns `false` in that case, and the client learns that
 Approvals are needed from a later deferred result.
 

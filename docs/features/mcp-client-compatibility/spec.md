@@ -246,8 +246,21 @@ The result is presented using the legacy interface:
   `MpasBridgeActionOutcome` or the corresponding legacy terminal error; and
 - a bridge operation error returns `MpasBridgeError`.
 
-`MpasBridgeDeferredResult.actionRef.actionId.value` MUST equal the Action ID
-and the Task ID that Tasks mode would use for the same stored workflow.
+`MpasBridgeDeferredResult` and `MpasBridgeActionOutcome` MUST include both
+identifiers for the same stored workflow:
+
+- `taskId`: the stable workflow identity, equal to the Task ID Tasks mode
+  uses for that workflow. It MUST NOT equal any MPAS Action ID.
+- `actionRef`: the current MPAS Action. After the Verifier returns
+  `additionalApprovalsRequired`, the first deferred result already carries A2
+  here, not A1.
+
+`actionRef.actionId.value` MUST equal that current Action ID. It MUST NOT be
+required to equal `taskId`. A client copies `actionRef.actionId` into
+`mpas_wait_for_action_result`. After replacement that value is A2; a wait with
+the retired A1 still resolves because the store keeps the alias. `taskId` is
+the stable identity for the same workflow in Tasks mode; it is not the
+wait-tool parameter.
 
 A repeated application call always proposes a new Action. It MUST NOT be used
 as a status check.
@@ -269,6 +282,8 @@ The tool:
 - MUST NOT create, advance, resubmit, approve, reject, or cancel an Action;
 - MAY wait only up to the configured maximum;
 - MUST return promptly for `timeoutSeconds: 0`;
+- looks up a current or retired Action ID for that workflow, typically copied
+  from `actionRef.actionId`; it does not take `taskId`;
 - returns another deferred result while the Action remains active;
 - returns the native result verbatim when available; and
 - returns a terminal compatibility result when no native result can become
@@ -307,8 +322,9 @@ contract and result shapes.
 
 Workflow records MUST remain protocol-neutral. After a process restart, a
 workflow created through either mode MAY be observed through the other mode if
-the same bridge identity and workflow store are used. The Action ID remains
-the common handle.
+the same bridge identity and workflow store are used. Tasks mode observes by
+Task ID. Compatibility wait observes by a current or retired Action ID. Those
+identifiers MUST be distinct.
 
 MCP observation does not drive workflow progression in either mode. Tasks
 `tasks/get` and compatibility `mpas_wait_for_action_result` observe stored
@@ -415,7 +431,7 @@ At minimum, conformance requires:
 | Compatibility wait on active Action | Deferred result without workflow advancement |
 | Compatibility wait on completed Action | Native or terminal result |
 | Lookup for another proposer DID | Not found/invisible |
-| Restart into the other mode | Existing workflow remains observable by Action ID |
+| Restart into the other mode | Existing workflow remains observable: Tasks by Task ID, compatibility wait by Action ID |
 
 The target OpenClaw and Hermes versions MUST also be probed as real subprocess
 clients or with captured, credential-free protocol transcripts. Product-version

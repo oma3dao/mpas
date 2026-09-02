@@ -102,7 +102,7 @@ Refactor or extend the current proposer bridge only as much as required for
 both presentation adapters to:
 
 - propose a new application call;
-- retrieve a proposer-visible workflow by Action ID;
+- retrieve a proposer-visible workflow by Task ID or by current/retired Action ID;
 - wait for a stored workflow change without advancing it; and
 - map the stored result into the selected wire format.
 
@@ -120,7 +120,8 @@ Add tests for:
 
 - active, resolved, unresolvable, expired, and cancelled records;
 - native results returned verbatim;
-- stable Action references and hashes;
+- distinct `taskId` and current `actionRef` on deferred and outcome results;
+- stable Action references and hashes, including retired A1 after replacement;
 - wait input bounds;
 - nonblocking and bounded waits;
 - proposer-DID isolation;
@@ -311,7 +312,8 @@ Revise the surrounding Tasks-only instructions so they do not conflict with
 the compatibility behavior. At minimum:
 
 - replace the instruction to reject clients without Tasks support;
-- describe Action ID retrieval from `MpasBridgeDeferredResult`;
+- describe Task ID and current Action ID retrieval from
+  `MpasBridgeDeferredResult`;
 - make status observation conditional on the available surface;
 - retain the prohibition on repeating the application call;
 - retain Maintainer notification and no-self-approval rules; and

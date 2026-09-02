@@ -172,6 +172,8 @@ describe("legacy MCP compatibility bridge surface", () => {
         lastActionResponse: { result: "pending" },
       },
     });
+    expect(taskId(proposed)).toMatch(/^urn:uuid:/);
+    expect(taskId(proposed)).not.toBe(actionId(proposed));
 
     const observed = await bridge.handleCompatibilityToolCall(MPAS_WAIT_TOOL_NAME, {
       actionId: actionId(proposed),

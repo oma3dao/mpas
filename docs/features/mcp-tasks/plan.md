@@ -223,7 +223,7 @@ Rules:
 
 - `CreateTaskResult` is flat and has `resultType: "task"`.
 - `GetTaskResult` has `resultType: "complete"`.
-- Use `taskId: record.actionId`.
+- Use `taskId: record.taskId`.
 - Use `ttlMs` and `pollIntervalMs` field names.
 - Put MPAS metadata at `_meta["org.oma3/mpas"]` for working Tasks.
 - Completed workflows inline their `CallToolResult` in `result`.

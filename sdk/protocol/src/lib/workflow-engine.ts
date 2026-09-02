@@ -203,10 +203,12 @@ export class BridgeWorkflowEngine {
 
   /**
    * One background tick: expiry sweep, coordination poll, and advancement of
-   * every workflow this worker can claim.
+   * every workflow this worker can claim. Expiry and Coordination updates
+   * join each Task's outbound lane so they cannot terminate a submit that
+   * is still in flight.
    */
   async pollOnce(): Promise<void> {
-    this.sweepExpired();
+    const expiry = this.sweepExpired();
 
     const hasCoordinationWork = this.store
       .listRecoverableWorkflows()
@@ -224,6 +226,7 @@ export class BridgeWorkflowEngine {
     }
 
     await this.advanceClaimable();
+    await expiry;
   }
 
   /** Cooperatively cancel a visible workflow without advancing it. */
@@ -256,7 +259,7 @@ export class BridgeWorkflowEngine {
 
   /** Startup reconciliation (feature spec §9.4). Idempotent. */
   async reconcile(): Promise<void> {
-    this.sweepExpired();
+    await this.sweepExpired();
     await this.advanceClaimable();
   }
 
@@ -427,38 +430,45 @@ export class BridgeWorkflowEngine {
       return;
     }
 
-    switch (update.state) {
-      case "readyForSubmission":
-        if (update.actionPackage !== undefined) {
-          this.store.saveCompletedPackage(record.taskId, update.actionPackage);
-          this.store.compareAndSetState(record.taskId, "awaitingApprovals", "readyForSubmission");
-        }
-        break;
-      case "expired":
-        this.resolveUnresolvable(record.taskId, "ACTION_EXPIRED_BEFORE_RESOLUTION", "The Action expired before Approvals completed.");
-        break;
-      case "rejected":
-        this.resolveUnresolvable(
-          record.taskId,
-          "COORDINATION_REJECTED",
-          "The coordination workflow was rejected before completion.",
-        );
-        break;
-      case "executed":
-        this.resolveUnresolvable(
-          record.taskId,
-          "RESULT_UNAVAILABLE",
-          "Coordination reports execution, but the authoritative Verifier result is unavailable.",
-        );
-        break;
-      case "cancelled":
-        if (this.store.cancelWorkflow(record.taskId)) {
-          this.notify(this.mustGet(record.taskId));
-        }
-        break;
-      case "awaitingApprovals":
-        break;
-    }
+    await this.dispatchOutbound(record.taskId, async () => {
+      const current = this.store.getWorkflow(record.taskId);
+      if (!current || isTerminal(current)) {
+        return;
+      }
+
+      switch (update.state) {
+        case "readyForSubmission":
+          if (update.actionPackage !== undefined) {
+            this.store.saveCompletedPackage(current.taskId, update.actionPackage);
+            this.store.compareAndSetState(current.taskId, "awaitingApprovals", "readyForSubmission");
+          }
+          break;
+        case "expired":
+          this.resolveUnresolvable(current.taskId, "ACTION_EXPIRED_BEFORE_RESOLUTION", "The Action expired before Approvals completed.");
+          break;
+        case "rejected":
+          this.resolveUnresolvable(
+            current.taskId,
+            "COORDINATION_REJECTED",
+            "The coordination workflow was rejected before completion.",
+          );
+          break;
+        case "executed":
+          this.resolveUnresolvable(
+            current.taskId,
+            "RESULT_UNAVAILABLE",
+            "Coordination reports execution, but the authoritative Verifier result is unavailable.",
+          );
+          break;
+        case "cancelled":
+          if (this.store.cancelWorkflow(current.taskId)) {
+            this.notify(this.mustGet(current.taskId));
+          }
+          break;
+        case "awaitingApprovals":
+          break;
+      }
+    });
   }
 
   private async advanceClaimable(): Promise<void> {
@@ -598,19 +608,36 @@ export class BridgeWorkflowEngine {
     this.notify(this.mustGet(taskId));
   }
 
-  private sweepExpired(): void {
+  /**
+   * Expire overdue workflows on each Task's outbound lane. Same-worker claims
+   * can be renewed, so a claim alone does not exclude in-process expiry from
+   * an in-flight submit; joining the lane does.
+   */
+  private async sweepExpired(): Promise<void> {
     const nowMs = this.now();
-    for (const record of this.store.listRecoverableWorkflows()) {
-      if (Date.parse(record.expiresAt) < nowMs) {
-        if (this.store.claimWorkflow(record.taskId, this.workerId, this.claimLeaseMs)) {
-          this.resolveUnresolvable(
-            record.taskId,
-            "ACTION_EXPIRED_BEFORE_RESOLUTION",
-            "The Action Envelope expired without a terminal Verifier response.",
-          );
+    await Promise.all(
+      this.store.listRecoverableWorkflows().map((record) => {
+        if (Date.parse(record.expiresAt) >= nowMs) {
+          return Promise.resolve();
         }
-      }
-    }
+        return this.dispatchOutbound(record.taskId, async () => {
+          const current = this.store.getWorkflow(record.taskId);
+          if (!current || isTerminal(current)) {
+            return;
+          }
+          if (Date.parse(current.expiresAt) >= this.now()) {
+            return;
+          }
+          if (this.store.claimWorkflow(current.taskId, this.workerId, this.claimLeaseMs)) {
+            this.resolveUnresolvable(
+              current.taskId,
+              "ACTION_EXPIRED_BEFORE_RESOLUTION",
+              "The Action Envelope expired without a terminal Verifier response.",
+            );
+          }
+        });
+      }),
+    );
   }
 
   private notify(record: WorkflowRecord): void {

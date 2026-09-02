@@ -50,7 +50,8 @@ describe("generateBridge", () => {
     expect(source).toContain('from "./sqlite-workflow-store.js"');
     expect(source).toContain("MemoryWorkflowStore");
     expect(source).toContain("signer: keyManagerPromise");
-    expect(source).toContain("new ActionRelayClient({ url: config.url, signer: keyManagerPromise })");
+    expect(source).toContain("new ActionRelayClient({");
+    expect(source).toContain("...(timeoutMs !== undefined ? { timeoutMs } : {})");
     expect(source).toContain("client.submitAction(buildDeliveryEnvelope({");
     expect(source).toContain("new Set([config.verifierDid, ...(config.additionalRecipients ?? [])])");
     expect(source).toContain("coordinationService,");

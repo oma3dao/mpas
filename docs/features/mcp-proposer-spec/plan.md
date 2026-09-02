@@ -226,7 +226,8 @@ Implement:
 
 - verbatim native result for synchronous native success;
 - verbatim native result for a definitive upstream `isError: true` result;
-- `MpasBridgeDeferredResult` after durable coordination;
+- deferred Task (or compatibility deferred result) after the initial attempt
+  when processing does not settle;
 - `MpasBridgeTerminalResult` for MPAS terminal outcomes with no native result;
 - `MpasBridgeErrorResult` for bridge failures.
 

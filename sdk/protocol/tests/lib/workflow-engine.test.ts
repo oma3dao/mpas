@@ -646,6 +646,38 @@ describe("pollOnce (bridge track advancement)", () => {
     expect(record?.state).toBe("unresolvable");
     expect(record?.resolution).toMatchObject({ errorCode: "ACTION_EXPIRED_BEFORE_RESOLUTION" });
   });
+
+  it("does not expire a Task whose outbound submit is still in flight", async () => {
+    let releaseResponse!: (value: ActionResponse) => void;
+    const responseGate = new Promise<ActionResponse>((resolve) => {
+      releaseResponse = resolve;
+    });
+    let markStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    const actionEndpoint: WorkflowActionEndpoint = {
+      async submitActionRequest() {
+        markStarted();
+        return responseGate;
+      },
+    };
+    const clock = { now: Date.parse("2026-07-26T18:00:00.000Z") };
+    const { engine, store } = makeEngine({ actionEndpoint, now: () => clock.now });
+
+    const proposed = engine.propose({ ...proposalInput(), expiresAt: "2026-07-26T19:00:00.000Z" });
+    await started;
+    clock.now = Date.parse("2026-07-26T19:00:01.000Z");
+    const background = engine.pollOnce();
+    releaseResponse(response("executed"));
+    const [outcome] = await Promise.all([proposed, background]);
+
+    expect(outcome.kind).toBe("settled");
+    if (outcome.kind === "settled") {
+      expect(outcome.actionResponse.result).toBe("executed");
+    }
+    expect(store.getWorkflow(TASK_ID)?.state).toBe("resolved");
+  });
 });
 
 describe("cancel", () => {
