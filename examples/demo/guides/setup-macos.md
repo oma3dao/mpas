@@ -892,7 +892,7 @@ In the **maintainer** TUI, poll for pending approvals:
 
 Nothing is pending yet (the issue was auto-approved), so an empty list is the expected, successful result — it confirms the maintainer sees its `mpas_list_pending` tool and can reach the coordination service.
 
-That's the wiring check. The full approval flow — proposing an action that requires approval, then approving it from the maintainer terminal — is the demo in Part 4. The proposer's tool call returns an MCP Task immediately; keep both terminals open so the maintainer can approve while the proposer tracks that Task. Part 4 walks through it.
+That's the wiring check. The full approval flow — proposing an action that requires approval, then approving it from the maintainer terminal — is the demo in Part 4. After the initial verifier response says approval is required, the proposer's tool call returns an MCP Task; keep both terminals open so the maintainer can approve while the proposer tracks that Task. Part 4 walks through it.
 
 ### Troubleshooting OpenClaw
 
@@ -945,7 +945,7 @@ After Part 3, you have two agents running: a proposer (with GitHub tools) and a 
 
 > Delete the branch `demo/branch-alpha` from `example-org/mpas-demo-repository`.
 
-The proposer bridge submits A1 to the Action endpoint → the Verifier returns `additionalApprovalsRequired` (policy requires 1 maintainer for `delete_branch_mirror`) → the bridge constructs A2 and explicitly creates a Coordination Service workflow → the tool call returns an MCP Task immediately. A relay response alone never creates that workflow. The stable `taskId` is distinct from both Action IDs; `_meta["org.oma3/mpas"].authorizationState` is `authorization_required`.
+The proposer bridge's outbound dispatcher submits A1 to the Action endpoint → the Verifier returns `additionalApprovalsRequired` (policy requires 1 maintainer for `delete_branch_mirror`) → the bridge constructs A2 and explicitly creates a Coordination Service workflow → the tool call returns an MCP Task after that fast-path response. A relay response alone never creates that workflow. The stable `taskId` is distinct from both Action IDs; `_meta["org.oma3/mpas"].authorizationState` is `authorization_required`.
 
 **In the maintainer agent:**
 
@@ -1487,7 +1487,7 @@ Nothing is pending yet (the issue was auto-approved), so an empty list is the ex
 
 **Step 3 — Full approval flow across accounts:**
 
-1. In the **proposer's terminal**: ask it to delete a branch from YOUR_USER/YOUR_DEMO_REPO. The tool call returns an MCP Task immediately — it does **not** block — and the proposer should tell you approval is required.
+1. In the **proposer's terminal**: ask it to delete a branch from YOUR_USER/YOUR_DEMO_REPO. The bridge waits for the initial verifier response. When that response says approval is required, the tool call returns an MCP Task and the proposer should tell you approval is required.
 2. **Switch to the maintainer's terminal**: check for pending approvals and approve.
 3. **Back in the proposer's terminal**: ask it to check the Task. It uses `tasks/get` with the stable Task ID and reports the execution result. The bridge—not the MCP client—tracks whichever MPAS Action currently belongs to that Task.
 

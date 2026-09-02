@@ -312,10 +312,12 @@ The bridge config lives on the agent side and tells the MCP Bridge how to connec
 
 The bridge speaks MCP `2026-07-28` and advertises
 `io.modelcontextprotocol/tasks` plus `org.oma3/mpas` through
-`server/discover`. Every accepted application `tools/call` returns a flat
-official Task whose stable `taskId` is distinct from every MPAS Action ID. Clients observe progress
-and retrieve the terminal native result with read-only `tasks/get`; Task
-polling does not drive the background MPAS workflow.
+`server/discover`. A terminal A1 outcome available during the original
+application `tools/call` is returned as a normal MCP result. When processing
+is deferred, the call returns a flat official Task whose stable `taskId` is
+distinct from every MPAS Action ID. Clients observe deferred progress and
+retrieve the terminal native result with read-only `tasks/get`; Task polling
+does not drive the background MPAS workflow.
 
 `approvalStrategy` and `approvalTimeoutMs` are deprecated and ignored. There
 is no synchronous approval wait and no MPAS result tool. Hosts should honor

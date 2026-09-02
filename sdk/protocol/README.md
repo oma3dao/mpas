@@ -527,3 +527,25 @@ Maintainer release instructions are documented in
 ## Tests
 
 Tests cover proposer-side primitives, hash utilities, bridge integration, verification, and type conformance.
+
+## Future Package Split
+
+When there is a concrete trigger — a third-party Verifier or Coordination
+Service that needs protocol types without the MCP server stack, or the protocol
+API stabilizing enough that breaking revs become rare — the SDK should split
+along the **construct/sign vs. transport/verify** boundary:
+
+**Signer/construct side** (future `@oma3/mpas-signer`): `approval-builder`,
+`action-package-builder`, `key-manager`, `bridge-runtime`, `bridge-tasks`,
+`bridge-compatibility`, `workflow-engine`, `workflow-store`, and the `mcp-*`
+server modules.
+
+**Protocol side** (stays in `@oma3/mpas`): types, `routing`, `rfc9421`,
+`verification`, `receipt-builder`, `coordination-client`,
+`action-endpoint-client`, `action-relay-client`, `adapter-client`,
+`policy-engine`.
+
+`approval-builder` is a clean leaf — nothing in `sdk/protocol` imports it, and
+`verification.ts` does not need it. The dividing line is whether the module
+constructs and signs artifacts (signer side) or transports and verifies them
+(protocol side).

@@ -2,6 +2,7 @@ import type { ActionResponse } from "../types/mpas.js";
 import {
   MPAS_MCP_PROFILE_EXTENSION_ID,
   type CancelTaskResult,
+  type CompleteToolCallResult,
   type CreateTaskResult,
   type GetTaskResult,
   type Task,
@@ -17,6 +18,14 @@ export interface TaskResultConfig {
 
 export function buildCreateTaskResult(record: WorkflowRecord, config: TaskResultConfig): CreateTaskResult {
   return { resultType: "task", ...taskSummary(record, config) };
+}
+
+/** Return a normal tools/call result when the initial Action settles quickly. */
+export function buildCompleteToolCallResult(record: WorkflowRecord): CompleteToolCallResult {
+  if (record.state !== "resolved") {
+    throw new Error(`Workflow ${record.taskId} has no synchronous tool result.`);
+  }
+  return { ...resolvedResult(record), resultType: "complete" } as CompleteToolCallResult;
 }
 
 export function buildGetTaskResult(record: WorkflowRecord, config: TaskResultConfig): GetTaskResult {

@@ -37,7 +37,6 @@ import {
 import type {
   BridgeUpstreamTool,
   ActionRequest,
-  CreateTaskResult,
   Did,
   MpasApplicationPlugin,
   ProposerConfig,
@@ -174,7 +173,10 @@ export class GeneratedBridge {
     return structuredClone(TOOLS);
   }
 
-  async handleToolCall(toolName: string, args: object): Promise<CreateTaskResult> {
+  async handleToolCall(
+    toolName: string,
+    args: object,
+  ): Promise<Awaited<ReturnType<ProposerBridge["handleToolCall"]>>> {
     log("info", "tool_call_received", { toolName });
     const bridge = await this.bridgePromise;
     return bridge.handleToolCall(toolName, args);
@@ -656,38 +658,16 @@ export class SqliteWorkflowStore implements WorkflowStore {
       return;
     }
 
-    if (version === 1) {
+    // Legacy schemas (v1, v2) used action_id as both Task ID and Action ID.
+    // Discard expired workflow rows and initialize the current schema.
+    if (version >= 1 && version < SCHEMA_VERSION) {
       this.db.exec(\`
         BEGIN IMMEDIATE;
-        ALTER TABLE workflows ADD COLUMN current_action_id TEXT;
-        UPDATE workflows
-           SET current_action_id = action_id,
-               state = CASE WHEN state = 'readyForResubmission' THEN 'readyForSubmission' ELSE state END;
-        CREATE TABLE workflow_action_aliases (
-          action_id TEXT PRIMARY KEY,
-          task_id   TEXT NOT NULL REFERENCES workflows(action_id)
-        );
-        INSERT INTO workflow_action_aliases (action_id, task_id)
-          SELECT current_action_id, action_id FROM workflows;
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_workflows_current_action_id
-          ON workflows (current_action_id);
-        PRAGMA user_version = 2;
+        DROP TABLE IF EXISTS workflow_action_aliases;
+        DROP TABLE IF EXISTS workflows;
         COMMIT;
       \`);
-      version = 2;
-    }
-
-    if (version === 2) {
-      this.db.exec(\`
-        BEGIN IMMEDIATE;
-        ALTER TABLE workflows ADD COLUMN action_idempotency_key TEXT;
-        UPDATE workflows SET action_idempotency_key = current_action_id;
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_workflows_current_action_id
-          ON workflows (current_action_id);
-        PRAGMA user_version = 3;
-        COMMIT;
-      \`);
-      return;
+      version = 0;
     }
 
     this.db.exec(\`

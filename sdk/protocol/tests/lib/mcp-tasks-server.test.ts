@@ -45,7 +45,7 @@ async function packageFor(): Promise<ActionPackage> {
   };
 }
 
-function makeServer(): MpasTasksServer {
+function makeServer(result: "pending" | "executed" = "pending"): MpasTasksServer {
   const bridge = new ProposerBridge({
     tools: [{ name: "merge_pull_request", description: "Merge.", inputSchema: { type: "object" } }],
     buildActionPackage: packageFor,
@@ -55,7 +55,14 @@ function makeServer(): MpasTasksServer {
     store: new MemoryWorkflowStore({ now: () => Date.parse("2026-08-14T10:00:00.000Z") }),
     adapter: {
       async submit() {
-        return { version: "1", type: "ActionResponse", result: "pending" };
+        return result === "executed"
+          ? {
+              version: "1" as const,
+              type: "ActionResponse" as const,
+              result,
+              executionResult: { content: [{ type: "text", text: "merged" }], isError: false },
+            }
+          : { version: "1" as const, type: "ActionResponse" as const, result };
       },
     },
     coordination: {
@@ -129,6 +136,21 @@ describe("MpasTasksServer modern dispatcher", () => {
     expect(await server.handleMessage(request(3, "tasks/get", { taskId }))).toMatchObject({
       result: { resultType: "complete", status: "working" },
     });
+  });
+
+  it("returns a normal MCP result when the initial Action completes quickly", async () => {
+    const called = await makeServer("executed").handleMessage(
+      request(1, "tools/call", { name: "merge_pull_request", arguments: {} }),
+    );
+
+    expect(called).toMatchObject({
+      result: {
+        resultType: "complete",
+        content: [{ type: "text", text: "merged" }],
+        isError: false,
+      },
+    });
+    expect(called).not.toHaveProperty("result.taskId");
   });
 
   it("returns structured missing-capability errors", async () => {

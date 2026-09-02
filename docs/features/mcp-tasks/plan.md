@@ -85,14 +85,15 @@ release. Link that issue from the vendored module's source comment.
 
 ### 1.1 Modify `sdk/protocol/src/lib/workflow-store.ts`
 
-Task IDs reuse existing Action IDs, so no new task-ID column or lookup is
-needed. `getWorkflow(taskId)` remains the lookup operation.
+Task IDs are stable bridge identifiers and remain distinct from the current
+Action ID. Store both identifiers, keep `getWorkflow(taskId)` as the Task
+lookup, and support a separate current-Action lookup for Coordination updates.
 
 Changes:
 
 - Add `cancelled` to `BridgeWorkflowState` and terminal-state detection.
 - Add a cancelled `WorkflowResolution` variant if terminal details are needed.
-- Add an atomic `cancelWorkflow(actionId)` operation. It succeeds only while
+- Add an atomic `cancelWorkflow(taskId)` operation. It succeeds only while
   the workflow is nonterminal and preserves first-terminal-write-wins behavior.
 - Include cancelled workflows in retention purging.
 - Keep `actionEnvelopeHash` stored as its existing digest string.
@@ -145,8 +146,8 @@ retry behavior explicit:
 - A Coordination polling failure must not prevent independent retry or
   advancement of other claimable workflows.
 - Retry ends when the Action expires or another terminal state wins.
-- Ready packages and pending verifier work continue through the existing
-  resubmission path.
+- Ready packages and pending verifier work continue through the outbound
+  dispatcher submission path.
 
 No detailed approval-progress persistence is added.
 
@@ -256,8 +257,14 @@ Remove:
 Change:
 
 - `getToolDefinitions()` returns exact upstream definitions.
-- `handleToolCall()` always returns a flat `CreateTaskResult` after the Action
-  is durably stored.
+- `handleToolCall()` durably stores the Task and Action, wakes the sole
+  outbound dispatcher, and waits for the initial result. It returns a normal
+  complete MCP result when A1 settles on that fast path and a flat
+  `CreateTaskResult` only when processing is deferred.
+- The request handler and background poller never submit Actions directly;
+  both enqueue work through the outbound dispatcher.
+- A background tick polls the remote Coordination Service only when the local
+  store contains an `awaitingApprovals` workflow; idle ticks remain local.
 - Existing workflow background `pollIntervalMs` continues to control internal
   engine ticks.
 - Add `taskPollIntervalMs` for the client-facing polling hint, default 5000.
@@ -318,12 +325,12 @@ Add `tests/lib/mcp-tasks-extension.test.ts`:
 
 Add `tests/lib/bridge-tasks.test.ts`:
 
-- immediate native execution -> completed CreateTaskResult
+- immediate native execution -> normal complete MCP result
 - authorization required -> working with transparent MPAS metadata
 - adapter unavailable -> working/submitted
 - pending -> working/pending
-- terminal MPAS rejection -> completed Task with `result.isError: true`
-- native result -> completed Task with exact result passthrough
+- terminal MPAS rejection -> normal complete result with `isError: true`
+- deferred native result -> completed Task with exact result passthrough
 - cancelled -> cancelled Task
 - metadata hash comes from the signed Action Package
 - stored digest representation remains unchanged
@@ -334,8 +341,9 @@ Update `tests/lib/bridge-runtime.test.ts`:
 - no wait tool
 - exact upstream descriptions and schemas
 - no `execution.taskSupport` injection
-- every application call returns a flat task result
-- working/completed task reads
+- immediate terminal calls return normal complete results
+- deferred calls return flat task results and support working/completed reads
+- concurrent request-triggered and background dispatch submits A1 once
 - unknown and cross-DID Tasks are not found
 - update acknowledgement for a known Task
 - cooperative cancellation acknowledgement
@@ -442,7 +450,7 @@ their current SDK where they do not participate in the 2026 Tasks interface.
 Replace wait-tool cases in
 `examples/demo/tests/e2e/mcp-bridge-stack.test.ts` with:
 
-1. immediate execution -> flat completed CreateTaskResult
+1. immediate execution -> normal complete MCP result
 2. governed execution -> working CreateTaskResult with transparent metadata
 3. `tasks/get` polling while awaiting authorization
 4. approval collection -> completed `tasks/get.result`
@@ -672,12 +680,13 @@ not create a standalone MPAS extension specification. The profile must define:
 - The server speaks MCP 2026-07-28 through SDK v2.
 - Discovery advertises the official Tasks extension and MPAS profile extension.
 - Missing capabilities return structured `-32021` errors.
-- Application calls return flat official `CreateTaskResult` objects.
+- Application calls return normal complete MCP results on the fast path and
+  flat official `CreateTaskResult` objects only when deferred.
 - `tasks/get` inlines terminal results and errors.
 - `tasks/update` and `tasks/cancel` return empty complete acknowledgements.
 - No `tasks/result`, `tasks/list`, request `task`, or `taskSupport` behavior is
   present.
-- Task/Action IDs are the same random UUID URN.
+- Stable Task IDs and current Action IDs are distinct random UUID URNs.
 - Task visibility is scoped to the configured proposer DID.
 - Transparent MPAS metadata appears only under `_meta["org.oma3/mpas"]`.
 - The database hash string remains unchanged.

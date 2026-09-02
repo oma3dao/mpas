@@ -186,7 +186,8 @@ Profile. In particular:
   `org.oma3/mpas`;
 - application tool definitions match the upstream definitions;
 - `mpas_wait_for_action_result` is absent;
-- every accepted application call returns a flat `CreateTaskResult`;
+- a fast terminal application call returns a normal complete MCP result, while
+  a deferred call returns a flat `CreateTaskResult`;
 - `tasks/get`, `tasks/update`, and `tasks/cancel` retain their current behavior;
 - required per-request extension metadata is enforced; and
 - missing capability errors do not select compatibility mode.

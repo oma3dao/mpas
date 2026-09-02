@@ -115,6 +115,13 @@ export class BridgeWorkflowEngine {
   private readonly claimLeaseMs: number;
   private readonly now: () => number;
   private readonly waiters = new Map<string, Set<(record: WorkflowRecord) => void>>();
+  /**
+   * One process-local outbound dispatcher owns every Action submission. The
+   * durable store claim extends that ownership across bridge processes.
+   * Request handlers and polling code enqueue work here; neither submits an
+   * Action directly.
+   */
+  private outboundTail: Promise<void> = Promise.resolve();
 
   constructor(options: BridgeWorkflowEngineOptions) {
     this.store = options.store;
@@ -158,7 +165,16 @@ export class BridgeWorkflowEngine {
       throw new Error("Task ID and Action ID must be distinct.");
     }
     const record = this.store.createWorkflow(input);
-    return this.submitInitial(record);
+    return this.dispatchOutbound(async () => {
+      const current = this.mustGet(record.taskId);
+      if (current.state !== "created") {
+        return { kind: "deferred", record: current };
+      }
+      if (!this.store.claimWorkflow(current.taskId, this.workerId, this.claimLeaseMs)) {
+        return { kind: "deferred", record: this.mustGet(current.taskId) };
+      }
+      return this.submitInitial(this.mustGet(current.taskId));
+    });
   }
 
   /**
@@ -168,17 +184,22 @@ export class BridgeWorkflowEngine {
   async pollOnce(): Promise<void> {
     this.sweepExpired();
 
-    try {
-      const poll = await this.coordinationService.pollWork();
-      for (const update of poll.actionUpdates) {
-        await this.applyUpdate(update);
+    const hasCoordinationWork = this.store
+      .listRecoverableWorkflows()
+      .some((record) => record.state === "awaitingApprovals");
+    if (hasCoordinationWork) {
+      try {
+        const poll = await this.coordinationService.pollWork();
+        for (const update of poll.actionUpdates) {
+          await this.applyUpdate(update);
+        }
+      } catch {
+        // Coordination updates are one input to the engine. Independent
+        // Action retries must still run when this input is unavailable.
       }
-    } catch {
-      // Coordination updates are one input to the engine. Independent
-      // adapter retries must still run when this input is unavailable.
     }
 
-    await this.advanceClaimable();
+    await this.dispatchOutbound(() => this.advanceClaimable());
   }
 
   /** Cooperatively cancel a visible workflow without advancing it. */
@@ -211,35 +232,37 @@ export class BridgeWorkflowEngine {
 
   /** Startup reconciliation (feature spec §9.4). Idempotent. */
   async reconcile(): Promise<void> {
-    this.sweepExpired();
+    await this.dispatchOutbound(async () => {
+      this.sweepExpired();
 
-    for (const record of this.store.listRecoverableWorkflows()) {
-      if (!this.store.claimWorkflow(record.taskId, this.workerId, this.claimLeaseMs)) {
-        continue;
+      for (const record of this.store.listRecoverableWorkflows()) {
+        if (!this.store.claimWorkflow(record.taskId, this.workerId, this.claimLeaseMs)) {
+          continue;
+        }
+        switch (record.state) {
+          case "created":
+            await this.submitInitial(record);
+            break;
+          case "submittingToCoordination":
+            await this.submitToCoordination(record);
+            break;
+          case "submittingToVerifier":
+            // Crash mid-submission: the identical package may or may not have
+            // been transmitted. Resubmit identically; the ledger dedups.
+            this.store.compareAndSetState(record.taskId, "submittingToVerifier", "readyForSubmission");
+            await this.submitCompleted(this.mustGet(record.taskId));
+            break;
+          case "readyForSubmission":
+            await this.submitCompleted(record);
+            break;
+          case "awaitingVerifierResult":
+            await this.submitCompleted(record);
+            break;
+          case "awaitingApprovals":
+            break; // pollOnce advances these when coordination reports progress.
+        }
       }
-      switch (record.state) {
-        case "created":
-          await this.submitInitial(record);
-          break;
-        case "submittingToCoordination":
-          await this.submitToCoordination(record);
-          break;
-        case "submittingToVerifier":
-          // Crash mid-submission: the identical package may or may not have
-          // been transmitted. Resubmit identically; the ledger dedups.
-          this.store.compareAndSetState(record.taskId, "submittingToVerifier", "readyForSubmission");
-          await this.submitCompleted(this.mustGet(record.taskId));
-          break;
-        case "readyForSubmission":
-          await this.submitCompleted(record);
-          break;
-        case "awaitingVerifierResult":
-          await this.submitCompleted(record);
-          break;
-        case "awaitingApprovals":
-          break; // pollOnce advances these when coordination reports progress.
-      }
-    }
+    });
   }
 
   /**
@@ -273,7 +296,7 @@ export class BridgeWorkflowEngine {
 
   private async submitInitial(record: WorkflowRecord): Promise<ProposeResult> {
     const current = this.store.getWorkflow(record.taskId);
-    if (!current || isTerminal(current)) {
+    if (!current || isTerminal(current) || current.state !== "created") {
       return { kind: "deferred", record: current ?? record };
     }
 
@@ -566,6 +589,19 @@ export class BridgeWorkflowEngine {
       throw new Error(`Workflow not found for task ${taskId}.`);
     }
     return record;
+  }
+
+  /**
+   * Enqueue outbound work and wake the dispatcher immediately. Rejections do
+   * not poison the queue; the next durable workflow remains dispatchable.
+   */
+  private dispatchOutbound<T>(operation: () => Promise<T>): Promise<T> {
+    const dispatched = this.outboundTail.then(operation, operation);
+    this.outboundTail = dispatched.then(
+      () => undefined,
+      () => undefined,
+    );
+    return dispatched;
   }
 }
 

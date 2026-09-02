@@ -313,7 +313,7 @@ describe("durability across restart", () => {
     expect(store.claimWorkflow(TASK_ID, "worker-b", HOUR)).toBe(true);
   });
 
-  it("migrates v1 through v3 with a unique current Action ID and stable retry key", () => {
+  it("discards legacy v1 workflow rows and initializes the current schema cleanly", () => {
     store.close();
     rmSync(dbPath, { force: true });
     const legacy = new DatabaseSync(dbPath);
@@ -355,41 +355,135 @@ describe("durability across restart", () => {
     );
     legacy.close();
 
+    // Legacy rows are discarded; the store opens with a clean schema.
     store = openStore();
-    expect(store.getWorkflow(ACTION_ID)).toMatchObject({
-      actionId: ACTION_ID,
-      actionIdempotencyKey: ACTION_ID,
-    });
-    store.close();
+    expect(store.getWorkflow(ACTION_ID)).toBeUndefined();
+    expect(store.listRecoverableWorkflows()).toHaveLength(0);
 
-    const migrated = new DatabaseSync(dbPath);
-    const indexes = migrated.prepare("PRAGMA index_list(workflows)").all() as {
-      name: string;
-      unique: number;
-    }[];
-    expect(indexes).toContainEqual(expect.objectContaining({
-      name: "idx_workflows_current_action_id",
-      unique: 1,
-    }));
-    expect(() => migrated.prepare(
+    // Verify schema is current: the PRAGMA user_version is SCHEMA_VERSION (3).
+    store.close();
+    const upgraded = new DatabaseSync(dbPath);
+    const { user_version } = upgraded.prepare("PRAGMA user_version").get() as { user_version: number };
+    expect(user_version).toBe(3);
+    upgraded.close();
+    store = openStore();
+  });
+
+  it("discards legacy v2 workflow rows including aliases", () => {
+    store.close();
+    rmSync(dbPath, { force: true });
+    const legacy = new DatabaseSync(dbPath);
+    legacy.exec(`
+      CREATE TABLE workflows (
+        action_id                  TEXT PRIMARY KEY,
+        current_action_id          TEXT NOT NULL,
+        envelope_hash              TEXT NOT NULL,
+        tool_name                  TEXT NOT NULL,
+        state                      TEXT NOT NULL,
+        action_package             TEXT NOT NULL,
+        adapter_attempts           TEXT NOT NULL DEFAULT '[]',
+        expires_at                 TEXT NOT NULL,
+        created_at                 TEXT NOT NULL,
+        updated_at                 TEXT NOT NULL
+      );
+      CREATE TABLE workflow_action_aliases (
+        action_id TEXT PRIMARY KEY,
+        task_id   TEXT NOT NULL REFERENCES workflows(action_id)
+      );
+      PRAGMA user_version = 2;
+    `);
+    legacy.prepare(
       `INSERT INTO workflows (
-         action_id, current_action_id, action_idempotency_key, envelope_hash,
-         tool_name, state, action_package, adapter_attempts, expires_at,
-         created_at, updated_at
-       ) VALUES (?, ?, ?, ?, ?, 'created', ?, '[]', ?, ?, ?)`,
+         action_id, current_action_id, envelope_hash, tool_name, state,
+         action_package, adapter_attempts, expires_at, created_at, updated_at
+       ) VALUES (?, ?, ?, ?, 'awaitingApprovals', ?, '[]', ?, ?, ?)`,
     ).run(
-      OTHER_TASK_ID,
       ACTION_ID,
-      "duplicate-current-action-attempt",
+      OTHER_ID,
       HASH,
       "merge_pull_request_mirror",
-      JSON.stringify({ fake: "duplicate-current-action" }),
+      JSON.stringify({ fake: "legacy-v2-package" }),
       EXPIRES_AT,
       "2026-07-26T18:00:00.000Z",
       "2026-07-26T18:00:00.000Z",
-    )).toThrow(/UNIQUE constraint failed/i);
-    migrated.close();
+    );
+    legacy.prepare("INSERT INTO workflow_action_aliases (action_id, task_id) VALUES (?, ?)").run(OTHER_ID, ACTION_ID);
+    legacy.close();
+
     store = openStore();
+    expect(store.getWorkflow(ACTION_ID)).toBeUndefined();
+    expect(store.getWorkflowByActionId(OTHER_ID)).toBeUndefined();
+    expect(store.listRecoverableWorkflows()).toHaveLength(0);
+  });
+
+  it("creates a workflow with distinct taskId and actionId after a legacy upgrade", () => {
+    store.close();
+    rmSync(dbPath, { force: true });
+    const legacy = new DatabaseSync(dbPath);
+    legacy.exec(`
+      CREATE TABLE workflows (
+        action_id TEXT PRIMARY KEY, envelope_hash TEXT NOT NULL,
+        tool_name TEXT NOT NULL, state TEXT NOT NULL,
+        action_package TEXT NOT NULL, adapter_attempts TEXT NOT NULL DEFAULT '[]',
+        expires_at TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+      );
+      PRAGMA user_version = 1;
+    `);
+    legacy.prepare(
+      `INSERT INTO workflows (action_id, envelope_hash, tool_name, state, action_package,
+       adapter_attempts, expires_at, created_at, updated_at
+      ) VALUES (?, ?, ?, 'created', '{}', '[]', ?, ?, ?)`,
+    ).run("legacy-action", HASH, "some_tool", EXPIRES_AT, "2026-07-26T18:00:00.000Z", "2026-07-26T18:00:00.000Z");
+    legacy.close();
+
+    store = openStore();
+    const record = createDefault(store);
+    expect(record.taskId).toBe(TASK_ID);
+    expect(record.actionId).toBe(ACTION_ID);
+    expect(record.taskId).not.toBe(record.actionId);
+    expect(store.getWorkflowByActionId(ACTION_ID)?.taskId).toBe(TASK_ID);
+  });
+
+  it("enforces Action-ID uniqueness and alias behavior after a legacy reset", () => {
+    store.close();
+    rmSync(dbPath, { force: true });
+    const legacy = new DatabaseSync(dbPath);
+    legacy.exec(`
+      CREATE TABLE workflows (
+        action_id TEXT PRIMARY KEY, envelope_hash TEXT NOT NULL,
+        tool_name TEXT NOT NULL, state TEXT NOT NULL,
+        action_package TEXT NOT NULL, adapter_attempts TEXT NOT NULL DEFAULT '[]',
+        expires_at TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+      );
+      PRAGMA user_version = 1;
+    `);
+    legacy.close();
+
+    store = openStore();
+    createDefault(store);
+    // Replace A1 with A2; both Action IDs should be aliased to the same Task.
+    store.replaceAction(TASK_ID, {
+      fromState: "created",
+      actionId: OTHER_ID,
+      actionIdempotencyKey: "replacement-key",
+      actionEnvelopeHash: "replacement-hash",
+      actionPackage: { fake: "replacement-package" },
+      authorizationRequirements: { type: "AuthorizationRequirements" },
+      expiresAt: EXPIRES_AT,
+    });
+    expect(store.getWorkflowByActionId(ACTION_ID)?.taskId).toBe(TASK_ID);
+    expect(store.getWorkflowByActionId(OTHER_ID)?.taskId).toBe(TASK_ID);
+
+    // Second workflow must not reuse Action IDs.
+    expect(() => store.createWorkflow({
+      taskId: OTHER_TASK_ID,
+      actionId: OTHER_ID,
+      actionIdempotencyKey: "dup-key",
+      actionEnvelopeHash: HASH,
+      toolName: "merge_pull_request_mirror",
+      actionPackage: {},
+      expiresAt: EXPIRES_AT,
+    })).toThrow(/exists/i);
   });
 
   it("fails safely on an incompatible schema version", async () => {

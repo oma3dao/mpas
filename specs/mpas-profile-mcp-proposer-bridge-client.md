@@ -153,11 +153,14 @@ A bridge MUST expose the exact discovered upstream application tools:
 Clients discover MPAS through the `org.oma3/mpas` profile-extension capability
 in `server/discover`, not through tool names or description text.
 
-Every accepted application `tools/call` creates a stable MCP Task and a first
-MPAS Action (A1), then returns a flat official `CreateTaskResult`. The Task ID
-is an operation-level bridge identifier and MUST remain stable if the bridge
-later replaces A1 with A2 or A3. The bridge MUST generate it independently,
-and it MUST NOT equal or be treated as any MPAS Action ID.
+Every accepted application `tools/call` durably creates a stable internal Task
+and a first MPAS Action (A1). A terminal A1 outcome available during the
+original request MUST be returned as a normal complete MCP tool result. The
+bridge MUST expose a flat official `CreateTaskResult` only when processing is
+deferred by required Approvals, `pending`, or a retryable failure. Once
+exposed, the Task ID MUST remain stable if the bridge later replaces A1 with
+A2 or A3. The bridge MUST generate it independently, and it MUST NOT equal or
+be treated as any MPAS Action ID.
 
 ## 5. MPAS Task Metadata
 

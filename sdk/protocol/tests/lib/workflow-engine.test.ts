@@ -88,12 +88,14 @@ function fakeAdapter(...script: (ActionResponse | Error)[]): WorkflowAdapter & {
 function fakeCoordination(updates: () => CoordinationActionUpdate[] = () => []): WorkflowCoordination & {
   submitted: unknown[];
   cancelled: string[];
+  polls: number;
 } {
   const submitted: unknown[] = [];
   const cancelled: string[] = [];
-  return {
+  const coordination = {
     submitted,
     cancelled,
+    polls: 0,
     async submitAction(pkg: unknown) {
       submitted.push(pkg);
       const actionPackage = pkg as { actionEnvelope: { actionId: { value: string } }; approvalBundle: { actionEnvelopeHash: { value: string } } };
@@ -105,6 +107,7 @@ function fakeCoordination(updates: () => CoordinationActionUpdate[] = () => []):
       };
     },
     async poll() {
+      coordination.polls += 1;
       return { version: "1" as const, type: "CoordinationPollResponse" as const, approvalRequests: [], actionUpdates: updates() };
     },
     async cancelAction(actionId) {
@@ -118,6 +121,7 @@ function fakeCoordination(updates: () => CoordinationActionUpdate[] = () => []):
       };
     },
   };
+  return coordination;
 }
 
 function makeEngine(opts: {
@@ -256,6 +260,43 @@ describe("propose", () => {
     expect(store.getWorkflow(TASK_ID)?.state).toBe("resolved");
   });
 
+  it("serializes request-triggered and background dispatch of the initial Action", async () => {
+    let releaseResponse!: (value: ActionResponse) => void;
+    const responseGate = new Promise<ActionResponse>((resolve) => {
+      releaseResponse = resolve;
+    });
+    let markStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    const requests: Parameters<WorkflowActionEndpoint["submitActionRequest"]>[0][] = [];
+    const actionEndpoint: WorkflowActionEndpoint = {
+      async submitActionRequest(request) {
+        requests.push(request);
+        markStarted();
+        return responseGate;
+      },
+    };
+    const coordination = fakeCoordination();
+    const { engine, store } = makeEngine({ actionEndpoint, coordination });
+
+    const proposed = engine.propose(proposalInput());
+    await started;
+    const background = engine.pollOnce();
+    releaseResponse(response("additionalApprovalsRequired"));
+    const [outcome] = await Promise.all([proposed, background]);
+
+    expect(outcome.kind).toBe("deferred");
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.idempotencyKey).toBe(IDEMPOTENCY_KEY);
+    expect(coordination.submitted).toHaveLength(1);
+    expect(store.getWorkflow(TASK_ID)).toMatchObject({
+      state: "awaitingApprovals",
+      actionId: REPLACEMENT_ACTION_ID,
+    });
+    expect(store.getWorkflow(TASK_ID)?.resolution).toBeUndefined();
+  });
+
   it("defers on additionalApprovalsRequired and hands the action to coordination", async () => {
     const adapter = fakeAdapter(response("additionalApprovalsRequired"));
     const coordination = fakeCoordination();
@@ -373,20 +414,44 @@ describe("propose", () => {
 });
 
 describe("pollOnce (bridge track advancement)", () => {
-  it("retries created workflows even when Coordination polling is unavailable", async () => {
+  it("does not contact Coordination when the workflow store is idle", async () => {
+    const coordination = fakeCoordination();
+    const { engine } = makeEngine({
+      adapter: fakeAdapter(response("executed")),
+      coordination,
+    });
+
+    await engine.pollOnce();
+
+    expect(coordination.polls).toBe(0);
+  });
+
+  it("retries created workflows without contacting Coordination", async () => {
     const adapter = fakeAdapter(new Error("adapter down"), response("executed"));
-    const coordination: WorkflowCoordination = {
-      ...fakeCoordination(),
-      async poll() {
-        throw new Error("coordination down");
-      },
-    };
+    const coordination = fakeCoordination();
     const { engine, store } = makeEngine({ adapter, coordination });
 
     await engine.propose(proposalInput());
     expect(store.getWorkflow(TASK_ID)?.state).toBe("created");
     await engine.pollOnce();
     expect(store.getWorkflow(TASK_ID)?.state).toBe("resolved");
+    expect(coordination.polls).toBe(0);
+  });
+
+  it("polls Coordination when a local workflow is awaiting Approvals", async () => {
+    const coordination = fakeCoordination();
+    const { engine, store } = makeEngine({
+      adapter: fakeAdapter(response("additionalApprovalsRequired")),
+      coordination,
+    });
+
+    await engine.propose(proposalInput());
+    expect(store.getWorkflow(TASK_ID)?.state).toBe("awaitingApprovals");
+    expect(coordination.polls).toBe(0);
+
+    await engine.pollOnce();
+
+    expect(coordination.polls).toBe(1);
   });
 
   it("submits completed A2 when coordination reports readyForSubmission", async () => {

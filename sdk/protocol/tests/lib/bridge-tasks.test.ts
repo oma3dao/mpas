@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { ActionPackage, Did } from "../../src/index.js";
 import {
   buildCancelTaskResult,
+  buildCompleteToolCallResult,
   buildCreateTaskResult,
   buildGetTaskResult,
   buildUpdateTaskResult,
@@ -99,6 +100,29 @@ describe("official MCP Task result builders", () => {
       result: nativeResult,
     });
     expect(result).not.toHaveProperty("_meta");
+  });
+
+  it("returns the native result directly when the initial Action settles synchronously", () => {
+    const nativeResult = { content: [{ type: "text", text: "merged" }], isError: false };
+    const record = workflow({
+      state: "resolved",
+      updatedAt: RESOLVED_AT,
+      resolvedAt: RESOLVED_AT,
+      resolution: {
+        kind: "resolved",
+        actionResponse: {
+          version: "1",
+          type: "ActionResponse",
+          result: "executed",
+          executionResult: nativeResult,
+        },
+      },
+    });
+
+    expect(buildCompleteToolCallResult(record)).toEqual({
+      ...nativeResult,
+      resultType: "complete",
+    });
   });
 
   it("maps a terminal MPAS rejection to a completed tool-level error", () => {

@@ -130,7 +130,7 @@ result.
 
 When the bridge reports that notification is required, the client may notify
 maintainers through an out-of-band channel. It later calls the generic result
-operation using the returned Action ID.
+operation using the returned stable Task ID.
 
 The client does not collect Approvals, assemble Approval Bundles, construct a
 completed Action Package, or trigger final submission.
@@ -141,9 +141,11 @@ The OMA3 GitHub proposer bridge implements the MPAS Proposer role on behalf of
 the MCP client. Its reference implementation:
 
 - creates and signs the initial Action Package;
-- submits it to the Credential Adapter;
+- durably queues it for the bridge's sole outbound dispatcher;
+- waits for the initial Credential Adapter response;
 - submits approval-gated actions to the Coordination Service;
-- returns a durable deferred reference to the MCP client;
+- returns the native result when the initial Action settles quickly, otherwise
+  returns a durable deferred Task to the MCP client;
 - monitors approval progress;
 - retrieves the completed Action Package;
 - submits it to the Credential Adapter immediately;
@@ -179,20 +181,24 @@ own; the client track is asynchronous relative to it and may be empty.
 
 ```text
 1. Client calls an upstream-named tool on the proposer bridge.
-2. Bridge creates and durably records the initial Action Package.
-3. Bridge submits it to the Credential Adapter and returns
-   MpasBridgeDeferredResult as soon as the record is durable.
+2. Bridge creates and durably records the stable Task, initial Action Package,
+   and queued submission.
+3. The request handler wakes the bridge's sole outbound dispatcher and waits
+   for its initial result. The dispatcher submits A1; neither the request
+   handler nor the Coordination poller submits Actions.
 
    If the adapter answers immediately with a native terminal result, the
-   bridge stores it and relays the native result instead.
+   bridge stores it and returns the normal native MCP result. If processing is
+   deferred, the bridge returns the stable Task to the client.
 
 4. Adapter returns additionalApprovalsRequired:
      Bridge submits the action and requirements to Coordination Service.
      Bridge durably records awaitingApprovals.
-5. A bridge-owned background worker continues polling or reconciliation.
+5. A bridge-owned Coordination poller continues polling or reconciliation.
 6. Maintainers submit signed Approvals.
 7. Coordination Service exposes the completed Action Package.
-8. Bridge immediately submits the completed package to the adapter.
+8. The poller durably queues the completed package and wakes the outbound
+   dispatcher, which submits it to the adapter.
 9. Adapter verifies, dispatches, and returns the terminal ActionResponse.
 10. Bridge durably stores the complete terminal result.
 ```
@@ -359,6 +365,16 @@ On startup, the bridge reconciles all unresolved records:
 Recovery must be idempotent. Multiple workers must not independently advance
 the same workflow without a lease, compare-and-swap transition, transactional
 claim, or equivalent exclusion mechanism.
+
+Within a bridge process, one serialized outbound dispatcher owns all initial
+and completed Action submissions. Request handlers and Coordination polling
+signal that dispatcher after durable state is committed. A periodic scan is a
+recovery mechanism for lost wakeups, not a second submission path.
+
+The periodic worker MUST inspect durable local workflow state before making a
+remote Coordination poll. It polls Coordination only while at least one local
+workflow is awaiting Approvals; expiry and outbound recovery scans continue
+locally even when the remote poll is skipped.
 
 ### 9.5 Availability
 
@@ -609,10 +625,11 @@ and this feature. It does not duplicate their normative text.
 
 ## 15. Known Limitation: Lost Initial Client Response
 
-There is a separate ambiguity if the bridge durably creates an action but the
-MCP connection fails before the client receives its Action ID. Retrying the
-upstream-named tool may express a second legitimate intent, so the bridge
-cannot safely deduplicate solely by payload hash and time.
+There is a separate ambiguity if the bridge durably creates a Task and Action
+but the MCP connection fails before the client receives either the native
+result or the deferred Task ID. Retrying the upstream-named tool may express a
+second legitimate intent, so the bridge cannot safely deduplicate solely by
+payload hash and time.
 
 The initial version:
 
@@ -629,8 +646,14 @@ not weaken at-most-once dispatch for any individual Action ID.
 ## 16. Acceptance Criteria
 
 - [ ] GitHub upstream-named calls do not block for the approval window.
-- [ ] The deferred result is returned as soon as the workflow record is durable.
-- [ ] A durable deferred result contains an Action ID and envelope hash.
+- [ ] The request handler durably records A1, wakes the sole outbound
+      dispatcher, and never submits an Action itself.
+- [ ] A terminal initial response returns the normal native MCP result without
+      exposing a Task.
+- [ ] Approval-required, pending, or failed initial processing returns a
+      durable deferred Task after the initial attempt completes.
+- [ ] A durable deferred Task exposes its stable Task ID and current Action ID
+      and envelope hash as distinct values.
 - [ ] The result states whether client notification is required.
 - [ ] The bridge continues without a result-wait request.
 - [ ] Approval arrival triggers completed-package submission promptly.

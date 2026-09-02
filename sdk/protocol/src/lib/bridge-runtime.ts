@@ -3,6 +3,7 @@ import type { ActionPackage, Did } from "../types/mpas.js";
 import { computeJsonHash } from "../utils/hash.js";
 import {
   buildCancelTaskResult,
+  buildCompleteToolCallResult,
   buildCreateTaskResult,
   buildGetTaskResult,
   buildUpdateTaskResult,
@@ -10,8 +11,8 @@ import {
 } from "./bridge-tasks.js";
 import type {
   CancelTaskResult,
-  CreateTaskResult,
   GetTaskResult,
+  TasksToolCallResult,
   UpdateTaskResult,
 } from "./mcp-tasks-extension.js";
 import { workflowProposerDid } from "./mpas-task-meta.js";
@@ -31,6 +32,7 @@ import {
   type WorkflowCoordination,
   type WorkflowCoordinationService,
   type BuildCoordinationReplacement,
+  type ProposeResult,
 } from "./workflow-engine.js";
 import type { WorkflowRecord, WorkflowStore } from "./workflow-store.js";
 
@@ -143,9 +145,12 @@ export class ProposerBridge {
     return structuredClone(this.compatibilityTools);
   }
 
-  /** Every accepted application call creates and returns an official Task. */
-  async handleToolCall(toolName: string, args: object): Promise<CreateTaskResult> {
-    return buildCreateTaskResult(await this.proposeToolCall(toolName, args), this.resultConfig);
+  /** Return a normal tool result on the fast path; expose a Task only when deferred. */
+  async handleToolCall(toolName: string, args: object): Promise<TasksToolCallResult> {
+    const outcome = await this.proposeToolCall(toolName, args);
+    return outcome.kind === "settled"
+      ? buildCompleteToolCallResult(outcome.record)
+      : buildCreateTaskResult(outcome.record, this.resultConfig);
   }
 
   /** Legacy application and reserved wait-tool dispatch over the same workflow. */
@@ -158,8 +163,8 @@ export class ProposerBridge {
     }
 
     try {
-      const record = await this.proposeToolCall(toolName, args);
-      return compatibilityResultForRecord(record, this.compatibilityResultConfig);
+      const outcome = await this.proposeToolCall(toolName, args);
+      return compatibilityResultForRecord(outcome.record, this.compatibilityResultConfig);
     } catch {
       return buildCompatibilityError(
         "BRIDGE_UNAVAILABLE",
@@ -211,14 +216,14 @@ export class ProposerBridge {
     this.store.purgeExpiredResults(this.resultConfig.resultRetentionSeconds * 1_000);
   }
 
-  private async proposeToolCall(toolName: string, args: object): Promise<WorkflowRecord> {
+  private async proposeToolCall(toolName: string, args: object): Promise<ProposeResult> {
     if (!this.tools.some((tool) => tool.name === toolName)) {
       throw new UnknownBridgeToolError(toolName);
     }
 
     const actionPackage = await this.buildActionPackage(toolName, args);
     const envelope = actionPackage.actionEnvelope;
-    const outcome = await this.engine.propose({
+    return this.engine.propose({
       taskId: `urn:uuid:${randomUUID()}`,
       actionId: envelope.actionId.value,
       actionIdempotencyKey: randomUUID(),
@@ -227,7 +232,6 @@ export class ProposerBridge {
       actionPackage,
       expiresAt: envelope.expiresAt,
     });
-    return outcome.record;
   }
 
   private async handleCompatibilityWait(args: object): Promise<CompatibilityToolResult> {
