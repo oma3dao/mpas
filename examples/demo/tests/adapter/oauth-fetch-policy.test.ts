@@ -4,6 +4,13 @@ import {
   OAuthFetchPolicyError,
 } from "../../src/adapter/oauth-fetch-policy.js";
 
+// Connect behaviour, retries and budgets belong to the layer underneath and are covered
+// in hardened-fetch.test.ts. What follows is only what OAuth adds on top of it.
+
+function connectFailure(code: string): TypeError {
+  return new TypeError("fetch failed", { cause: Object.assign(new Error(code), { code }) });
+}
+
 describe("OAuth fetch policy", () => {
   it("rejects non-HTTPS origins before making a request", async () => {
     const fetchFn = vi.fn<typeof fetch>();
@@ -76,5 +83,21 @@ describe("OAuth fetch policy", () => {
     await expect(policy("https://oauth.example/token", {
       headers: { authorization: "Basic client-credentials" },
     })).resolves.toMatchObject({ status: 200 });
+  });
+
+  it("presents a transport failure as an OAuth failure, keeping the diagnosis", async () => {
+    // Callers classify OAuth errors by this one type, so the layer below must not leak
+    // its own through. The authorization code and state stay out of the message.
+    const fetchFn = vi.fn<typeof fetch>().mockRejectedValue(connectFailure("ENETUNREACH"));
+    const policy = createOAuthFetchPolicy({ fetch: fetchFn });
+
+    const failure = await policy("https://oauth.example/token?code=secret-code&state=secret-state")
+      .catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(OAuthFetchPolicyError);
+    expect((failure as Error).message).toContain("oauth.example");
+    expect((failure as Error).message).toContain("ENETUNREACH");
+    expect((failure as Error).message).not.toContain("secret-code");
+    expect((failure as Error).message).not.toContain("secret-state");
+    expect((failure as Error).cause).toBeDefined();
   });
 });

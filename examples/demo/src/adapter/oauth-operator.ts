@@ -16,7 +16,8 @@ import { InvalidGrantError } from "@modelcontextprotocol/sdk/server/auth/errors.
 import type { OAuthClientInformationMixed, OAuthClientMetadata, OAuthTokens } from "@modelcontextprotocol/sdk/shared/auth.js";
 import { loadPlugin } from "@oma3/mpas/plugin-loader";
 import { assertExactAuthorizationServerIssuer } from "./oauth-discovery.js";
-import { createOAuthFetchPolicy } from "./oauth-fetch-policy.js";
+import { createDeadline } from "./hardened-fetch.js";
+import { createOAuthFetchPolicy, DEFAULT_OAUTH_CALL_BUDGET_MS } from "./oauth-fetch-policy.js";
 
 export const DEFAULT_OAUTH_REFRESH_SCOPE = "offline_access";
 
@@ -236,6 +237,9 @@ export function fileOAuthOperatorService(options: FileOAuthOperatorServiceOption
           ...(previous?.clientInformation ? { clientInformation: previous.clientInformation } : {}),
           ...(previous?.discovery ? { discovery: previous.discovery } : {}),
         };
+        // No shared deadline here: this policy spans the operator's browser
+        // authorization, so elapsed wall-clock time is not evidence of a fault. Each
+        // request is still bounded on its own.
         const fetchFn = createOAuthFetchPolicy({
           bearerTokenResourceUrl: request.resourceUrl,
           testOnlyAllowHttpLoopback: options.testOnlyAllowHttpLoopback,
@@ -422,9 +426,13 @@ export async function prepareOAuthForDispatch(
       };
     }
     try {
+      // auth() issues several requests back to back. One budget covers all of them, so
+      // an unreachable authorization server cannot stall a dispatch for a multiple of
+      // the per-request bound.
       const fetchFn = createOAuthFetchPolicy({
         bearerTokenResourceUrl: resourceUrl,
         testOnlyAllowHttpLoopback: isLoopbackUrl(resourceUrl),
+        deadline: createDeadline(DEFAULT_OAUTH_CALL_BUDGET_MS),
       });
       const result = await auth(provider, { serverUrl: resourceUrl, fetchFn });
       if (result !== "AUTHORIZED") {
