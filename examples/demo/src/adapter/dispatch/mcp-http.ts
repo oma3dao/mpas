@@ -3,6 +3,7 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import type { TransportSendOptions } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
 import type { OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
+import { createHardenedFetch } from "../hardened-fetch.js";
 import { classifyOAuthPrepareError, oauthLoginCommand } from "../oauth-operator.js";
 import { withInitializeProtocolVersion } from "./mcp-protocol-version.js";
 import { errorMessage, McpClientSession, type DispatchPrepareResult } from "./mcp-stdio.js";
@@ -35,6 +36,13 @@ export async function prepareMcpHttp(
     new URL(target.url),
     {
       ...(authProvider ? { authProvider } : {}),
+      // Shares the adapter's connect policy with the OAuth path. The SDK routes every
+      // request through this, including the reauthorization it performs on a 401, which
+      // is why the hardening cannot live in the OAuth helper alone. No per-attempt
+      // deadline is set: a tools/call may legitimately run long, so the caller's own
+      // timeout stays the only response bound and retries remain limited to connect
+      // failures, where no request bytes were sent.
+      fetch: createHardenedFetch({ label: "MCP request" }),
       requestInit: {
         headers: credential ? injectCredential(target.headers ?? {}, credential) : target.headers,
       },
