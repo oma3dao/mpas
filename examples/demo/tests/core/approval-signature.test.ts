@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { CompactSign, compactVerify, importJWK, type JWK } from "jose";
 import { describe, expect, it } from "vitest";
 import { verifyApprovalSignature } from "../../src/core/verification.js";
 import type { ActionPackage, Approval, CanonicalApprovalPayload } from "../../src/core/types.js";
@@ -80,20 +81,28 @@ describe("verifyApprovalSignature", () => {
     await expect(verifyApprovalSignature(approval, key.publicJwk)).resolves.toBe(false);
   });
 
-  it("rejects non-EdDSA algorithms such as HS256", async () => {
-    const key = await readJson<SigningKeyFixture>(join(fixturesDir, "test-keys", "proposer.json"));
+  it("rejects a cryptographically valid HS256 JWS because MPAS requires EdDSA", async () => {
+    const hmacJwk: JWK = {
+      kty: "oct",
+      alg: "HS256",
+      k: Buffer.from("0123456789abcdef0123456789abcdef").toString("base64url"),
+    };
+    const hmacKey = await importJWK(hmacJwk, "HS256");
+    const value = await new CompactSign(Buffer.from(JSON.stringify({ type: "ApprovalPayload" })))
+      .setProtectedHeader({ alg: "HS256" })
+      .sign(hmacKey);
+
+    await compactVerify(value, hmacKey);
+
     const approval: Approval = {
       version: "1",
       type: "Approval",
       actionEnvelopeHash: { alg: "sha-256", value: "test" },
       decision: "approve",
-      signature: {
-        format: "jws",
-        value: "eyJhbGciOiJIUzI1NiJ9.eyJ0eXBlIjoiQXBwcm92YWxQYXlsb2FkIn0.sig",
-      },
+      signature: { format: "jws", value },
       createdAt: "2026-06-05T18:02:00.000Z",
     };
 
-    await expect(verifyApprovalSignature(approval, key.publicJwk)).resolves.toBe(false);
+    await expect(verifyApprovalSignature(approval, hmacJwk)).resolves.toBe(false);
   });
 });

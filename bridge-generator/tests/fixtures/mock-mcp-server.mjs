@@ -11,22 +11,14 @@
  *   --exit-early       exits before responding to initialize
  *   --bad-json         responds with a non-JSON line
  *   --rpc-error        initialize returns a JSON-RPC error
- *   --bad-tools-list   tools/list returns a non-array tools field
  *   --dup-tools        tools/list repeats a tool name
  *   --bad-cursor       tools/list returns a non-string nextCursor
  *   --repeat-cursor    tools/list repeats the same nextCursor
- *   --noise            emit notifications and orphan responses before tools/list
  *   --tools-list-rpc-error  tools/list returns a JSON-RPC error
- *   --tools-list-rpc-error-no-message  tools/list JSON-RPC error without message
- *   --stderr-noise     write a line to stderr on startup
  */
 import { createInterface } from "node:readline";
 
 const flags = new Set(process.argv.slice(2));
-
-if (flags.has("--stderr-noise")) {
-  process.stderr.write("upstream-noise\n");
-}
 
 const TOOLS = [
   {
@@ -120,24 +112,11 @@ lines.on("line", (line) => {
       ...(flags.has("--no-server-info") ? {} : { serverInfo: { name: "mock-mcp", version: "1.2.3" } }),
     };
     send({ jsonrpc: "2.0", id: request.id, result });
-    if (flags.has("--noise")) {
-      send({ jsonrpc: "2.0", method: "notifications/message", params: { level: "info" } });
-      send({ jsonrpc: "2.0", id: "string-id", result: {} });
-      send({ jsonrpc: "2.0", id: 999, result: { tools: [] } });
-    }
     return;
   }
   if (request.method === "tools/list") {
     if (flags.has("--tools-list-rpc-error")) {
       send({ jsonrpc: "2.0", id: request.id, error: { code: -32000, message: "tools boom" } });
-      return;
-    }
-    if (flags.has("--tools-list-rpc-error-no-message")) {
-      send({ jsonrpc: "2.0", id: request.id, error: { code: -32000 } });
-      return;
-    }
-    if (flags.has("--bad-tools-list")) {
-      send({ jsonrpc: "2.0", id: request.id, result: { tools: "nope" } });
       return;
     }
     let tools = TOOLS;

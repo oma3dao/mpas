@@ -39,7 +39,11 @@ describe("promptSecret", () => {
     try {
       await expect(promptSecret("TOKEN: ")).rejects.toThrow(/stdin is not a TTY/);
     } finally {
-      if (original) Object.defineProperty(process.stdin, "isTTY", original);
+      if (original) {
+        Object.defineProperty(process.stdin, "isTTY", original);
+      } else {
+        Reflect.deleteProperty(process.stdin, "isTTY");
+      }
     }
   });
 });
