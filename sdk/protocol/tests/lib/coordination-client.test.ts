@@ -254,6 +254,52 @@ describe("Coordination Service clients", () => {
     const client = new CoordinationClient({ url, timeoutMs: 100 });
     await expect(client.poll("did:web:agents.example:missing")).rejects.toBeInstanceOf(CoordinationUnavailableError);
   });
+
+  it("rejects approvals whose compact JWS cannot yield a signer DID", async () => {
+    const actionPackage = await readJson<ActionPackage>(
+      join(fixturesDir, "action-packages", "valid-create-issue-package.json"),
+    );
+    const hash = actionPackage.approvalBundle.actionEnvelopeHash;
+    const base = actionPackage.approvalBundle.approvals[0] as Approval;
+    const client = new CoordinationClient({ url: "https://coordination.example.com" });
+
+    await expect(client.submitApproval(hash, { ...base, signature: { format: "jws", value: "not-compact" } }))
+      .rejects.toThrow(/decodable compact JWS signer DID/);
+  });
+
+  it("maps a non-MPAS 401 body to signature_invalid", async () => {
+    const server = await startMockCoordination((_request, response) => {
+      response.statusCode = 401;
+      response.end("plain-text unauthorized");
+    });
+
+    try {
+      const client = new CoordinationClient({ url: server.url });
+      await expect(client.poll("did:jwk:test" as `did:${string}`)).rejects.toMatchObject({
+        name: "MpasAuthError",
+        status: 401,
+        authCode: "signature_invalid",
+      });
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("rejects non-JSON success bodies", async () => {
+    const server = await startMockCoordination((_request, response) => {
+      response.statusCode = 200;
+      response.end("not-json");
+    });
+
+    try {
+      const client = new CoordinationClient({ url: server.url });
+      await expect(client.poll("did:web:agents.example:x")).rejects.toMatchObject({
+        name: "CoordinationResponseInvalid",
+      });
+    } finally {
+      await server.close();
+    }
+  });
 });
 
 async function startMockCoordination(

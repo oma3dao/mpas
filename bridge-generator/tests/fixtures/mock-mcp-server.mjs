@@ -9,6 +9,12 @@
  *   --no-server-info   initialize result omits serverInfo
  *   --silent           never responds (for timeout tests)
  *   --exit-early       exits before responding to initialize
+ *   --bad-json         responds with a non-JSON line
+ *   --rpc-error        initialize returns a JSON-RPC error
+ *   --dup-tools        tools/list repeats a tool name
+ *   --bad-cursor       tools/list returns a non-string nextCursor
+ *   --repeat-cursor    tools/list repeats the same nextCursor
+ *   --tools-list-rpc-error  tools/list returns a JSON-RPC error
  */
 import { createInterface } from "node:readline";
 
@@ -92,6 +98,14 @@ lines.on("line", (line) => {
     return;
   }
   if (request.method === "initialize") {
+    if (flags.has("--bad-json")) {
+      process.stdout.write("not-json-at-all\n");
+      return;
+    }
+    if (flags.has("--rpc-error")) {
+      send({ jsonrpc: "2.0", id: request.id, error: { code: -32000, message: "initialize boom" } });
+      return;
+    }
     const result = {
       protocolVersion: "2024-11-05",
       capabilities: { tools: {} },
@@ -101,18 +115,34 @@ lines.on("line", (line) => {
     return;
   }
   if (request.method === "tools/list") {
+    if (flags.has("--tools-list-rpc-error")) {
+      send({ jsonrpc: "2.0", id: request.id, error: { code: -32000, message: "tools boom" } });
+      return;
+    }
     let tools = TOOLS;
     if (flags.has("--zero-tools")) {
       tools = [];
     } else if (flags.has("--malformed-tool")) {
       tools = [...TOOLS, { description: "tool with no name", inputSchema: { type: "object" } }];
+    } else if (flags.has("--dup-tools")) {
+      tools = [TOOLS[0], TOOLS[0]];
     }
-    if (flags.has("--paginated")) {
+    if (flags.has("--paginated") || flags.has("--repeat-cursor") || flags.has("--bad-cursor")) {
       const secondPage = request.params?.cursor === "page-2";
+      let nextCursor;
+      if (flags.has("--bad-cursor") && !secondPage) {
+        nextCursor = 12;
+      } else if (flags.has("--repeat-cursor")) {
+        nextCursor = "page-2";
+      } else if (!secondPage) {
+        nextCursor = "page-2";
+      }
       send({
         jsonrpc: "2.0",
         id: request.id,
-        result: secondPage ? { tools: tools.slice(1) } : { tools: tools.slice(0, 1), nextCursor: "page-2" },
+        result: secondPage && !flags.has("--repeat-cursor")
+          ? { tools: tools.slice(1) }
+          : { tools: tools.slice(0, 1), nextCursor },
       });
     } else {
       send({ jsonrpc: "2.0", id: request.id, result: { tools } });

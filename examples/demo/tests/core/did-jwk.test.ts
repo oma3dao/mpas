@@ -62,4 +62,13 @@ describe("did:jwk derivation", () => {
     const b = await generateEd25519Key();
     expect(a.did).not.toBe(b.did);
   });
+
+  it("rejects non-Ed25519 JWKs for derivation", () => {
+    expect(() => deriveDidJwk({ kty: "OKP", crv: "X25519", x: "x" })).toThrow(/Ed25519/);
+  });
+
+  it("rejects a malformed did:jwk payload", () => {
+    expect(() => didJwkToJwk("did:web:example")).toThrow(/Not a did:jwk/);
+    expect(() => didJwkToJwk("did:jwk:!!!")).toThrow(/not canonical unpadded base64url/);
+  });
 });
