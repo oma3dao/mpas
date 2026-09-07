@@ -12,20 +12,51 @@ npm run build
 npm test
 ```
 
-`npm test` runs the normal suite, including the generated MCP bridge E2E.
+`npm test` runs the normal demo suite. SDK primitive coverage lives in
+`sdk/protocol/tests`, not here.
+
+## SDK source (published vs local checkout)
+
+The demo depends on `@oma3/mpas`. Two development modes are supported:
+
+1. **Published package (default).** `package.json` pins a published version.
+   `npm test` runs demo-owned tests and skips local-SDK integration tests. The
+   runner prints:
+
+   ```
+   MPAS SDK: published package 0.1.0-alpha.12 — skipping local SDK integration tests
+   ```
+
+2. **Local SDK checkout.** When changing the SDK, point `@oma3/mpas` at this
+   repository's `sdk/protocol` so the demo loads the unpublished code:
+
+   ```sh
+   npm install --install-links ../../sdk/protocol
+   ```
+
+   `npm test` then also runs `tests/local-sdk/` (adapter, CLI, and config
+   flows through the linked SDK). The runner prints:
+
+   ```
+   MPAS SDK: local checkout — including local SDK integration tests
+   ```
+
+Detection compares the real path of the resolved `@oma3/mpas/package.json`
+with `sdk/protocol/package.json`. A copied `file:` install that is not a
+symlink is treated as published; use `--install-links` or `npm link`.
 
 ## Test Layout
 
 | Path | Coverage |
 | --- | --- |
-| `tests/core/` | MPAS package parsing, hash binding, approvals, policy, replay guard, receipts, and plugin validation. |
 | `tests/adapter/` | Credential Adapter HTTP endpoint, config loading, credential provider, and MCP dispatch transports. |
 | `tests/coordination/` | Local Coordination Service fixtures, store state machine, HTTP endpoints, daemon startup, approvals, cancellation, and completed Action Package assembly. |
 | `tests/cli/` | CLI daemon, validation, plugin, credential, and config management commands. |
+| `tests/local-sdk/` | Demo-to-SDK integration run only when `@oma3/mpas` is the local `sdk/protocol` checkout. |
 | `tests/fixtures/` | Fixture contract tests plus reusable keys, plugins, configs, Action Packages, and mock MCP servers. |
+| `tests/e2e/` | Local stack tests that run the Credential Adapter, Coordination Service, and MCP bridge together. |
 
 > **TEST KEYS ONLY.** The private keys committed under `tests/fixtures/test-keys/` exist so signed fixtures are reproducible. They are public by definition and must never be used outside tests.
-| `tests/e2e/` | Local stack tests that run the Credential Adapter, Coordination Service, and MCP bridge together. |
 
 ## Normal Test Commands
 
@@ -44,9 +75,9 @@ npm test -- tests/coordination/store.test.ts
 Run focused groups through the wrapper's `--grep` shortcuts:
 
 ```sh
-npm test -- --grep core/
 npm test -- --grep adapter
 npm test -- --grep cli
+npm test -- --grep local-sdk
 ```
 
 Run a Vitest name pattern:

@@ -2,10 +2,10 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { buildAuthorizationRequirements } from "../../src/core/auth-requirements-builder.js";
-import { evaluatePolicy, type PolicyConfig } from "../../src/core/policy-engine.js";
-import { computeJsonHash, verifyActionPackage, type TrustedSigner } from "../../src/core/verification.js";
-import type { ActionPackage, Did } from "../../src/core/types.js";
+import { buildAuthorizationRequirements } from "../../src/lib/auth-requirements-builder.js";
+import { evaluatePolicy, type PolicyConfig } from "../../src/lib/policy-engine.js";
+import { computeJsonHash, verifyActionPackage, type TrustedSigner } from "../../src/lib/verification.js";
+import type { ActionPackage, Did } from "../../src/types/mpas.js";
 
 const fixturesDir = fileURLToPath(new URL("../fixtures/", import.meta.url));
 
@@ -14,27 +14,14 @@ interface KeyFixture {
   publicJwk: TrustedSigner["publicJwk"];
 }
 
-interface DeploymentConfig {
-  policy: {
-    defaultRequirement: PolicyConfig["defaultRequirement"];
-    signerGroups: Record<string, Did[]>;
-    policies?: Record<string, Array<{
-      description?: string;
-      match?: { conditions?: Array<{ source: string; path: string; op: string; value?: unknown }> };
-      requirements: PolicyConfig["defaultRequirement"];
-    }>>;
-  };
-  signerKeys: Array<{ did: Did; label?: string; publicJwk: unknown }>;
-}
-
 async function readJson<T>(path: string): Promise<T> {
   return JSON.parse(await readFile(path, "utf8")) as T;
 }
 
 async function trustedSigners(): Promise<TrustedSigner[]> {
-  const proposer = await readJson<KeyFixture>(join(fixturesDir, "test-keys", "proposer.json"));
-  const maintainerA = await readJson<KeyFixture>(join(fixturesDir, "test-keys", "maintainer-a.json"));
-  const maintainerB = await readJson<KeyFixture>(join(fixturesDir, "test-keys", "maintainer-b.json"));
+  const proposer = await readJson<KeyFixture>(join(fixturesDir, "keys", "proposer.json"));
+  const maintainerA = await readJson<KeyFixture>(join(fixturesDir, "keys", "maintainer-a.json"));
+  const maintainerB = await readJson<KeyFixture>(join(fixturesDir, "keys", "maintainer-b.json"));
 
   return [
     { did: proposer.did, publicJwk: proposer.publicJwk },
@@ -43,19 +30,11 @@ async function trustedSigners(): Promise<TrustedSigner[]> {
   ];
 }
 
-async function policyFromConfig(file: string): Promise<PolicyConfig> {
-  const config = await readJson<DeploymentConfig>(join(fixturesDir, "configs", file));
-
-  return {
-    defaultRequirement: config.policy.defaultRequirement,
-    policies: config.policy.policies as PolicyConfig["policies"],
-    signerGroups: config.policy.signerGroups,
-  };
-}
-
 describe("buildAuthorizationRequirements", () => {
   it("builds well-formed requirements bound to the Action Envelope hash", async () => {
-    const actionPackage = await readJson<ActionPackage>(join(fixturesDir, "core", "insufficient-approvals.json"));
+    const actionPackage = await readJson<ActionPackage>(
+      join(fixturesDir, "verification", "insufficient-approvals.json"),
+    );
     const verification = await verifyActionPackage(actionPackage, {
       trustedSigners: await trustedSigners(),
       trustedApplicationDids: ["did:web:github-mirror.example"],
@@ -64,12 +43,26 @@ describe("buildAuthorizationRequirements", () => {
       throw new Error("fixture should verify before policy evaluation");
     }
 
-    const policyResult = evaluatePolicy(actionPackage, verification.verifiedApprovals, await policyFromConfig("github-mirror-adapter-config.json"));
+    const maintainerA = await readJson<KeyFixture>(join(fixturesDir, "keys", "maintainer-a.json"));
+    const maintainerB = await readJson<KeyFixture>(join(fixturesDir, "keys", "maintainer-b.json"));
+    const policy: PolicyConfig = {
+      defaultRequirement: {
+        type: "threshold",
+        threshold: 2,
+        eligibleSignerGroup: "maintainers",
+        decision: "approve",
+      },
+      signerGroups: {
+        maintainers: [maintainerA.did, maintainerB.did],
+      },
+    };
+
+    const policyResult = evaluatePolicy(actionPackage, verification.verifiedApprovals, policy);
     if (policyResult.status !== "additionalApprovalsRequired") {
       throw new Error("fixture should require additional approvals");
     }
 
-    const adapter = await readJson<KeyFixture>(join(fixturesDir, "test-keys", "adapter.json"));
+    const adapter = await readJson<KeyFixture>(join(fixturesDir, "keys", "adapter.json"));
     const requirements = buildAuthorizationRequirements({
       actionEnvelope: actionPackage.actionEnvelope,
       unsatisfiedRules: policyResult.unsatisfiedRules,

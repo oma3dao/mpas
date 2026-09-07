@@ -512,11 +512,14 @@ npm run build    # tsc → dist/
 npm run test     # vitest
 ```
 
-For local development before publishing a release, consumers can install this
-directory directly:
+For local development before publishing a release, consumers can point
+`@oma3/mpas` at this directory. Prefer a symlink so later SDK edits are
+picked up without reinstalling:
 
 ```sh
-npm install /path/to/mpas/sdk/protocol
+# from a consumer such as examples/demo
+npm install --install-links /path/to/mpas/sdk/protocol
+# or: npm link from this directory, then npm link @oma3/mpas in the consumer
 ```
 
 ## Releasing
@@ -526,7 +529,10 @@ Maintainer release instructions are documented in
 
 ## Tests
 
-Tests cover proposer-side primitives, hash utilities, bridge integration, verification, and type conformance.
+Tests under `tests/` are the authoritative coverage for SDK behavior and
+security contracts: signature verification (including HS256 and `alg: none`
+rejection), `did:jwk` parsing, Action Package validation, policy evaluation,
+plugin loading, and receipt construction.
 
 ## Future Package Split
 
