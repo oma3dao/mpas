@@ -3,14 +3,14 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { CompactSign, compactVerify, importJWK, type JWK } from "jose";
 import { describe, expect, it } from "vitest";
-import { verifyApprovalSignature } from "../../src/core/verification.js";
-import type { ActionPackage, Approval, CanonicalApprovalPayload } from "../../src/core/types.js";
+import { verifyApprovalSignature } from "../../src/lib/verification.js";
+import type { ActionPackage, Approval, CanonicalApprovalPayload } from "../../src/types/mpas.js";
 
 const fixturesDir = fileURLToPath(new URL("../fixtures/", import.meta.url));
 
 interface SigningKeyFixture {
   did: string;
-  publicJwk: Record<string, unknown>;
+  publicJwk: JWK;
 }
 
 async function readJson<T>(path: string): Promise<T> {
@@ -18,13 +18,13 @@ async function readJson<T>(path: string): Promise<T> {
 }
 
 async function readActionPackage(file: string): Promise<ActionPackage> {
-  return readJson<ActionPackage>(join(fixturesDir, "core", file));
+  return readJson<ActionPackage>(join(fixturesDir, "verification", file));
 }
 
 async function readSigningKeys(): Promise<Map<string, SigningKeyFixture>> {
   const entries = await Promise.all(
     ["proposer.json", "maintainer-a.json", "maintainer-b.json"].map(async (file) => {
-      const key = await readJson<SigningKeyFixture>(join(fixturesDir, "test-keys", file));
+      const key = await readJson<SigningKeyFixture>(join(fixturesDir, "keys", file));
       return [key.did, key] as const;
     }),
   );
@@ -65,7 +65,7 @@ describe("verifyApprovalSignature", () => {
   });
 
   it("rejects alg none", async () => {
-    const key = await readJson<SigningKeyFixture>(join(fixturesDir, "test-keys", "proposer.json"));
+    const key = await readJson<SigningKeyFixture>(join(fixturesDir, "keys", "proposer.json"));
     const approval: Approval = {
       version: "1",
       type: "Approval",

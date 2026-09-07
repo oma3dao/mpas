@@ -156,7 +156,16 @@ integrations/
   skills/                       Agent skill packages (proposer, maintainer)
 ```
 
-Each example in `examples/` is self-contained with its own build tooling. The demo depends on the SDK via `"@oma3/mpas": "file:../../sdk/protocol"`.
+Each example in `examples/` is self-contained with its own build tooling.
+
+The demo depends on the published `@oma3/mpas` package by default. That is the
+mode for demo-only work: `npm test` in `examples/demo` exercises demo-owned
+behavior against the installed release.
+
+To test unpublished SDK changes through the demo, install the local checkout
+so `@oma3/mpas` resolves to `sdk/protocol` (a symlink, `npm link`, or
+`npm install --install-links ../../sdk/protocol`). In that mode `npm test`
+also runs local-SDK integration tests. See [examples/demo/tests/README.md](examples/demo/tests/README.md).
 
 ## Documentation
 

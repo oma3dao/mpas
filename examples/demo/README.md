@@ -27,6 +27,12 @@ For the full protocol design, start with the base specification:
 | ------------------------------------------------------------------------ | ----------------------------------------------------- |
 | [`sdk/protocol`](../../sdk/protocol)                                     | @oma3/mpas protocol SDK                               |
 
+The committed demo dependency is the published `@oma3/mpas` package. That is
+the default for demo-only work. To exercise unpublished SDK changes through
+this demo, install the local checkout (`npm install --install-links
+../../sdk/protocol` or `npm link`). See [tests/README.md](tests/README.md)
+for how `npm test` detects the source and when local-SDK integration tests run.
+
 ## Architecture
 
 ```

@@ -1,0 +1,64 @@
+{
+  "version": "1",
+  "type": "ActionPackage",
+  "executionPayload": {
+    "name": "create_issue_mirror",
+    "arguments": {
+      "owner": "outside-org",
+      "repo": "restricted-repo",
+      "title": "Restricted resource fixture",
+      "body": "This package names a repository outside allowedRepositories."
+    }
+  },
+  "actionEnvelope": {
+    "version": "1",
+    "type": "ActionEnvelope",
+    "proposer": {
+      "did": "did:jwk:eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6Ims2TzdjaVFrbXBodUVFdDFpM3lBaW1KSldlR0ttT3EzdF9mc05renphNm8ifQ"
+    },
+    "target": {
+      "applicationDid": "did:web:github-mirror.example",
+      "resource": "repo:outside-org/restricted-repo"
+    },
+    "executionProfile": {
+      "id": "did:web:profiles.oma3.org:mcp",
+      "format": "mcp.toolsCall"
+    },
+    "executionPayloadHash": {
+      "alg": "sha-256",
+      "value": "DKNw15T17BgXh5tm0FODFvOgXurgOyvsZykJbDa8_eQ"
+    },
+    "actionId": {
+      "value": "urn:uuid:77777777-7777-4777-8777-777777777777"
+    },
+    "createdAt": "2026-06-05T18:00:00.000Z",
+    "expiresAt": "2030-01-01T00:00:00.000Z"
+  },
+  "approvalBundle": {
+    "version": "1",
+    "type": "ApprovalBundle",
+    "actionEnvelopeHash": {
+      "alg": "sha-256",
+      "value": "t1StgKYDrgm8e5hIE1-BfIIRh7CaDp_F5Ru5FR2eHBE"
+    },
+    "approvals": [
+      {
+        "version": "1",
+        "type": "Approval",
+        "actionEnvelopeHash": {
+          "alg": "sha-256",
+          "value": "t1StgKYDrgm8e5hIE1-BfIIRh7CaDp_F5Ru5FR2eHBE"
+        },
+        "decision": "propose",
+        "signature": {
+          "format": "jws",
+          "value": "eyJhbGciOiJFZERTQSIsImtpZCI6ImRpZDpqd2s6ZXlKamNuWWlPaUpGWkRJMU5URTVJaXdpYTNSNUlqb2lUMHRRSWl3aWVDSTZJbXMyVHpkamFWRnJiWEJvZFVWRmRERnBNM2xCYVcxS1NsZGxSMHR0VDNFemRGOW1jMDVyZW5waE5tOGlmUSMwIn0.eyJhY3Rpb25FbnZlbG9wZUhhc2giOnsiYWxnIjoic2hhLTI1NiIsInZhbHVlIjoidDFTdGdLWURyZ204ZTVoSUUxLUJmSUlSaDdDYURwX0Y1UnU1RlIyZUhCRSJ9LCJjcmVhdGVkQXQiOiIyMDI2LTA2LTA1VDE4OjAxOjAwLjAwMFoiLCJkZWNpc2lvbiI6InByb3Bvc2UiLCJzaWduZXJEaWQiOiJkaWQ6andrOmV5SmpjbllpT2lKRlpESTFOVEU1SWl3aWEzUjVJam9pVDB0UUlpd2llQ0k2SW1zMlR6ZGphVkZyYlhCb2RVVkZkREZwTTNsQmFXMUtTbGRsUjB0dFQzRXpkRjltYzA1cmVucGhObThpZlEiLCJ0eXBlIjoiQXBwcm92YWxQYXlsb2FkIn0.GrYPx3UyJSTbUmjSqBVQkW60xBkbCizxbwlGFciA8nnEGVaOiyZnvk-qc6RiqWBHlq_peWGvrZd-cJ63PzACBQ"
+        },
+        "createdAt": "2026-06-05T18:01:00.000Z"
+      }
+    ],
+    "assembledBy": "did:jwk:eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6Ims2TzdjaVFrbXBodUVFdDFpM3lBaW1KSldlR0ttT3EzdF9mc05renphNm8ifQ",
+    "createdAt": "2026-06-05T18:10:00.000Z"
+  },
+  "createdAt": "2026-06-05T18:10:00.000Z"
+}

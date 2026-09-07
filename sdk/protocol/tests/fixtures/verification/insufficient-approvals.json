@@ -1,0 +1,66 @@
+{
+  "version": "1",
+  "type": "ActionPackage",
+  "executionPayload": {
+    "name": "merge_pull_request_mirror",
+    "arguments": {
+      "owner": "example-org",
+      "repo": "mpas-demo-repository",
+      "pullNumber": 99,
+      "baseRef": "main",
+      "expectedHeadSha": "def456abc123",
+      "mergeMethod": "squash"
+    }
+  },
+  "actionEnvelope": {
+    "version": "1",
+    "type": "ActionEnvelope",
+    "proposer": {
+      "did": "did:jwk:eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6Ims2TzdjaVFrbXBodUVFdDFpM3lBaW1KSldlR0ttT3EzdF9mc05renphNm8ifQ"
+    },
+    "target": {
+      "applicationDid": "did:web:github-mirror.example",
+      "resource": "repo:example-org/mpas-demo-repository"
+    },
+    "executionProfile": {
+      "id": "did:web:profiles.oma3.org:mcp",
+      "format": "mcp.toolsCall"
+    },
+    "executionPayloadHash": {
+      "alg": "sha-256",
+      "value": "GtVevrq6zprrywcSS4rmihADejWFd7WWkQh75IWgpOI"
+    },
+    "actionId": {
+      "value": "urn:uuid:44444444-4444-4444-8444-444444444444"
+    },
+    "createdAt": "2026-06-05T18:00:00.000Z",
+    "expiresAt": "2030-01-01T00:00:00.000Z"
+  },
+  "approvalBundle": {
+    "version": "1",
+    "type": "ApprovalBundle",
+    "actionEnvelopeHash": {
+      "alg": "sha-256",
+      "value": "se9mhCubXMN3pv-0ndiCMzo184Nku-d7mKbhj5vb5K4"
+    },
+    "approvals": [
+      {
+        "version": "1",
+        "type": "Approval",
+        "actionEnvelopeHash": {
+          "alg": "sha-256",
+          "value": "se9mhCubXMN3pv-0ndiCMzo184Nku-d7mKbhj5vb5K4"
+        },
+        "decision": "propose",
+        "signature": {
+          "format": "jws",
+          "value": "eyJhbGciOiJFZERTQSIsImtpZCI6ImRpZDpqd2s6ZXlKamNuWWlPaUpGWkRJMU5URTVJaXdpYTNSNUlqb2lUMHRRSWl3aWVDSTZJbXMyVHpkamFWRnJiWEJvZFVWRmRERnBNM2xCYVcxS1NsZGxSMHR0VDNFemRGOW1jMDVyZW5waE5tOGlmUSMwIn0.eyJhY3Rpb25FbnZlbG9wZUhhc2giOnsiYWxnIjoic2hhLTI1NiIsInZhbHVlIjoic2U5bWhDdWJYTU4zcHYtMG5kaUNNem8xODROa3UtZDdtS2JoajV2YjVLNCJ9LCJjcmVhdGVkQXQiOiIyMDI2LTA2LTA1VDE4OjAxOjAwLjAwMFoiLCJkZWNpc2lvbiI6InByb3Bvc2UiLCJzaWduZXJEaWQiOiJkaWQ6andrOmV5SmpjbllpT2lKRlpESTFOVEU1SWl3aWEzUjVJam9pVDB0UUlpd2llQ0k2SW1zMlR6ZGphVkZyYlhCb2RVVkZkREZwTTNsQmFXMUtTbGRsUjB0dFQzRXpkRjltYzA1cmVucGhObThpZlEiLCJ0eXBlIjoiQXBwcm92YWxQYXlsb2FkIn0.s2zfthhAC300_Xg1bCsolh6ELlY2O4F-IZbaaBnJ388z2xyEF7F8eQa2livr8e57ecT4MFRzfKqwd3ClUTRbAg"
+        },
+        "createdAt": "2026-06-05T18:01:00.000Z"
+      }
+    ],
+    "assembledBy": "did:jwk:eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6Ims2TzdjaVFrbXBodUVFdDFpM3lBaW1KSldlR0ttT3EzdF9mc05renphNm8ifQ",
+    "createdAt": "2026-06-05T18:10:00.000Z"
+  },
+  "createdAt": "2026-06-05T18:10:00.000Z"
+}

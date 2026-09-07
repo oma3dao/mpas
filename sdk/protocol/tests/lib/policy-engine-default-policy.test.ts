@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { evaluatePolicy, type PolicyConfig, type Requirement } from "../../src/core/policy-engine.js";
-import type { ActionPackage, Decision, Did } from "../../src/core/types.js";
-import type { VerifiedApprovals } from "../../src/core/verification.js";
+import { evaluatePolicy, type PolicyConfig } from "../../src/lib/policy-engine.js";
+import type { ActionPackage, Decision, Did } from "../../src/types/mpas.js";
+import type { VerifiedApprovals } from "../../src/lib/verification.js";
 
 // Helpers to build minimal test data without requiring fixture files or real signatures.
 

@@ -105,3 +105,13 @@ jobs:
       - name: Test demo
         working-directory: examples/demo
         run: npm test
+
+      - name: Link local SDK into demo
+        working-directory: examples/demo
+        run: |
+          rm -rf node_modules/@oma3/mpas
+          ln -s "$(realpath ../../sdk/protocol)" node_modules/@oma3/mpas
+
+      - name: Test demo against local SDK
+        working-directory: examples/demo
+        run: npm test
