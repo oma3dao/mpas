@@ -52,6 +52,8 @@ const resolveOAuthDeployment = vi.fn(async (_configDir: string, selectedDid: str
   session,
   credentialHandle,
   refreshScope: "offline_access",
+  client: { type: "auto" as const },
+  refresh: { safetyWindowMs: 60_000, jitterMaxMs: 30_000 },
 }));
 
 describe("OAuth operator CLI", () => {
@@ -78,7 +80,7 @@ describe("OAuth operator CLI", () => {
         openBrowser: false,
       })).resolves.toMatchObject({ status: "authorized", refreshable: true });
       const status = await service.status({ applicationDid, resourceUrl: fixture.resourceUrl, session, credentialHandle });
-      expect(status).toMatchObject({ status: "authorized", scopes: ["mcp:tools"] });
+      expect(status).toMatchObject({ status: "authorized", scopes: expect.arrayContaining(["mcp:tools", "offline_access"]) });
       expect(JSON.stringify(status)).not.toContain("fixture-access-token");
       await expect(service.logout({ applicationDid, resourceUrl: fixture.resourceUrl, session, credentialHandle }))
         .resolves.toMatchObject({ status: "logged_out", localCredentialsDeleted: true });
@@ -112,6 +114,8 @@ describe("OAuth operator CLI", () => {
       session,
       credentialHandle,
       refreshScope: "offline_access",
+      client: { type: "auto" },
+      refresh: { safetyWindowMs: 60_000, jitterMaxMs: 30_000 },
       openBrowser: false,
     });
     expect(JSON.parse(stdout.text)).toMatchObject({ status: "oauth_login_required" });
@@ -131,6 +135,8 @@ describe("OAuth operator CLI", () => {
       session,
       credentialHandle,
       refreshScope: "offline_access",
+      client: { type: "auto" },
+      refresh: { safetyWindowMs: 60_000, jitterMaxMs: 30_000 },
     });
     expect(JSON.parse(stdout.text)).not.toHaveProperty("accessToken");
   });
@@ -156,6 +162,8 @@ describe("OAuth operator CLI", () => {
       session,
       credentialHandle,
       refreshScope: "offline_access",
+      client: { type: "auto" },
+      refresh: { safetyWindowMs: 60_000, jitterMaxMs: 30_000 },
     });
   });
 

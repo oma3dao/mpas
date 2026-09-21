@@ -107,6 +107,46 @@ describe("proposer flow integration", () => {
       await server.close();
     }
   });
+
+  it("preserves a policyUnavailable response exactly across the Action endpoint", async () => {
+    const plugin = await readJson<MpasApplicationPlugin>(join(fixturesDir, "plugins", "github-repo.json"));
+    const policyUnavailable: AdapterResponse = {
+      version: "1",
+      type: "ActionResponse",
+      result: "policyUnavailable",
+      error: {
+        code: "POLICY_SOURCE_UNAVAILABLE",
+        message: "Policy source is temporarily unavailable.",
+      },
+      context: { source: "policy-registry", attempt: 3 },
+      createdAt: "2026-07-26T18:00:00.000Z",
+    };
+    const server = await startMockAdapter((_request, response) => {
+      sendJson(response, policyUnavailable);
+    });
+
+    try {
+      const keyManager = await KeyManager.fromFile(join(fixturesDir, "keys", "proposer.json"));
+      const builder = new ActionPackageBuilder({
+        applicationDid: plugin.applicationDid,
+        executionProfile: {
+          id: plugin.executionProfile.id,
+          format: plugin.executionProfile.format ?? "mcp.toolsCall",
+        },
+        keyManager,
+      });
+      const client = new AdapterClient({ url: server.url });
+      const actionPackage = await builder.buildFromToolCall("create_issue", {
+        owner: "oma3dao",
+        repo: "test",
+        title: "Retry later",
+      });
+
+      expect(await client.submit(actionPackage)).toEqual(policyUnavailable);
+    } finally {
+      await server.close();
+    }
+  });
 });
 
 async function startMockAdapter(

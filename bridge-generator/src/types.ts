@@ -38,6 +38,13 @@ export interface UpstreamInfo {
   tools: McpToolDefinition[];
 }
 
+export interface CredentialRequirement {
+  type: string;
+  expectedAuthority?: string[];
+  refreshScope?: string;
+  description?: string;
+}
+
 export interface GeneratedPlugin {
   version: "1";
   type: "MpasApplicationPlugin";
@@ -50,7 +57,7 @@ export interface GeneratedPlugin {
     format: string;
     protocolVersion: string;
   };
-  credentialRequirements: unknown[];
+  credentialRequirements: CredentialRequirement[];
   operations: Record<string, {
     description: string;
     impact: "medium" | "high" | "critical";

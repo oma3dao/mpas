@@ -37,10 +37,14 @@ async function trustedSigners(): Promise<TrustedSigner[]> {
   ];
 }
 
+/** Deterministic clock pinned inside the fixture validity window. */
+const FIXTURE_NOW = Date.parse("2026-06-05T19:00:00.000Z");
+
 async function verificationConfig(): Promise<VerificationConfig> {
   return {
     trustedSigners: await trustedSigners(),
     trustedApplicationDids: ["did:web:github-mirror.example"],
+    now: FIXTURE_NOW,
   };
 }
 

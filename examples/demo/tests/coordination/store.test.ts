@@ -2,8 +2,8 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { CompactSign, importJWK, type JWK } from "jose";
 import { canonicalize } from "json-canonicalize";
-import { describe, expect, it } from "vitest";
-import { buildDeliveryEnvelope } from "@oma3/mpas";
+import { describe, expect, it, vi } from "vitest";
+import { buildDeliveryEnvelope, parseCoordinationPollResponse } from "@oma3/mpas";
 import { CoordinationStore, MpasServiceError } from "../../src/coordination/store.js";
 import type { CoordinationActionRequest } from "../../src/coordination/types.js";
 import type { ActionPackage, Approval, Decision, Did, Hash } from "../../src/core/types.js";
@@ -15,12 +15,15 @@ interface FixtureKey {
   privateJwk: JWK;
 }
 
+/** Deterministic clock pinned inside the fixture validity window. */
+const FIXTURE_NOW = Date.parse("2026-06-05T19:00:00.000Z");
+
 const adapterDid = "did:web:adapter.local" as Did;
 
 describe("CoordinationStore", () => {
   it("stores pending actions and returns signer-specific approval requests", async () => {
     const request = await coordinationActionRequest();
-    const store = new CoordinationStore();
+    const store = new CoordinationStore({ now: FIXTURE_NOW });
 
     const result = store.createWorkflow(request);
     const maintainerPoll = store.poll((await fixtureKey("maintainer-a")).did);
@@ -37,15 +40,16 @@ describe("CoordinationStore", () => {
       state: "awaitingApprovals",
       expiresAt: request.actionPackage.actionEnvelope.expiresAt,
     });
+    expect(parseCoordinationPollResponse(proposerPoll)).toEqual(proposerPoll);
     expect(outsiderPoll.approvalRequests).toHaveLength(0);
   });
 
   it("pins Action IDs independently within relay and coordination state", async () => {
     const request = await coordinationActionRequest();
     const conflictingPackage = structuredClone(request.actionPackage);
-    conflictingPackage.actionEnvelope.expiresAt = "2030-01-02T00:00:00.000Z";
+    conflictingPackage.actionEnvelope.expiresAt = "2026-06-06T18:00:00.000Z";
     conflictingPackage.approvalBundle.actionEnvelopeHash = computeJsonHash(conflictingPackage.actionEnvelope);
-    const store = new CoordinationStore();
+    const store = new CoordinationStore({ now: FIXTURE_NOW });
 
     store.createWorkflow(request);
 
@@ -69,7 +73,7 @@ describe("CoordinationStore", () => {
 
   it("tracks approvals, ignores duplicate signer counts, and assembles a completed action package", async () => {
     const request = await coordinationActionRequest();
-    const store = new CoordinationStore();
+    const store = new CoordinationStore({ now: FIXTURE_NOW });
     const maintainerA = await fixtureKey("maintainer-a");
     const maintainerB = await fixtureKey("maintainer-b");
 
@@ -97,7 +101,9 @@ describe("CoordinationStore", () => {
       actionEnvelopeHash: request.authorizationRequirements.actionEnvelopeHash,
       approval: await signApproval(request.authorizationRequirements.actionEnvelopeHash, maintainerB, "approve"),
     });
-    const readyUpdate = store.poll(request.actionPackage.actionEnvelope.proposer.did).actionUpdates[0];
+    const readyPoll = store.poll(request.actionPackage.actionEnvelope.proposer.did);
+    const readyUpdate = readyPoll.actionUpdates[0];
+    expect(parseCoordinationPollResponse(readyPoll)).toEqual(readyPoll);
 
     expect(ready.state).toBe("readyForSubmission");
     expect(readyUpdate.state).toBe("readyForSubmission");
@@ -108,7 +114,7 @@ describe("CoordinationStore", () => {
 
   it("makes each Signer's first decision final for an Action Envelope", async () => {
     const request = await coordinationActionRequest();
-    const store = new CoordinationStore();
+    const store = new CoordinationStore({ now: FIXTURE_NOW });
     const maintainerA = await fixtureKey("maintainer-a");
     store.createWorkflow(request);
 
@@ -149,7 +155,7 @@ describe("CoordinationStore", () => {
 
   it("rejects a workflow as soon as immutable decisions make its threshold unreachable", async () => {
     const request = await coordinationActionRequest();
-    const store = new CoordinationStore();
+    const store = new CoordinationStore({ now: FIXTURE_NOW });
     const maintainerA = await fixtureKey("maintainer-a");
     store.createWorkflow(request);
 
@@ -159,12 +165,35 @@ describe("CoordinationStore", () => {
       actionEnvelopeHash: request.authorizationRequirements.actionEnvelopeHash,
       approval: await signApproval(request.authorizationRequirements.actionEnvelopeHash, maintainerA, "reject"),
     });
-    const update = store.poll(request.actionPackage.actionEnvelope.proposer.did).actionUpdates[0];
+    const poll = store.poll(request.actionPackage.actionEnvelope.proposer.did);
+    const update = poll.actionUpdates[0];
 
     expect(response.state).toBe("rejected");
     expect(update).toMatchObject({ state: "rejected" });
     expect(update.rejectedAt).toBeDefined();
+    expect(update.expiresAt).toBe(request.actionPackage.actionEnvelope.expiresAt);
+    expect(update.progress).toEqual({ required: 2, collected: 0, pending: [(await fixtureKey("maintainer-b")).did] });
+    expect(parseCoordinationPollResponse(poll)).toEqual(poll);
     expect(store.poll((await fixtureKey("maintainer-b")).did).approvalRequests).toHaveLength(0);
+  });
+
+  it("preserves expiry and progress in an expired response accepted by the public parser", async () => {
+    const request = await coordinationActionRequest();
+    const currentTime = new Date();
+    try {
+      // Pin the clock inside the fixture validity window for workflow creation.
+      vi.setSystemTime(new Date(FIXTURE_NOW));
+      const store = new CoordinationStore();
+      store.createWorkflow(request);
+      // Advance past expiry.
+      vi.setSystemTime(new Date(Date.parse(request.actionPackage.actionEnvelope.expiresAt) + 1));
+      const poll = store.poll(request.actionPackage.actionEnvelope.proposer.did);
+      expect(poll.actionUpdates[0]).toMatchObject({ state: "expired", expiresAt: request.actionPackage.actionEnvelope.expiresAt,
+        progress: { required: 2, collected: 0, pending: [(await fixtureKey("maintainer-a")).did, (await fixtureKey("maintainer-b")).did] } });
+      expect(parseCoordinationPollResponse(poll)).toEqual(poll);
+    } finally {
+      vi.setSystemTime(currentTime);
+    }
   });
 
   it("rejects invalid requirements and Action Package bindings before workflow creation", async () => {
@@ -199,7 +228,7 @@ describe("CoordinationStore", () => {
     cases.push(envelopeMismatch);
 
     for (const invalid of cases) {
-      const store = new CoordinationStore();
+      const store = new CoordinationStore({ now: FIXTURE_NOW });
       expect(() => store.createWorkflow(invalid)).toThrowError(MpasServiceError);
       expect(store.poll(invalid.actionPackage.actionEnvelope.proposer.did).actionUpdates).toHaveLength(0);
     }
@@ -207,7 +236,7 @@ describe("CoordinationStore", () => {
 
   it("preserves unenforcing behavior by storing but not counting an ineligible Approval", async () => {
     const request = await coordinationActionRequest();
-    const store = new CoordinationStore();
+    const store = new CoordinationStore({ now: FIXTURE_NOW });
     const adapter = await fixtureKey("adapter");
     store.createWorkflow(request);
 
@@ -223,17 +252,32 @@ describe("CoordinationStore", () => {
     expect(update.progress).toMatchObject({ required: 2, collected: 0 });
   });
 
-  it("rejects self-approval — proposer cannot approve their own action", async () => {
+  it("accepts a proposer Approval only when the settled policy makes that decision eligible", async () => {
     const request = await coordinationActionRequest();
-    const store = new CoordinationStore();
+    const store = new CoordinationStore({ now: FIXTURE_NOW });
     const proposer = await fixtureKey("proposer");
 
-    // Make the proposer eligible as a signer for this test
+    request.authorizationRequirements.approvalRequirements.anyOf![0].threshold = 1;
     request.authorizationRequirements.approvalRequirements.anyOf![0].eligibleSigners.push(proposer.did);
-
     store.createWorkflow(request);
 
-    // Proposer tries to approve their own action
+    const selfApproval = await signApproval(request.authorizationRequirements.actionEnvelopeHash, proposer, "approve");
+    const response = store.submitApproval({
+      version: "1",
+      type: "CoordinationApprovalSubmission",
+      actionEnvelopeHash: request.authorizationRequirements.actionEnvelopeHash,
+      approval: selfApproval,
+    });
+
+    expect(response).toMatchObject({ accepted: true, state: "readyForSubmission" });
+  });
+
+  it("denies a proposer decision that the settled policy does not authorize", async () => {
+    const request = await coordinationActionRequest();
+    const store = new CoordinationStore({ now: FIXTURE_NOW });
+    const proposer = await fixtureKey("proposer");
+    store.createWorkflow(request);
+
     const selfApproval = await signApproval(request.authorizationRequirements.actionEnvelopeHash, proposer, "approve");
     expect(() =>
       store.submitApproval({
@@ -242,12 +286,12 @@ describe("CoordinationStore", () => {
         actionEnvelopeHash: request.authorizationRequirements.actionEnvelopeHash,
         approval: selfApproval,
       }),
-    ).toThrowError(MpasServiceError);
+    ).toThrowError(expect.objectContaining({ code: "SELF_APPROVAL_DENIED", statusCode: 403 }));
   });
 
   it("cancels awaiting actions, hides them from signers, and rejects later approvals", async () => {
     const request = await coordinationActionRequest();
-    const store = new CoordinationStore();
+    const store = new CoordinationStore({ now: FIXTURE_NOW });
     const maintainerA = await fixtureKey("maintainer-a");
 
     store.createWorkflow(request);
@@ -264,6 +308,10 @@ describe("CoordinationStore", () => {
       state: "cancelled",
       expiresAt: request.actionPackage.actionEnvelope.expiresAt,
     });
+    const cancelledPoll = store.poll(request.actionPackage.actionEnvelope.proposer.did);
+    expect(cancelledPoll.actionUpdates[0].progress).toBeUndefined();
+    expect(cancelledPoll.actionUpdates[0].actionPackage).toBeUndefined();
+    expect(parseCoordinationPollResponse(cancelledPoll)).toEqual(cancelledPoll);
     expect(() =>
       store.submitApproval({
         version: "1",

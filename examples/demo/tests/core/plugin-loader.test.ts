@@ -18,6 +18,9 @@ describe("loadPlugin", () => {
         "delete_branch_mirror",
         "merge_pull_request_mirror",
       ]);
+      expect(result.plugin.credentialRequirements?.[0]).toMatchObject({
+        expectedAuthority: ["issue.write", "pullRequest.merge", "pullRequest.read", "branch.delete"],
+      });
     }
   });
 
@@ -48,6 +51,28 @@ describe("loadPlugin", () => {
       error: {
         code: "PLUGIN_SCHEMA_INVALID",
       },
+    });
+  });
+
+  it.each([
+    ["legacy authority", { type: "oauthToken", requiredCapabilities: ["repo.write"] }],
+    ["mixed authority", { type: "oauthToken", expectedAuthority: ["repo.write"], requiredCapabilities: ["repo.write"] }],
+    ["unknown key", { type: "oauthToken", expectedAuthority: ["repo.write"], authorityHint: "write" }],
+    ["provider scopes", { type: "oauthToken", scopes: ["repo"] }],
+  ])("rejects %s in plugin credential requirements", async (_label, requirement) => {
+    const dir = await mkdtemp(join(tmpdir(), "mpas-plugin-loader-"));
+    const path = join(dir, "invalid-credential-requirement.json");
+    const plugin = JSON.parse(
+      await readFile(join(pluginsDir, "github-mirror-plugin.json"), "utf8"),
+    ) as { credentialRequirements: unknown[] };
+    plugin.credentialRequirements = [requirement];
+    await writeFile(path, JSON.stringify(plugin));
+
+    const result = await loadPlugin(path);
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "PLUGIN_SCHEMA_INVALID" },
     });
   });
 

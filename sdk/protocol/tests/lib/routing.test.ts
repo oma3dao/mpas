@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import { parseActionReference } from "../../src/lib/routing.js";
 import {
   buildDeliveryEnvelope,
   computeIdempotencyFingerprint,
+  computeJsonHash,
   parseActionRequestEnvelope,
   parseActionResponseEnvelope,
   parseActionResponse,
@@ -13,6 +16,7 @@ import {
   RoutingValidationError,
   type ActionRequest,
   type ActionResponse,
+  type CoordinationActionUpdate,
   type Did,
 } from "../../src/index.js";
 
@@ -50,7 +54,128 @@ function actionRequest(idempotencyKey = "request-1"): ActionRequest {
   };
 }
 
+function actionUpdate(state: CoordinationActionUpdate["state"] = "awaitingApprovals"): CoordinationActionUpdate {
+  const actionPackage = actionRequest().actionPackage;
+  actionPackage.actionEnvelope.executionPayloadHash = computeJsonHash(actionPackage.executionPayload);
+  const actionEnvelopeHash = computeJsonHash(actionPackage.actionEnvelope);
+  actionPackage.approvalBundle.actionEnvelopeHash = actionEnvelopeHash;
+  // Structural parsing does not establish signature validity or execution authority.
+  actionPackage.approvalBundle.approvals = [{ version: "1", type: "Approval", actionEnvelopeHash,
+    decision: "approve", createdAt: actionPackage.actionEnvelope.createdAt, signature: { format: "jws", value: "e30.e30.c2ln" } }];
+  return {
+    version: "1", type: "CoordinationActionUpdate", state,
+    actionRef: { version: "1", type: "ActionRef", actionId: actionPackage.actionEnvelope.actionId, actionEnvelopeHash },
+    expiresAt: actionPackage.actionEnvelope.expiresAt,
+    ...(state === "cancelled" ? { cancelledAt: "2026-08-25T12:30:00.000Z" } : { progress: { required: 1, collected: 0, pending: [observer] } }),
+    ...(state === "rejected" ? { rejectedAt: "2026-08-25T12:30:00.000Z" } : {}),
+    ...(state === "readyForResubmission" ? { actionPackage } : {}),
+  };
+}
+
 describe("routing helpers", () => {
+  it.each(["awaitingApprovals", "readyForResubmission", "executed", "rejected", "cancelled", "expired"] as const)
+    ("preserves a valid populated action update in state %s", state => {
+      const poll = { version: "1", type: "CoordinationPollResponse", approvalRequests: [], actionUpdates: [actionUpdate(state)] };
+      expect(parseCoordinationPollResponse(poll)).toEqual(poll);
+    });
+
+  it.each([
+    ["", null], ["", {}], ["version", "2"], ["type", "other"], ["extra", true], ["expiredAt", "2026-08-25T12:00:00.000Z"],
+    ["expiresAt", undefined], ["expiresAt", "2030"], ["expiresAt", "2030-02-30T00:00:00.000Z"],
+    ["actionRef", null], ["actionRef.actionId.scope", 42], ["actionRef.actionEnvelopeHash.value", "bad="],
+    ["state", "other"], ["progress", undefined], ["progress", null], ["progress.extra", 0],
+    ["progress.required", -1], ["progress.collected", 0.5], ["progress.pending", {}], ["progress.pending", ["not-a-did"]],
+    ["cancelledAt", "2030"], ["rejectedAt", null], ["actionPackage", {}],
+  ])("rejects malformed action update field %s", (field, value) => {
+    let update: unknown = actionUpdate();
+    if (field === "") update = value;
+    else {
+      const parts = (field as string).split(".");
+      let object = update as Record<string, unknown>;
+      for (const part of parts.slice(0, -1)) object = object[part] as Record<string, unknown>;
+      if (value === undefined) delete object[parts.at(-1)!];
+      else object[parts.at(-1)!] = value;
+    }
+    expect(() => parseCoordinationPollResponse({ version: "1", type: "CoordinationPollResponse", approvalRequests: [], actionUpdates: [update] }))
+      .toThrow(RoutingValidationError);
+  });
+
+  it.each(["missing ready package", "missing cancelled time", "cancelled progress", "cancelled package", "missing rejected time",
+    "package action ID", "package scope", "package hash", "bundle hash", "approval hash", "package expiry"])
+    ("rejects invalid action update condition: %s", fault => {
+      const update = actionUpdate(fault.startsWith("cancelled") || fault === "missing cancelled time" ? "cancelled"
+        : fault === "missing rejected time" ? "rejected" : "readyForResubmission");
+      if (fault === "missing ready package") delete update.actionPackage;
+      if (fault === "missing cancelled time") delete update.cancelledAt;
+      if (fault === "cancelled progress") update.progress = { required: 0, collected: 0, pending: [] };
+      if (fault === "cancelled package") update.actionPackage = actionUpdate("readyForResubmission").actionPackage;
+      if (fault === "missing rejected time") delete update.rejectedAt;
+      if (fault === "package action ID") update.actionRef.actionId = { value: "other" };
+      if (fault === "package scope") update.actionRef.actionId = { ...update.actionRef.actionId, scope: "other" };
+      if (fault === "package hash") update.actionRef.actionEnvelopeHash = { alg: "sha-256", value: "wrong" };
+      if (fault === "bundle hash") update.actionPackage!.approvalBundle.actionEnvelopeHash = { alg: "sha-256", value: "wrong" };
+      if (fault === "approval hash") update.actionPackage!.approvalBundle.approvals[0].actionEnvelopeHash = { alg: "sha-256", value: "wrong" };
+      if (fault === "package expiry") update.expiresAt = "2026-08-25T14:00:00.000Z";
+      expect(() => parseCoordinationPollResponse({ version: "1", type: "CoordinationPollResponse", approvalRequests: [], actionUpdates: [update] }))
+        .toThrow(RoutingValidationError);
+    });
+
+  it("rejects undeclared Coordination poll wrapper members", () => {
+    const poll = { version: "1", type: "CoordinationPollResponse", approvalRequests: [], actionUpdates: [], extra: true };
+    expect(() => parseCoordinationPollResponse(poll)).toThrow(RoutingValidationError);
+    expect(() => parseCoordinationPollResponse(poll)).toThrowError(expect.objectContaining({
+      code: "ROUTING_VALIDATION_ERROR", path: "$.extra", message: "Object contains an undeclared member.",
+    }));
+  });
+
+  it("accepts an empty Coordination poll with omitted action updates", () => {
+    expect(parseCoordinationPollResponse({ version: "1", type: "CoordinationPollResponse", approvalRequests: [] }))
+      .toEqual({ version: "1", type: "CoordinationPollResponse", approvalRequests: [], actionUpdates: [] });
+  });
+
+  it("preserves complete pending objects, valid scoped IDs, and HTTP optional metadata", () => {
+    const poll = JSON.parse(readFileSync(new URL("../fixtures/responses/coordination-pending-actions.json", import.meta.url), "utf8"));
+    const request = poll.approvalRequests[0];
+    request.actionRef.actionId = { value: "42", scope: "eip155:1:0x1234567890abcdef1234567890abcdef12345678" };
+    request.signerReviewSet.actionEnvelope.actionId = { ...request.actionRef.actionId };
+    request.returnMode = "async";
+    request.context = { message: "Review this complete action", data: [null, true, 2] };
+    request.signerReviewSet.actionEnvelope.target.region = "test-region";
+    expect(parseCoordinationPollResponse(poll)).toEqual(poll);
+    expect(parseActionReference(request.actionRef)).toEqual(request.actionRef);
+    delete request.signerReviewSet.authorizationRequirements;
+    delete request.requestedDecision;
+    expect(parseCoordinationPollResponse(poll)).toEqual(poll);
+  });
+
+  it.each([
+    ["", null], ["", {}], ["version", "2"], ["extra", true],
+    ["actionRef.extra", true], ["actionRef.actionId.extra", true],
+    ["actionRef.actionId.value", ""], ["actionRef.actionId.scope", 42],
+    ["actionRef.actionEnvelopeHash.extra", true], ["actionRef.actionEnvelopeHash.value", "bad="],
+    ["signerReviewSet", null], ["signerReviewSet.extra", true],
+    ["signerReviewSet.actionEnvelope.proposer", {}],
+    ["signerReviewSet.actionEnvelope.executionProfile.extra", true],
+    ["signerReviewSet.actionEnvelope.target.resource", 42],
+    ["signerReviewSet.actionEnvelope.expiresAt", "2030-02-30T00:00:00.000Z"],
+    ["signerReviewSet.authorizationRequirements.verifier", {}],
+    ["signerReviewSet.authorizationRequirements.approvalRequirements", {}],
+    ["signerReviewSet.authorizationRequirements.approvalRequirements.anyOf", [null]],
+    ["signerReviewSet.authorizationRequirements.approvalRequirements.anyOf", [{ type: "threshold", threshold: 1 }]],
+    ["signerReviewSet.authorizationRequirements.approvalRequirements.overrideSigners", [{ signer: "did:web:a", permissions: [] }]],
+    ["returnMode", "other"], ["context", []],
+  ])("rejects malformed pending field %s", (field, invalid) => {
+    const poll = JSON.parse(readFileSync(new URL("../fixtures/responses/coordination-pending-actions.json", import.meta.url), "utf8"));
+    if (field === "") poll.approvalRequests[0] = invalid;
+    else {
+      const parts = field.split(".");
+      let object = poll.approvalRequests[0];
+      for (const part of parts.slice(0, -1)) object = object[part];
+      object[parts.at(-1)!] = invalid;
+    }
+    expect(() => parseCoordinationPollResponse(poll)).toThrow(RoutingValidationError);
+  });
+
   it("builds and parses a multi-recipient ActionRequest envelope without assigning roles", () => {
     const envelope = buildDeliveryEnvelope({
       sender: proposer,
@@ -198,7 +323,9 @@ describe("routing helpers", () => {
       approvalRequests: [],
       actionUpdates: [],
       deliveries: [],
-    })).toThrow("must not contain relay deliveries");
+    })).toThrowError(expect.objectContaining({
+      code: "ROUTING_VALIDATION_ERROR", path: "$.deliveries", message: "Object contains an undeclared member.",
+    }));
     expect(parseCoordinationSessionResponse({
       version: "1",
       type: "CoordinationSessionResponse",

@@ -24,12 +24,24 @@ export interface McpDispatchError {
   ok: false;
   error: {
     kind: "McpDispatchError";
-    code: "PROCESS_EXITED" | "INVALID_RESPONSE" | "DISPATCH_TIMEOUT" | "TRANSPORT_ERROR";
+    code: "PROCESS_EXITED" | "INVALID_RESPONSE" | "DISPATCH_TIMEOUT" | "TRANSPORT_ERROR"
+      | "OAUTH_AUTHENTICATION_FAILED" | "OAUTH_SCOPE_DEMAND";
     message: string;
   };
 }
 
 export type McpDispatchResult = McpResult | McpDispatchError;
+
+/** Local-only errors: no upstream response text can become a diagnostic. */
+export class McpDispatchBoundaryError extends Error {
+  constructor(readonly code: "OAUTH_AUTHENTICATION_FAILED" | "OAUTH_SCOPE_DEMAND" | "TRANSPORT_ERROR") {
+    super(code === "OAUTH_AUTHENTICATION_FAILED"
+      ? "The MCP server rejected authentication after dispatch. The operation was not retried."
+      : code === "OAUTH_SCOPE_DEMAND"
+        ? "The MCP server requested more scope after dispatch. No authority was changed and the operation was not retried."
+        : "The MCP transport failed after dispatch. The operation was not retried.");
+  }
+}
 
 /**
  * Result of preparing a dispatch target (launch / connect). Per the Core Action
@@ -70,6 +82,9 @@ export class McpClientSession implements DispatchSession {
       );
       return { ok: true, result };
     } catch (error) {
+      if (error instanceof McpDispatchBoundaryError) {
+        return { ok: false, error: { kind: "McpDispatchError", code: error.code, message: error.message } };
+      }
       if (error instanceof SdkMcpError && error.code === ErrorCode.RequestTimeout) {
         return {
           ok: false,

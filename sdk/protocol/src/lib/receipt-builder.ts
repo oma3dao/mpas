@@ -3,7 +3,7 @@ import { KeyManager } from "./key-manager.js";
 import { signMpasCompactJws, validateSignerIdentity, type MpasJwsSigner } from "./signer.js";
 import { canonicalize } from "json-canonicalize";
 import type { ActionEnvelope, Did, ExecutionPayload, ExecutionReceipt, ReceiptPayload, ReceiptResult } from "../types/mpas.js";
-import { computeJsonHash } from "./verification.js";
+import { computeJsonHash, type TrustedSigner } from "./verification.js";
 
 export interface ReceiptBuildResult {
   result: ReceiptResult;
@@ -24,6 +24,8 @@ export interface BuildAndSignExecutionReceiptInput {
   signingKey?: JWK;
   /** Shared signer, including non-exporting providers. */
   signer?: MpasJwsSigner;
+  /** Trusted issuer/key binding; required for DID methods other than did:jwk. */
+  authorizedIssuer?: TrustedSigner;
 }
 
 /**
@@ -40,6 +42,10 @@ export async function buildAndSignExecutionReceipt(
   const signer = input.signer ?? KeyManager.fromJwk(signingKey!, { did: verifierDid });
   validateSignerIdentity(signer);
   if (signer.did !== verifierDid) throw new Error("Receipt signer does not match verifierDid.");
+  // Validate the authorizedIssuer if provided.
+  if (input.authorizedIssuer && input.authorizedIssuer.did !== verifierDid) {
+    throw new Error("INVALID_ISSUER_KEY: Authorized issuer DID must match the receipt's verifierDid.");
+  }
   const receiptPayload: ReceiptPayload = {
     issuerDid: verifierDid,
     actionEnvelopeHash: computeJsonHash(actionEnvelope),
@@ -51,7 +57,12 @@ export async function buildAndSignExecutionReceipt(
     executionRef: result.executionRef,
   };
 
-  const signature = await signMpasCompactJws(signer, Buffer.from(canonicalize(receiptPayload)));
+  let signature: string;
+  try {
+    signature = await signMpasCompactJws(signer, Buffer.from(canonicalize(receiptPayload)));
+  } catch {
+    throw new Error("INVALID_SIGNATURE: The supplied private key cannot sign a receipt for this issuer.");
+  }
 
   return {
     version: "1",

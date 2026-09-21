@@ -270,15 +270,22 @@ async function writeResponseFixtures(actionPackage: ActionPackage, adapter: KeyF
     },
     createdAt: responseCreatedAt,
   };
+  // Keep review controls conformant without rewriting unrelated signed fixtures.
+  const reviewEnvelope = {
+    ...actionPackage.actionEnvelope,
+    createdAt: new Date(actionPackage.actionEnvelope.createdAt).toISOString(),
+    expiresAt: new Date(actionPackage.actionEnvelope.expiresAt).toISOString(),
+  };
+  const reviewEnvelopeHash = computeHash(reviewEnvelope);
   const reviewSet: SignerReviewSet = {
     version: "1",
     type: "SignerReviewSet",
-    actionEnvelope: actionPackage.actionEnvelope,
+    actionEnvelope: reviewEnvelope,
     executionPayload: actionPackage.executionPayload,
     authorizationRequirements: {
       version: "1",
       type: "AuthorizationRequirements",
-      actionEnvelopeHash,
+      actionEnvelopeHash: reviewEnvelopeHash,
       result: "additionalApprovalsRequired",
       verifier: {
         did: adapter.did,
@@ -293,11 +300,11 @@ async function writeResponseFixtures(actionPackage: ActionPackage, adapter: KeyF
           },
         ],
       },
-      createdAt: responseIssuedAt,
-      expiresAt: responseExpiresAt,
+      createdAt: new Date(responseIssuedAt).toISOString(),
+      expiresAt: new Date(responseExpiresAt).toISOString(),
     },
-    createdAt: responseIssuedAt,
-    expiresAt: responseExpiresAt,
+    createdAt: new Date(responseIssuedAt).toISOString(),
+    expiresAt: new Date(responseExpiresAt).toISOString(),
   };
   const pendingActions: CoordinationPollResponse = {
     version: "1",
@@ -310,7 +317,7 @@ async function writeResponseFixtures(actionPackage: ActionPackage, adapter: KeyF
           version: "1",
           type: "ActionRef",
           actionId: actionPackage.actionEnvelope.actionId,
-          actionEnvelopeHash,
+          actionEnvelopeHash: reviewEnvelopeHash,
         },
         signerReviewSet: reviewSet,
         requestedDecision: "approve",

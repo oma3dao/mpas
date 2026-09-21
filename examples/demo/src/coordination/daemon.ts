@@ -11,6 +11,8 @@ export interface CoordinationDaemonOptions {
   designatedVerifierDid?: Did;
   authorizedRecipientDids?: readonly Did[];
   notificationOrigin?: string;
+  /** Pre-configured store (for testing with a deterministic clock). */
+  store?: import("./store.js").CoordinationStore;
 }
 
 export interface StartedCoordinationDaemon {
@@ -22,6 +24,7 @@ export async function startCoordinationDaemon(options: CoordinationDaemonOptions
   const traceWriter = options.tracePath ? new TraceWriter(options.tracePath) : undefined;
   const traceLogger = new TraceLogger("coordination", traceWriter);
   const app = createCoordinationApiServer({
+    store: options.store,
     traceLogger,
     auth: options.auth,
     designatedVerifierDid: options.designatedVerifierDid,

@@ -1,283 +1,147 @@
-import { chmodSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, writeSync } from "node:fs";
-import { dirname } from "node:path";
-import type { ActionId, ActionResponse } from "../core/types.js";
+import { chmodSync, closeSync, constants, existsSync, lstatSync, mkdirSync, openSync, readSync, statSync } from "node:fs";
+import { dirname, isAbsolute, join, resolve } from "node:path";
+import { createRequire } from "node:module";
+import type { DatabaseSync as Database } from "node:sqlite";
+import type { DispatchStore } from "@oma3/mpas";
+
+export { DispatchLedger, MemoryDispatchStore, MemoryDispatchStore as MemoryDispatchJournal } from "@oma3/mpas";
+export type { DispatchStore, DispatchRecord, DispatchResolution, DispatchRecovery, LedgerCheck } from "@oma3/mpas";
+
+const SCHEMA = "CREATE TABLE dispatch_ledger(action_key TEXT PRIMARY KEY, record TEXT NOT NULL)";
 
 /**
- * Dispatch Ledger (MPAS Core Action Lifecycle).
- *
- * The Verifier is stateless with respect to verification: rejections and
- * additionalApprovalsRequired are deterministic responses, never recorded state.
- * The ledger is the Verifier's ONLY protocol state, with one invariant:
- *
- *   an actionId is dispatched AT MOST ONCE.
- *
- * A ledger entry is written only at the moment an action is authorized for
- * dispatch — immediately before transmission (write-ahead). Entries are
- * immutable: the sole state transition is `executing -> resolved`. An exact
- * terminal response may be attached once so an internal relay can recover it.
+ * Reference durable byte store. The historical construction name and configured
+ * filename are retained; nonempty JSONL is rejected, never migrated or bypassed.
+ * Requires built-in SQLite (unflagged Node 22.13+, tested on Node 22.22.3).
  */
+export class FileDispatchJournal implements DispatchStore {
+  private readonly db: Database;
+  private closed = false;
 
-/** Receipt results producible by a dispatch (the only resolutions the ledger records). */
-export type DispatchResolution = "executed" | "failed" | "indeterminate";
-
-export type LedgerEvent =
-  | {
-      event: "executing";
-      actionId: string;
-      envelopeHash: string;
-      expiresAt: string;
-      at: string;
-    }
-  | {
-      event: "resolved";
-      actionId: string;
-      resolution: DispatchResolution;
-      /** Exact terminal response retained for internal delivery recovery. */
-      response?: ActionResponse;
-      at: string;
-    };
-
-export type LedgerCheck =
-  | { kind: "absent" }
-  | { kind: "pending" }
-  | { kind: "reject"; code: "ACTION_ID_HASH_MISMATCH" | "REPLAY_DETECTED"; message: string };
-
-interface LedgerEntry {
-  envelopeHash: string;
-  status: "executing" | "resolved";
-  resolution?: DispatchResolution;
-  response?: ActionResponse;
-  expiresAt: string;
-}
-
-export interface DispatchRecovery {
-  resolution: DispatchResolution;
-  response?: ActionResponse;
-}
-
-/**
- * Append-only event sink backing the ledger. `executing` events MUST be durably
- * flushed before this method returns (write-ahead); `resolved` events are appended.
- */
-export interface DispatchJournal {
-  append(event: LedgerEvent): void;
-  readAll(): LedgerEvent[];
-}
-
-/** Append-only JSONL journal. `executing` events are fsync'd before returning. */
-export class FileDispatchJournal implements DispatchJournal {
-  constructor(private readonly path: string) {
-    mkdirSync(dirname(path), { recursive: true });
-  }
-
-  append(event: LedgerEvent): void {
-    const line = `${JSON.stringify(event)}\n`;
-    const fd = openSync(this.path, "a", 0o600);
+  constructor(path: string) {
+    let DatabaseSync: typeof Database;
     try {
-      chmodSync(this.path, 0o600);
-      writeSync(fd, line);
-      // Write-ahead durability: the executing record MUST survive a crash before
-      // transmission. Flushing resolved events too keeps recovery deterministic.
-      fsyncSync(fd);
-    } finally {
-      closeSync(fd);
+      DatabaseSync = (createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite")).DatabaseSync;
+      if (typeof DatabaseSync !== "function") throw new Error("DatabaseSync is unavailable.");
+    } catch (error) {
+      throw new Error("The durable dispatch backend requires Node built-in SQLite (Node 22.13+).", { cause: error });
     }
-  }
-
-  readAll(): LedgerEvent[] {
-    if (!existsSync(this.path)) {
-      return [];
+    validateDatabasePath(path);
+    const existed = existsSync(path);
+    // O_NOFOLLOW rejects a final-component symlink, including a dangling one.
+    let fd: number;
+    try {
+      fd = openSync(path, constants.O_RDWR | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      fd = openSync(path, constants.O_RDWR | constants.O_NOFOLLOW);
     }
-
-    const contents = readFileSync(this.path, "utf8");
-    const events: LedgerEvent[] = [];
-    for (const line of contents.split("\n")) {
-      if (line.trim() === "") {
-        continue;
+    let empty: boolean;
+    try {
+      empty = statSync(path).size === 0;
+      if (!empty) {
+        const header = Buffer.alloc(16);
+        if (readSync(fd, header, 0, 16, 0) !== 16 || header.toString("binary") !== "SQLite format 3\0") {
+          throw new Error("Nonempty legacy or invalid dispatch database; migration is not supported.");
+        }
       }
-      events.push(JSON.parse(line) as LedgerEvent);
-    }
-    return events;
-  }
-}
+    } finally { closeSync(fd); }
 
-/** In-memory journal for tests and ephemeral deployments. */
-export class MemoryDispatchJournal implements DispatchJournal {
-  private readonly events: LedgerEvent[] = [];
-
-  constructor(seed: LedgerEvent[] = []) {
-    this.events.push(...seed);
-  }
-
-  append(event: LedgerEvent): void {
-    this.events.push(event);
-  }
-
-  readAll(): LedgerEvent[] {
-    return [...this.events];
-  }
-}
-
-export class DispatchLedger {
-  private readonly entries = new Map<string, LedgerEntry>();
-
-  constructor(
-    private readonly journal: DispatchJournal = new MemoryDispatchJournal(),
-    private readonly now: () => number = () => Date.now(),
-  ) {
-    this.replay();
-    this.recover();
-  }
-
-  /**
-   * Fast-path lifecycle check. Returns the action to take for a submission whose
-   * actionId may already be in the ledger. `absent` means the caller should proceed
-   * with full verification; the authoritative gate is {@link authorizeDispatch}.
-   */
-  check(actionId: ActionId, envelopeHash: string): LedgerCheck {
-    const entry = this.entries.get(key(actionId));
-    if (!entry) {
-      return { kind: "absent" };
-    }
-
-    if (entry.status === "resolved") {
-      return { kind: "reject", code: "REPLAY_DETECTED", message: "Action has already been dispatched." };
-    }
-
-    // executing
-    if (entry.envelopeHash === envelopeHash) {
-      return { kind: "pending" };
-    }
-
-    return {
-      kind: "reject",
-      code: "ACTION_ID_HASH_MISMATCH",
-      message: "Action ID is already dispatching a different Action Envelope.",
-    };
-  }
-
-  /**
-   * Atomic check-and-write gate (Core check-and-write property). Synchronously
-   * re-checks the ledger and, only if the actionId is absent, durably writes the
-   * `executing` entry. Two submissions of the same actionId can never both receive
-   * `{ kind: "absent" }` here, so at most one ever proceeds to transmission.
-   */
-  authorizeDispatch(actionId: ActionId, envelopeHash: string, expiresAt: string): LedgerCheck {
-    const decision = this.check(actionId, envelopeHash);
-    if (decision.kind !== "absent") {
-      return decision;
-    }
-
-    const event: LedgerEvent = {
-      event: "executing",
-      actionId: key(actionId),
-      envelopeHash,
-      expiresAt,
-      at: new Date(this.now()).toISOString(),
-    };
-    this.journal.append(event);
-    this.entries.set(key(actionId), { envelopeHash, status: "executing", expiresAt });
-    return { kind: "absent" };
-  }
-
-  /** Immutable transition executing -> resolved. Never rolls back. */
-  resolve(actionId: ActionId, resolution: DispatchResolution, response?: ActionResponse): void {
-    const entry = this.entries.get(key(actionId));
-    if (!entry) {
-      return;
-    }
-    if (
-      response &&
-      (response.result !== resolution || response.actionEnvelopeHash?.value !== entry.envelopeHash)
-    ) {
-      throw new Error("Terminal ActionResponse does not match the dispatch ledger resolution.");
-    }
-
-    if (entry.status === "resolved") {
-      if (entry.resolution !== resolution || entry.response || !response) return;
-      this.journal.append({
-        event: "resolved",
-        actionId: key(actionId),
-        resolution,
-        response,
-        at: new Date(this.now()).toISOString(),
-      });
-      entry.response = response;
-      return;
-    }
-
-    this.journal.append({
-      event: "resolved",
-      actionId: key(actionId),
-      resolution,
-      ...(response ? { response } : {}),
-      at: new Date(this.now()).toISOString(),
-    });
-    entry.status = "resolved";
-    entry.resolution = resolution;
-    entry.response = response;
-  }
-
-  /**
-   * Returns internally recoverable terminal material for the exact Action
-   * Envelope. This does not alter the public resolved-replay rejection rule.
-   */
-  recoveryFor(actionId: ActionId, envelopeHash: string): DispatchRecovery | undefined {
-    const entry = this.entries.get(key(actionId));
-    if (!entry || entry.status !== "resolved" || entry.envelopeHash !== envelopeHash || !entry.resolution) {
-      return undefined;
-    }
-    return {
-      resolution: entry.resolution,
-      ...(entry.response ? { response: entry.response } : {}),
-    };
-  }
-
-  size(): number {
-    return this.entries.size;
-  }
-
-  private replay(): void {
-    for (const event of this.journal.readAll()) {
-      if (event.event === "executing") {
-        this.entries.set(event.actionId, {
-          envelopeHash: event.envelopeHash,
-          status: "executing",
-          expiresAt: event.expiresAt,
-        });
-        continue;
+    const db = new DatabaseSync(path);
+    this.db = db;
+    try {
+      db.exec("PRAGMA busy_timeout = 5000");
+      // Read the existing schema before any persistent PRAGMA or schema write.
+      // An unrelated SQLite database must remain unchanged.
+      if (!empty) this.validateSchema();
+      db.exec("PRAGMA journal_mode = DELETE");
+      db.exec("PRAGMA synchronous = EXTRA");
+      db.exec("PRAGMA fullfsync = ON");
+      for (const [pragma, expected] of [["journal_mode", "delete"], ["synchronous", 3], ["fullfsync", 1], ["busy_timeout", 5000]] as const) {
+        const row = db.prepare(`PRAGMA ${pragma}`).get();
+        if (!row || Object.values(row)[0] !== expected) throw new Error(`Dispatch SQLite did not enforce ${pragma}.`);
       }
-
-      const entry = this.entries.get(event.actionId);
-      if (entry) {
-        entry.status = "resolved";
-        entry.resolution = event.resolution;
-        entry.response = event.response;
+      db.exec("BEGIN IMMEDIATE");
+      try {
+        const schema = db.prepare("SELECT name FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%'").all();
+        const version = db.prepare("PRAGMA user_version").get()?.user_version;
+        if (empty && schema.length === 0 && version === 0) {
+          db.exec(SCHEMA);
+          db.exec("PRAGMA user_version = 1");
+        }
+        this.validateSchema();
+        db.exec("COMMIT");
+      } catch (error) {
+        if (db.isTransaction) db.exec("ROLLBACK");
+        throw error;
       }
+      if (!existed) chmodSync(path, 0o600);
+    } catch (error) {
+      db.close();
+      this.closed = true;
+      throw error;
     }
   }
 
-  /**
-   * Restart recovery: any action found `executing` with no `resolved` event MUST NOT
-   * be re-dispatched. Resolve it as `indeterminate` and APPEND that resolution so
-   * recovery is idempotent across repeated restarts.
-   */
-  private recover(): void {
-    for (const [actionId, entry] of this.entries) {
-      if (entry.status === "executing") {
-        this.journal.append({
-          event: "resolved",
-          actionId,
-          resolution: "indeterminate",
-          at: new Date(this.now()).toISOString(),
-        });
-        entry.status = "resolved";
-        entry.resolution = "indeterminate";
-      }
+  get(key: string): string | undefined {
+    const row = this.db.prepare("SELECT record FROM dispatch_ledger WHERE action_key = ?").get(key);
+    return row ? row.record as string : undefined;
+  }
+
+  insertIfAbsent(key: string, value: string): boolean {
+    return this.db.prepare("INSERT INTO dispatch_ledger(action_key, record) VALUES (?, ?) ON CONFLICT(action_key) DO NOTHING")
+      .run(key, value).changes === 1;
+  }
+
+  compareAndSwap(key: string, expected: string, value: string): boolean {
+    return this.db.prepare("UPDATE dispatch_ledger SET record = ? WHERE action_key = ? AND record = ?")
+      .run(value, key, expected).changes === 1;
+  }
+
+  entries(): ReadonlyArray<[string, string]> {
+    return this.db.prepare("SELECT action_key, record FROM dispatch_ledger ORDER BY action_key").all()
+      .map(row => [row.action_key as string, row.record as string]);
+  }
+
+  deleteIfMatch(key: string, expected: string): boolean {
+    return this.db.prepare("DELETE FROM dispatch_ledger WHERE action_key = ? AND record = ?")
+      .run(key, expected).changes === 1;
+  }
+
+  close(): void {
+    if (!this.closed) {
+      this.db.close();
+      this.closed = true;
+    }
+  }
+
+  private validateSchema(): void {
+    const objects = this.db.prepare("SELECT type, name, sql FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%'").all();
+    if (this.db.prepare("PRAGMA user_version").get()?.user_version !== 1 ||
+        objects.length !== 1 || objects[0].type !== "table" ||
+        objects[0].name !== "dispatch_ledger" || objects[0].sql !== SCHEMA) {
+      throw new Error("Unknown dispatch SQLite schema or version; migration is not supported.");
     }
   }
 }
 
-function key(actionId: ActionId): string {
-  return actionId.scope ? `${actionId.scope}:${actionId.value}` : actionId.value;
+/** Private new directories; no symlink traversal, device, URL or memory database. */
+function validateDatabasePath(path: string): void {
+  if (!path || !isAbsolute(path) || path.includes("\0") || resolve(path) !== path) throw new Error("Invalid dispatch database path.");
+  const parent = dirname(path);
+  let current = "/";
+  for (const part of parent.split("/").filter(Boolean)) {
+    current = join(current, part);
+    try {
+      const stat = lstatSync(current);
+      if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error("Invalid dispatch database directory.");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      mkdirSync(current, { mode: 0o700 });
+    }
+  }
+  if (existsSync(path)) {
+    const stat = lstatSync(path);
+    if (stat.isSymbolicLink() || !stat.isFile()) throw new Error("Invalid dispatch database file.");
+  }
 }

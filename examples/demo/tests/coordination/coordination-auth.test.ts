@@ -14,6 +14,7 @@ import {
   createCoordinationApiServer,
   type CoordinationAuthOptions,
 } from "../../src/coordination/coordination-api-server.js";
+import { CoordinationStore } from "../../src/coordination/store.js";
 import type {
   CoordinationActionCancelRequest,
   CoordinationActionRequest,
@@ -37,6 +38,8 @@ interface FixtureSigner {
 
 const AUDIENCE = "https://coordination.example.com";
 const NOW = new Date("2026-06-05T18:03:30.000Z");
+/** Deterministic clock pinned inside the fixture validity window. */
+const FIXTURE_NOW = NOW.getTime();
 const CREATED = new Date("2026-06-05T18:03:00.000Z");
 const EXPIRES = new Date("2026-06-05T18:04:00.000Z");
 const apps = new Set<ReturnType<typeof createCoordinationApiServer>>();
@@ -428,6 +431,7 @@ describe("coordination RFC 9421 authentication", () => {
 
 function createApp(auth: Partial<CoordinationAuthOptions> = {}, traceLogger?: TraceLogger) {
   const app = createCoordinationApiServer({
+    store: new CoordinationStore({ now: FIXTURE_NOW }),
     traceLogger,
     designatedVerifierDid: "did:web:adapter.local" as Did,
     auth: {

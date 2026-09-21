@@ -1,3 +1,4 @@
+import { realpathSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -304,7 +305,7 @@ async function startStack() {
     credentialDir: await credentialDir(),
     adapterKeyPath: join(fixturesDir, "test-keys", "adapter.json"),
     port: 0,
-    journalPath: join(await mkdtemp(join(tmpdir(), "mpas-e2e-journal-")), "dispatch-ledger.jsonl"),
+    journalPath: join(await mkdtemp(join(realpathSync(tmpdir()), "mpas-e2e-journal-")), "dispatch-ledger.jsonl"),
     trustContext: null,
     confirmPluginUse: async () => true,
   });

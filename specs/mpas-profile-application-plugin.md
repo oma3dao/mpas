@@ -203,7 +203,7 @@ Example shape:
   "credentialRequirements": [
     {
       "type": "oauthToken",
-      "requiredCapabilities": ["pullRequest.merge", "pullRequest.read", "issue.write"],
+      "expectedAuthority": ["pullRequest.merge", "pullRequest.read", "issue.write"],
       "description": "GitHub OAuth token with repository access for the configured organizations."
     }
   ],
@@ -460,7 +460,7 @@ Example:
   "credentialRequirements": [
     {
       "type": "oauthToken",
-      "requiredCapabilities": ["pullRequest.merge", "pullRequest.read", "issue.write"],
+      "expectedAuthority": ["pullRequest.merge", "pullRequest.read", "issue.write"],
       "description": "GitHub OAuth token with repository access for the configured organizations."
     }
   ]
@@ -472,11 +472,13 @@ Field definitions:
 | Field                  | Required | Description                                                                                                                                          |
 | :--------------------- | :------: | :--------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `type`                 | Yes      | Credential class, such as `oauthToken`, `apiKey`, `sshKey`, `serviceAccount`, `walletKey`, `sessionCredential`, `passkey`, or profile-defined value. |
-| `requiredCapabilities` | Optional | Array of capability strings describing the authority expected. These are governance artifacts and MUST NOT be transmitted as OAuth scopes.           |
+| `expectedAuthority`    | Optional | Array of abstract authority strings for non-normative review. These values MUST NOT be treated or transmitted as provider OAuth scopes.              |
 | `refreshScope`         | Optional | Provider-specific OAuth refresh-scope name. Defaults to `offline_access` when omitted (`offline.access` for X/Twitter, `refresh_token` for Salesforce). |
 | `description`          | Optional | Human-readable explanation. Non-authoritative.                                                                                                       |
 
 Credential requirements apply to the plugin as a whole. All operations described by the plugin share the same credential class requirements.
+
+`expectedAuthority` is review-only metadata. It does not grant authority, select a credential, set Verifier policy, or define a provider wire scope. Provider OAuth scopes belong only in trusted deployment configuration at `executionTarget.auth.scopes`. A plugin credential requirement containing `requiredCapabilities`, `scopes`, both old and new names, or any other undeclared member is invalid.
 
 A Credential Adapter may use credential requirements to help an administrator bind local credentials. The binding itself is outside this profile.
 
@@ -604,7 +606,7 @@ This profile does not define the artifact method or distribution record format.
   "credentialRequirements": [
     {
       "type": "oauthToken",
-      "requiredCapabilities": ["pullRequest.merge", "pullRequest.read", "repo.delete"],
+      "expectedAuthority": ["pullRequest.merge", "pullRequest.read", "repo.delete"],
       "description": "GitHub OAuth token with repository access for the configured organizations."
     }
   ],
@@ -958,7 +960,7 @@ This appendix provides an initial JSON Schema for structural validation. The sch
         "type": {
           "type": "string"
         },
-        "requiredCapabilities": {
+        "expectedAuthority": {
           "type": "array",
           "items": {
             "type": "string"

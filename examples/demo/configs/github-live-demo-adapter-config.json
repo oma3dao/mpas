@@ -8,7 +8,7 @@
   "plugin": {
     "pluginDid": "did:web:plugins.oma3.org:github-live-demo-plugin",
     "pluginVersion": "0.1.0",
-    "artifactDid": "did:artifact:bafkreihcup4j7hatszkewaty6py54an7yt6uj5onbniazrm6tntwhzto3m",
+    "artifactDid": "did:artifact:bafkreic6illgsxt2zgffghatedwhsejsnxsmdf6wu33ynzttjug5tsae5a",
     "path": "../plugins/github-live-demo-plugin.json"
   },
   "credentialBindings": [

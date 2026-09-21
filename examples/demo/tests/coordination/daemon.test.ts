@@ -4,9 +4,13 @@ import { CompactSign, importJWK, type JWK } from "jose";
 import { canonicalize } from "json-canonicalize";
 import { afterEach, describe, expect, it } from "vitest";
 import { startCoordinationDaemon, type StartedCoordinationDaemon } from "../../src/coordination/daemon.js";
+import { CoordinationStore } from "../../src/coordination/store.js";
 import type { CoordinationActionRequest } from "../../src/coordination/types.js";
 import type { ActionPackage, Approval, Decision, Did, Hash } from "../../src/core/types.js";
 import { computeJsonHash } from "../../src/core/verification.js";
+
+/** Deterministic clock pinned inside the fixture validity window. */
+const FIXTURE_NOW = Date.parse("2026-06-05T19:00:00.000Z");
 
 interface FixtureKey {
   did: Did;
@@ -32,7 +36,7 @@ describe("coordination daemon", () => {
   });
 
   it("supports a full local approval collection flow over HTTP", async () => {
-    const daemon = await startCoordinationDaemon({ port: 0 });
+    const daemon = await startCoordinationDaemon({ port: 0, store: new CoordinationStore({ now: FIXTURE_NOW }) });
     daemons.push(daemon);
     const request = await coordinationActionRequest();
     const maintainerA = await fixtureKey("maintainer-a");

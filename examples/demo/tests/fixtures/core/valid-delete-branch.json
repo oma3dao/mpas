@@ -31,14 +31,14 @@
       "value": "urn:uuid:33333333-3333-4333-8333-333333333333"
     },
     "createdAt": "2026-06-05T18:00:00.000Z",
-    "expiresAt": "2030-01-01T00:00:00.000Z"
+    "expiresAt": "2026-06-06T17:00:00.000Z"
   },
   "approvalBundle": {
     "version": "1",
     "type": "ApprovalBundle",
     "actionEnvelopeHash": {
       "alg": "sha-256",
-      "value": "Ath6lqysHsv12iPwVS_SYFeA60RChmpNhwj8rktt0fU"
+      "value": "B3-ZCvFjc58O1sQjKsxu7eAB7n4fEIudEJI-NMDfKrc"
     },
     "approvals": [
       {
@@ -46,12 +46,12 @@
         "type": "Approval",
         "actionEnvelopeHash": {
           "alg": "sha-256",
-          "value": "Ath6lqysHsv12iPwVS_SYFeA60RChmpNhwj8rktt0fU"
+          "value": "B3-ZCvFjc58O1sQjKsxu7eAB7n4fEIudEJI-NMDfKrc"
         },
         "decision": "propose",
         "signature": {
           "format": "jws",
-          "value": "eyJhbGciOiJFZERTQSIsImtpZCI6ImRpZDpqd2s6ZXlKamNuWWlPaUpGWkRJMU5URTVJaXdpYTNSNUlqb2lUMHRRSWl3aWVDSTZJbXMyVHpkamFWRnJiWEJvZFVWRmRERnBNM2xCYVcxS1NsZGxSMHR0VDNFemRGOW1jMDVyZW5waE5tOGlmUSMwIn0.eyJhY3Rpb25FbnZlbG9wZUhhc2giOnsiYWxnIjoic2hhLTI1NiIsInZhbHVlIjoiQXRoNmxxeXNIc3YxMmlQd1ZTX1NZRmVBNjBSQ2htcE5od2o4cmt0dDBmVSJ9LCJjcmVhdGVkQXQiOiIyMDI2LTA2LTA1VDE4OjAxOjAwLjAwMFoiLCJkZWNpc2lvbiI6InByb3Bvc2UiLCJzaWduZXJEaWQiOiJkaWQ6andrOmV5SmpjbllpT2lKRlpESTFOVEU1SWl3aWEzUjVJam9pVDB0UUlpd2llQ0k2SW1zMlR6ZGphVkZyYlhCb2RVVkZkREZwTTNsQmFXMUtTbGRsUjB0dFQzRXpkRjltYzA1cmVucGhObThpZlEiLCJ0eXBlIjoiQXBwcm92YWxQYXlsb2FkIn0.HJjnuz74o3gJcaE34xBWnPZr4jUbTks8leu_viGVoExPeF0C102BqOnvPOn0di4A6HZbc3KPmM_AdQ4DrTZEDg"
+          "value": "eyJhbGciOiJFZERTQSIsImtpZCI6ImRpZDpqd2s6ZXlKamNuWWlPaUpGWkRJMU5URTVJaXdpYTNSNUlqb2lUMHRRSWl3aWVDSTZJbXMyVHpkamFWRnJiWEJvZFVWRmRERnBNM2xCYVcxS1NsZGxSMHR0VDNFemRGOW1jMDVyZW5waE5tOGlmUSMwIn0.eyJhY3Rpb25FbnZlbG9wZUhhc2giOnsiYWxnIjoic2hhLTI1NiIsInZhbHVlIjoiQjMtWkN2RmpjNThPMXNRaktzeHU3ZUFCN240ZkVJdWRFSkktTk1EZktyYyJ9LCJjcmVhdGVkQXQiOiIyMDI2LTA2LTA1VDE4OjAxOjAwLjAwMFoiLCJkZWNpc2lvbiI6InByb3Bvc2UiLCJzaWduZXJEaWQiOiJkaWQ6andrOmV5SmpjbllpT2lKRlpESTFOVEU1SWl3aWEzUjVJam9pVDB0UUlpd2llQ0k2SW1zMlR6ZGphVkZyYlhCb2RVVkZkREZwTTNsQmFXMUtTbGRsUjB0dFQzRXpkRjltYzA1cmVucGhObThpZlEiLCJ0eXBlIjoiQXBwcm92YWxQYXlsb2FkIn0.96wZl_JtxOGDw5TF1dqrtiUwDSFfKlSO8yUcldwY3DwmxKSm8C9vJT4YTuWA3Km9CAhIrL8FuKstzMKjI4xjBw"
         },
         "createdAt": "2026-06-05T18:01:00.000Z"
       },
@@ -60,12 +60,12 @@
         "type": "Approval",
         "actionEnvelopeHash": {
           "alg": "sha-256",
-          "value": "Ath6lqysHsv12iPwVS_SYFeA60RChmpNhwj8rktt0fU"
+          "value": "B3-ZCvFjc58O1sQjKsxu7eAB7n4fEIudEJI-NMDfKrc"
         },
         "decision": "approve",
         "signature": {
           "format": "jws",
-          "value": "eyJhbGciOiJFZERTQSIsImtpZCI6ImRpZDpqd2s6ZXlKamNuWWlPaUpGWkRJMU5URTVJaXdpYTNSNUlqb2lUMHRRSWl3aWVDSTZJamh6UkZZM05tSTRhVVkzTmxCSmJVRjNOVWs1VjNabGFuTmZPR0pUT0U0eE1sZDJTSHBRWVRWV2R6Z2lmUSMwIn0.eyJhY3Rpb25FbnZlbG9wZUhhc2giOnsiYWxnIjoic2hhLTI1NiIsInZhbHVlIjoiQXRoNmxxeXNIc3YxMmlQd1ZTX1NZRmVBNjBSQ2htcE5od2o4cmt0dDBmVSJ9LCJjcmVhdGVkQXQiOiIyMDI2LTA2LTA1VDE4OjAyOjAwLjAwMFoiLCJkZWNpc2lvbiI6ImFwcHJvdmUiLCJzaWduZXJEaWQiOiJkaWQ6andrOmV5SmpjbllpT2lKRlpESTFOVEU1SWl3aWEzUjVJam9pVDB0UUlpd2llQ0k2SWpoelJGWTNObUk0YVVZM05sQkpiVUYzTlVrNVYzWmxhbk5mT0dKVE9FNHhNbGQyU0hwUVlUVldkemdpZlEiLCJ0eXBlIjoiQXBwcm92YWxQYXlsb2FkIn0.151LcURDZsj_fDhVY_IORf4Qn2ZKEuj0J0ffc7p7mpgbkSsypriGuixnqDHCBOJU1UmzjzIJg9SZWQCxFuW5DQ"
+          "value": "eyJhbGciOiJFZERTQSIsImtpZCI6ImRpZDpqd2s6ZXlKamNuWWlPaUpGWkRJMU5URTVJaXdpYTNSNUlqb2lUMHRRSWl3aWVDSTZJamh6UkZZM05tSTRhVVkzTmxCSmJVRjNOVWs1VjNabGFuTmZPR0pUT0U0eE1sZDJTSHBRWVRWV2R6Z2lmUSMwIn0.eyJhY3Rpb25FbnZlbG9wZUhhc2giOnsiYWxnIjoic2hhLTI1NiIsInZhbHVlIjoiQjMtWkN2RmpjNThPMXNRaktzeHU3ZUFCN240ZkVJdWRFSkktTk1EZktyYyJ9LCJjcmVhdGVkQXQiOiIyMDI2LTA2LTA1VDE4OjAyOjAwLjAwMFoiLCJkZWNpc2lvbiI6ImFwcHJvdmUiLCJzaWduZXJEaWQiOiJkaWQ6andrOmV5SmpjbllpT2lKRlpESTFOVEU1SWl3aWEzUjVJam9pVDB0UUlpd2llQ0k2SWpoelJGWTNObUk0YVVZM05sQkpiVUYzTlVrNVYzWmxhbk5mT0dKVE9FNHhNbGQyU0hwUVlUVldkemdpZlEiLCJ0eXBlIjoiQXBwcm92YWxQYXlsb2FkIn0.aZYMF4PzIeJAoTUFbCS-ABUMPgh0sLV3DrxFGzRRVVv-C6vuG8x5H2Nuhys9-un515pikw3pajaJkQkm1GtcAA"
         },
         "createdAt": "2026-06-05T18:02:00.000Z"
       }

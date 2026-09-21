@@ -25,7 +25,7 @@ import {
   verifyActionPackage,
 } from "../core/verification.js";
 import { DispatchLedger } from "./dispatch-ledger.js";
-import type { LoadedDeploymentConfig } from "./config-loader.js";
+import type { LoadedDeploymentConfig, ManagedOAuthConfiguration } from "./config-loader.js";
 import type { FileCredentialProvider } from "./credential-provider.js";
 import { oauthLoginCommand, prepareOAuthForDispatch } from "./oauth-operator.js";
 import { prepareMcpHttp } from "./dispatch/mcp-http.js";
@@ -40,6 +40,8 @@ export interface HttpEndpointOptions {
   adapterSigner?: MpasJwsSigner;
   ledger?: DispatchLedger;
   maxEnvelopeValidityMs?: number;
+  /** Deterministic clock for testing. Defaults to Date.now(). */
+  now?: number;
   traceLogger?: TraceLogger;
 }
 
@@ -51,7 +53,9 @@ export function createAdapterApiServer(options: HttpEndpointOptions): FastifyIns
   options = { ...options, adapterSigner, adapterSigningKey: undefined };
   const app = Fastify({ logger: false });
   const ledger = options.ledger ?? new DispatchLedger();
+  if (!options.ledger) app.addHook("onClose", async () => ledger.close());
   const maxEnvelopeValidityMs = options.maxEnvelopeValidityMs ?? DEFAULT_MAX_ENVELOPE_VALIDITY_MS;
+  const fixedNow = options.now;
   const trace = options.traceLogger ?? new TraceLogger("adapter");
 
   // Accept the canonical MPAS media type as well as application/json (profile MAY).
@@ -127,7 +131,7 @@ export function createAdapterApiServer(options: HttpEndpointOptions): FastifyIns
 
     // Action Lifecycle: dispatch-ledger check. An actionId already in the ledger is
     // never dispatched again.
-    const ledgerCheck = ledger.check(pkg.actionEnvelope.actionId, envelopeHash.value);
+    const ledgerCheck = ledger.check(pkg.actionEnvelope.actionId, envelopeHash);
     if (ledgerCheck.kind === "pending") {
       trace.emit("dispatch", { actionId, result: "pending", reason: "ledger_pending" });
       return actionResponse(options, { result: "pending", actionEnvelopeHash: envelopeHash });
@@ -144,7 +148,7 @@ export function createAdapterApiServer(options: HttpEndpointOptions): FastifyIns
     }
 
     // Stateless deterministic rejections (record nothing, repeatable verdict).
-    if (isActionEnvelopeExpired(pkg.actionEnvelope)) {
+    if (isActionEnvelopeExpired(pkg.actionEnvelope, fixedNow)) {
       trace.emit("verification_step", { actionId, step: "expiry_check", passed: false });
       return rejection(pkg, options, envelopeHash, "expired", "EXPIRED_ACTION_ENVELOPE", "Action Envelope is expired.");
     }
@@ -171,7 +175,7 @@ export function createAdapterApiServer(options: HttpEndpointOptions): FastifyIns
     }
     trace.emit("verification_step", { actionId, step: "execution_profile_check", passed: true });
 
-    if (exceedsMaxEnvelopeValidity(pkg.actionEnvelope, maxEnvelopeValidityMs)) {
+    if (exceedsMaxEnvelopeValidity(pkg.actionEnvelope, maxEnvelopeValidityMs, fixedNow)) {
       trace.emit("verification_step", { actionId, step: "max_validity_check", passed: false });
       return actionResponse(options, {
         result: "rejected",
@@ -184,6 +188,8 @@ export function createAdapterApiServer(options: HttpEndpointOptions): FastifyIns
     const verification = await verifyActionPackage(pkg, {
       trustedSigners: loadedConfig.config.signerKeys,
       trustedApplicationDids: [loadedConfig.config.target.applicationDid],
+      now: fixedNow,
+      maxEnvelopeValidityMs,
       onStep: (step, passed, details) => {
         trace.emit("verification_step", { actionId, step, passed, ...details });
       },
@@ -238,7 +244,7 @@ export function createAdapterApiServer(options: HttpEndpointOptions): FastifyIns
 
     // --- Routing decision: governed vs. pass-through ---
     // If the operation IS in the plugin OR has a policy entry → governance applies.
-    // If the operation is NOT in either → pass-through (skip schema + policy, just proxy credential).
+    // If the operation is NOT in either → deny unless trusted config explicitly allows pass-through.
     if (isGovernedOperation) {
       // Governed path: validate schema (only if in plugin) and evaluate policy.
       if (inPlugin) {
@@ -279,13 +285,9 @@ export function createAdapterApiServer(options: HttpEndpointOptions): FastifyIns
       }
       trace.emit("verification_step", { actionId, step: "policy_evaluation", passed: true, policyStatus: policyResult.status });
     } else {
-      // Pass-through path: operation is not in the plugin and has no policy
-      // entry. Under the plugin-anchored trust model the plugin publisher
-      // defines the governed surface; ungoverned operations execute with the
-      // adapter's credential on the proposer's signature alone, and
-      // defaultRequirement does NOT apply. Power users who want a closed
-      // world instead set passThrough: "deny" in the deployment config.
-      if (loadedConfig.config.passThrough === "deny") {
+      // This reference adapter chooses the profile-permitted closed world.
+      // Only a literal trusted opt-in may bypass the governed-operation default.
+      if (loadedConfig.config.passThrough !== "allow") {
         trace.emit("verification_step", { actionId, step: "routing_decision", passed: false, path: "pass-through", operation: operationName(pkg) });
         return rejection(
           pkg,
@@ -342,7 +344,15 @@ export function createAdapterApiServer(options: HttpEndpointOptions): FastifyIns
     // Atomic check-and-write gate (Action Lifecycle check-and-write property): write
     // `executing` immediately before transmission. Two submissions of the same
     // actionId can never both reach transmission.
-    const authorize = ledger.authorizeDispatch(pkg.actionEnvelope.actionId, envelopeHash.value, pkg.actionEnvelope.expiresAt);
+    let authorize;
+    try {
+      authorize = ledger.authorizeDispatch(pkg.actionEnvelope.actionId, envelopeHash, pkg.actionEnvelope.expiresAt);
+    } catch (error) {
+      // Preparation may hold a process or socket. A failed durable grant must
+      // release it without ever transmitting the target operation.
+      await prepared.session.close();
+      throw error;
+    }
     if (authorize.kind !== "absent") {
       await prepared.session.close();
       if (authorize.kind === "pending") {
@@ -374,9 +384,6 @@ export function createAdapterApiServer(options: HttpEndpointOptions): FastifyIns
 
     const receipt = await receiptFor(pkg, options, classified.result);
 
-    trace.emit("receipt_generated", { actionId, result: classified.result });
-    trace.emit("dispatch", { actionId, result: classified.result });
-
     const response = actionResponse(options, {
       result: classified.result,
       actionEnvelopeHash: envelopeHash,
@@ -394,8 +401,15 @@ export function createAdapterApiServer(options: HttpEndpointOptions): FastifyIns
     // Persist the exact terminal response before returning it. The outbound
     // Verifier worker can then recover the same bytes after a crash without
     // changing the public rule that a resolved HTTP replay is rejected.
-    ledger.resolve(pkg.actionEnvelope.actionId, classified.result, response);
-    return response;
+    let winner = ledger.resolve(pkg.actionEnvelope.actionId, classified.result, response);
+    if (winner?.resolution === "indeterminate" && !winner.response) {
+      const recovered = await buildIndeterminateRecoveryResponse(pkg, options);
+      winner = ledger.resolve(pkg.actionEnvelope.actionId, "indeterminate", recovered);
+    }
+    if (!winner?.response) throw new Error("Dispatch outcome has no durable terminal response.");
+    trace.emit("receipt_generated", { actionId, result: winner.resolution });
+    trace.emit("dispatch", { actionId, result: winner.resolution });
+    return winner.response;
   };
   app.post("/mpas/v1/verifier/action", actionHandler);
   app.post("/mpas/v1/action", actionHandler);
@@ -429,6 +443,8 @@ export function classifyDispatch(dispatchResult: McpDispatchResult): {
     case "DISPATCH_TIMEOUT":
     case "PROCESS_EXITED":
     case "TRANSPORT_ERROR":
+    case "OAUTH_AUTHENTICATION_FAILED":
+    case "OAUTH_SCOPE_DEMAND":
       return { result: "indeterminate", error: { code: dispatchResult.error.code, message: dispatchResult.error.message } };
     default:
       return { result: "failed", error: { code: dispatchResult.error.code, message: dispatchResult.error.message } };
@@ -443,18 +459,32 @@ async function prepareTarget(
   const protocolVersion = loadedConfig.plugin.executionProfile.protocolVersion;
   if (loadedConfig.config.executionTarget.type === "mcp.http") {
     if (loadedConfig.config.executionTarget.auth?.type === "oauth2") {
+      const oauthAuth = loadedConfig.config.executionTarget.auth as ManagedOAuthConfiguration;
       const operatorCommand = oauthLoginCommand({
         applicationDid: loadedConfig.config.target.applicationDid,
         resourceUrl: loadedConfig.config.executionTarget.url,
-        session: loadedConfig.config.executionTarget.auth.session,
+        session: oauthAuth.session,
         credentialHandle: loadedConfig.config.credentialBindings[0].credentialHandle,
       });
       const preparedOAuth = await prepareOAuthForDispatch(
-        loadedConfig.config.executionTarget.auth.session,
+        oauthAuth.session,
         loadedConfig.config.credentialBindings[0].credentialHandle,
         loadedConfig.config.target.applicationDid,
         loadedConfig.config.executionTarget.url,
         credentialDir,
+        {
+          scopes: oauthAuth.scopes,
+          refreshScope: loadedConfig.plugin.credentialRequirements
+            ?.map((requirement: { refreshScope?: string }) => requirement.refreshScope)
+            .find((scope: string | undefined) => typeof scope === "string" && scope.trim().length > 0)
+            ?.trim() ?? "offline_access",
+          issuer: oauthAuth.issuer,
+          client: oauthAuth.client,
+          owner: oauthAuth.owner,
+          sharing: oauthAuth.sharing,
+          refresh: oauthAuth.refresh,
+          ...(credentialDir ? { auditPath: `${credentialDir}/oauth-audit.jsonl` } : {}),
+        },
       );
       if (!preparedOAuth.ok) {
         return { ok: false, error: preparedOAuth.error };
@@ -553,6 +583,8 @@ function diagnosticMessage(code: string): string {
       return "The upstream MCP server rejected OAuth authentication. This is not a target outage.";
     case "OAUTH_INVALID_GRANT":
       return "The stored OAuth refresh grant is invalid or revoked. Operator reauthorization is required.";
+    case "OAUTH_SCOPE_DEMAND":
+      return "The upstream MCP server requested more scope after dispatch. No authority was changed or retry made.";
     case "OAUTH_SCOPE_NOT_SUPPORTED":
       return "A configured OAuth scope is not advertised by the authorization server.";
     case "OAUTH_REFRESH_TOKEN_NOT_ISSUED":

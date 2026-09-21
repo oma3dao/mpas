@@ -13,7 +13,7 @@
   "credentialRequirements": [
     {
       "type": "oauthToken",
-      "requiredCapabilities": [
+      "expectedAuthority": [
         "issue.write",
         "pullRequest.merge",
         "pullRequest.read",

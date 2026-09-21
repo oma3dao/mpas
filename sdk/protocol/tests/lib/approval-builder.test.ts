@@ -1,7 +1,8 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { JWK } from "jose";
+import { compactVerify, decodeProtectedHeader, importJWK, type JWK } from "jose";
+import { canonicalize } from "json-canonicalize";
 import { describe, expect, it } from "vitest";
 import {
   ApprovalBuilder,
@@ -41,6 +42,11 @@ describe("ApprovalBuilder", () => {
     });
     await expect(verifyApproval(approval, signer.publicJwk)).resolves.toBe(true);
     await expect(builder.verifyApproval(approval, signer.publicJwk)).resolves.toBe(true);
+    expect(decodeProtectedHeader(approval.signature.value).kid).toBe(`${signer.did}#0`);
+    const publicKey = await importJWK(signer.publicJwk, "EdDSA");
+    const { payload } = await compactVerify(approval.signature.value, publicKey);
+    const payloadText = Buffer.from(payload).toString("utf8");
+    expect(payloadText).toBe(canonicalize(JSON.parse(payloadText)));
   });
 
   it("returns false for tampered approvals", async () => {

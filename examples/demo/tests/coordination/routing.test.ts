@@ -6,6 +6,9 @@ import { createCoordinationApiServer } from "../../src/coordination/coordination
 import { CoordinationStore } from "../../src/coordination/store.js";
 import { computeJsonHash } from "../../src/core/verification.js";
 
+/** Deterministic clock pinned inside the fixture validity window. */
+const FIXTURE_NOW = Date.parse("2026-06-05T19:00:00.000Z");
+
 const fixtures = fileURLToPath(new URL("../fixtures/", import.meta.url));
 const verifier = "did:jwk:verifier" as Did;
 const observer = "did:jwk:observer" as Did;
@@ -28,7 +31,7 @@ describe("co-located Action Relay and Coordination Service", () => {
       recipients: [verifier, observer],
       payload: request,
     });
-    const store = new CoordinationStore();
+    const store = new CoordinationStore({ now: FIXTURE_NOW });
     const app = createApp(store);
 
     const pending = app.inject({ method: "POST", url: "/mpas/v1/verifier/action", payload: envelope });
@@ -292,7 +295,7 @@ describe("co-located Action Relay and Coordination Service", () => {
   it("bounds the relay wait and lets an equivalent rebuilt retry receive the later response", async () => {
     const pkg = await actionPackage();
     const proposer = pkg.actionEnvelope.proposer.did;
-    const store = new CoordinationStore();
+    const store = new CoordinationStore({ now: FIXTURE_NOW });
     const app = createApp(store, 25);
     const firstEnvelope = buildDeliveryEnvelope({
       sender: proposer,
@@ -417,7 +420,7 @@ describe("co-located Action Relay and Coordination Service", () => {
 
   it("caps delivery pages and returns a checkpoint cursor for every non-empty page", async () => {
     const base = await actionPackage();
-    const store = new CoordinationStore();
+    const store = new CoordinationStore({ now: FIXTURE_NOW });
     for (let index = 0; index < 101; index += 1) {
       const pkg = structuredClone(base);
       pkg.actionEnvelope.actionId.value = `urn:uuid:${String(index).padStart(8, "0")}-0000-4000-8000-000000000000`;
@@ -443,7 +446,7 @@ describe("co-located Action Relay and Coordination Service", () => {
 
 function createApp(store?: CoordinationStore, relayResponseWaitMs?: number) {
   const app = createCoordinationApiServer({
-    store,
+    store: store ?? new CoordinationStore({ now: FIXTURE_NOW }),
     designatedVerifierDid: verifier,
     authorizedRecipientDids: [observer],
     notificationOrigin: "https://coordination.example.com",

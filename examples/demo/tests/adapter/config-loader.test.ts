@@ -30,6 +30,27 @@ async function tempFixtureConfigDir() {
 }
 
 describe("loadDeploymentConfigs", () => {
+  it.each([undefined, "deny", "allow"])("accepts only the declared pass-through deployment choices: %s", async (passThrough) => {
+    const { configDir } = await tempFixtureConfigDir();
+    const config = await readJson<Record<string, unknown>>(join(fixturesDir, "configs", "github-mirror-adapter-config.json"));
+    if (passThrough === undefined) delete config.passThrough;
+    else config.passThrough = passThrough;
+    await writeJson(join(configDir, "config.json"), config);
+    const result = await loadDeploymentConfigs(configDir, { confirmPluginUse: approvePluginUse });
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error(result.error.message);
+    expect(result.configs[0].config.passThrough).toBe(passThrough);
+  });
+
+  it.each([true, false, null, "ALLOW", "", 1, {}, ["allow"]])("rejects invalid pass-through setting %j", async (passThrough) => {
+    const { configDir } = await tempFixtureConfigDir();
+    const config = await readJson<Record<string, unknown>>(join(fixturesDir, "configs", "github-mirror-adapter-config.json"));
+    config.passThrough = passThrough;
+    await writeJson(join(configDir, "config.json"), config);
+    expect(await loadDeploymentConfigs(configDir, { confirmPluginUse: approvePluginUse }))
+      .toMatchObject({ ok: false, error: { code: "CONFIG_SCHEMA_INVALID" } });
+  });
+
   it("loads fixture configs and indexes by target application DID", async () => {
     const result = await loadDeploymentConfigs(join(fixturesDir, "configs"), { confirmPluginUse: approvePluginUse });
 
@@ -244,6 +265,62 @@ describe("loadDeploymentConfigs", () => {
         code: "CONFIG_SCHEMA_INVALID",
       },
     });
+  });
+
+  it.each([
+    { type: "auto", clientId: "synthetic-static-client" },
+    { type: "static", clientId: "synthetic-static-client" },
+    { type: "cimd", clientIdMetadataDocument: "https://adapter.example/oauth/client.json" },
+    { type: "dynamic" },
+  ])("accepts managed OAuth client mode $type with explicit owner and sharing", async (client) => {
+    const { configDir } = await tempFixtureConfigDir();
+    const config = await readJson<Record<string, any>>(
+      join(fixturesDir, "configs", "github-mirror-adapter-config.json"),
+    );
+    config.plugin.path = "../plugins/github-mirror-plugin.json";
+    config.executionTarget = {
+      type: "mcp.http",
+      url: "https://mcp.example/mcp",
+      auth: {
+        type: "oauth2",
+        session: "synthetic-session",
+        scopes: ["mcp:tools"],
+        scopePolicy: "fixed",
+        client,
+        owner: "local-os-user:501",
+        sharing: {
+          applicationDids: [config.target.applicationDid],
+          operatorPrincipals: ["local-os-user:501"],
+        },
+        refresh: { safetyWindowMs: 60_000, jitterMaxMs: 30_000 },
+      },
+    };
+    await writeJson(join(configDir, "managed-oauth.json"), config);
+
+    await expect(loadDeploymentConfigs(configDir, { confirmPluginUse: approvePluginUse }))
+      .resolves.toMatchObject({ ok: true });
+  });
+
+  it("rejects inline OAuth client secrets and sharing that excludes the deployment", async () => {
+    const { configDir } = await tempFixtureConfigDir();
+    const config = await readJson<Record<string, any>>(
+      join(fixturesDir, "configs", "github-mirror-adapter-config.json"),
+    );
+    config.plugin.path = "../plugins/github-mirror-plugin.json";
+    config.executionTarget = {
+      type: "mcp.http",
+      url: "https://mcp.example/mcp",
+      auth: {
+        type: "oauth2",
+        session: "synthetic-session",
+        client: { type: "static", clientId: "synthetic", clientSecret: "inline-secret" },
+        sharing: { applicationDids: ["did:web:other.example"] },
+      },
+    };
+    await writeJson(join(configDir, "managed-oauth.json"), config);
+
+    await expect(loadDeploymentConfigs(configDir, { confirmPluginUse: approvePluginUse }))
+      .resolves.toMatchObject({ ok: false, error: { code: "CONFIG_SCHEMA_INVALID" } });
   });
 });
 

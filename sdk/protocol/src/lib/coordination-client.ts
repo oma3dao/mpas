@@ -20,6 +20,9 @@ import { strictJsonParse } from "../utils/strict-json.js";
 import {
   parseActionResponseEnvelope,
   parseCoordinationPollResponse,
+  parseActionReference,
+  requireTimestamp,
+  RoutingValidationError,
   parseCoordinationSessionResponse,
   parseCoordinationWorkAvailable,
   parseRelayDeliveryResponse,
@@ -429,7 +432,7 @@ export class CoordinationServiceClient {
           approval: legacyApproval as Approval,
           idempotencyKey: legacyIdempotencyKey,
         };
-    return this.post<CoordinationApprovalResponse>(
+    return parseCoordinationApprovalResponse(await this.post<unknown>(
       "/mpas/v1/coordination/approval",
       {
         version: "1",
@@ -439,7 +442,7 @@ export class CoordinationServiceClient {
         ...(idempotencyKey !== undefined ? { idempotencyKey } : {}),
       },
       approvalSignerDid(approval),
-    );
+    ));
   }
 
   /** Cancels a pending coordination workflow as its Proposer. */
@@ -491,6 +494,52 @@ export class CoordinationServiceClient {
 
 /** @deprecated Use {@link CoordinationServiceClient}. */
 export class CoordinationClient extends CoordinationServiceClient {}
+
+const COORDINATION_APPROVAL_STATES = new Set([
+  "awaitingApprovals",
+  "readyForSubmission",
+  "readyForResubmission",
+  "executed",
+  "rejected",
+  "cancelled",
+  "expired",
+]);
+
+const COORDINATION_APPROVAL_RESPONSE_MEMBERS = new Set([
+  "version",
+  "type",
+  "accepted",
+  "actionRef",
+  "state",
+  "createdAt",
+]);
+
+function parseCoordinationApprovalResponse(value: unknown): CoordinationApprovalResponse {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new CoordinationResponseError("Coordination Approval response must be a JSON object.");
+  }
+  const response = value as Record<string, unknown>;
+  if (response.version !== "1" || response.type !== "CoordinationApprovalSubmissionResponse") {
+    throw new CoordinationResponseError("Coordination Approval response has an invalid protocol discriminant.");
+  }
+  if (typeof response.accepted !== "boolean") {
+    throw new CoordinationResponseError("Coordination Approval response must contain a boolean accepted field.");
+  }
+  if (!COORDINATION_APPROVAL_STATES.has(response.state as string)) {
+    throw new CoordinationResponseError("Coordination Approval response contains an invalid workflow state.");
+  }
+  try {
+    requireTimestamp(response.createdAt, "$.createdAt");
+    parseActionReference(response.actionRef, "$.actionRef");
+  } catch (error) {
+    if (!(error instanceof RoutingValidationError)) throw error;
+    throw new CoordinationResponseError("Coordination Approval response contains invalid timestamp or Action reference metadata.");
+  }
+  if (Object.keys(response).some((member) => !COORDINATION_APPROVAL_RESPONSE_MEMBERS.has(member))) {
+    throw new CoordinationResponseError("Coordination Approval response contains an undeclared member.");
+  }
+  return response as unknown as CoordinationApprovalResponse;
+}
 
 function approvalSignerDid(approval: Approval): Did {
   const parts = approval.signature.value.split(".");

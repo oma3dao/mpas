@@ -134,8 +134,11 @@ function makeEngine(opts: {
   coordination?: WorkflowCoordination;
   store?: WorkflowStore;
   now?: () => number;
+  workerId?: string;
   claimLeaseMs?: number;
   submissionTimeoutMs?: number;
+  policyUnavailableInitialRetryMs?: number;
+  policyUnavailableMaxRetryMs?: number;
 }) {
   const store = opts.store ?? new MemoryWorkflowStore({ now: opts.now });
   const engine = new BridgeWorkflowEngine({
@@ -170,12 +173,21 @@ function makeEngine(opts: {
         },
       };
     },
-    workerId: "test-worker",
+    workerId: opts.workerId ?? "test-worker",
     now: opts.now,
     ...(opts.claimLeaseMs !== undefined ? { claimLeaseMs: opts.claimLeaseMs } : {}),
     ...(opts.submissionTimeoutMs !== undefined ? { submissionTimeoutMs: opts.submissionTimeoutMs } : {}),
+    ...(opts.policyUnavailableInitialRetryMs !== undefined ? { policyUnavailableInitialRetryMs: opts.policyUnavailableInitialRetryMs } : {}),
+    ...(opts.policyUnavailableMaxRetryMs !== undefined ? { policyUnavailableMaxRetryMs: opts.policyUnavailableMaxRetryMs } : {}),
   });
   return { engine, store };
+}
+
+function completedPackageForTest(label = "completed-package") {
+  return {
+    fake: label,
+    actionEnvelope: { proposer: { did: PROPOSER_DID } },
+  };
 }
 
 function proposalInput() {
@@ -264,7 +276,7 @@ describe("propose", () => {
       type: "CoordinationActionUpdate",
       actionRef: actionRef(),
       state: "readyForSubmission",
-      actionPackage: { fake: "completed-replacement-package" },
+      actionPackage: completedPackageForTest("completed-replacement-package"),
     }]);
     const { engine, store } = makeEngine({ actionEndpoint, coordination });
 
@@ -514,6 +526,216 @@ describe("propose", () => {
     expect(adapter.calls).toHaveLength(1);
     expect(coordination.submitted).toHaveLength(2);
   });
+
+  it("rejects an Action Package owned by another proposer before storing or submitting it", async () => {
+    const adapter = fakeAdapter();
+    const { engine, store } = makeEngine({ adapter });
+    const foreign = {
+      ...proposalInput(),
+      actionPackage: {
+        fake: "foreign-package",
+        actionEnvelope: { proposer: { did: "did:jwk:other" }, actionId: { value: ACTION_ID } },
+      },
+    };
+
+    await expect(engine.propose(foreign)).rejects.toThrow(/proposer DID/i);
+    expect(store.getWorkflow(TASK_ID)).toBeUndefined();
+    expect(adapter.calls).toHaveLength(0);
+  });
+});
+
+describe("policyUnavailable lifecycle", () => {
+  it("persists the exact temporary response without resolving or starting Coordination", async () => {
+    const clock = { now: Date.parse("2026-07-26T18:00:00.000Z") };
+    const policyResponse = response("policyUnavailable", {
+      error: { code: "POLICY_SOURCE_UNAVAILABLE", message: "Policy source is temporarily unavailable." },
+      createdAt: "2026-07-26T18:00:00.000Z",
+    });
+    const adapter = fakeAdapter(policyResponse);
+    const coordination = fakeCoordination();
+    const { engine, store } = makeEngine({
+      adapter,
+      coordination,
+      now: () => clock.now,
+      policyUnavailableInitialRetryMs: 100,
+      policyUnavailableMaxRetryMs: 400,
+    });
+
+    const outcome = await engine.propose(proposalInput());
+
+    expect(outcome.kind).toBe("deferred");
+    const stored = store.getWorkflow(TASK_ID);
+    expect(stored?.state).toBe("policyUnavailable");
+    expect(stored?.adapterAttempts).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        stage: "initial",
+        outcome: "policyUnavailable",
+        retryAfterMs: 100,
+        retryAt: "2026-07-26T18:00:00.100Z",
+      }),
+    ]));
+    expect(stored?.lastActionResponse).toEqual(policyResponse);
+    expect(JSON.stringify(stored?.lastActionResponse)).toBe(JSON.stringify(policyResponse));
+    expect(stored?.resolution).toBeUndefined();
+    expect(coordination.submitted).toHaveLength(0);
+    expect(adapter.calls).toHaveLength(1);
+
+    clock.now += 99;
+    await engine.pollOnce();
+    expect(adapter.calls).toHaveLength(1);
+    expect(store.getWorkflow(TASK_ID)?.state).toBe("policyUnavailable");
+    expect(coordination.submitted).toHaveLength(0);
+  });
+
+  it("retries with capped exponential backoff and resolves only on a true terminal response", async () => {
+    const clock = { now: Date.parse("2026-07-26T18:00:00.000Z") };
+    const policyResponse = response("policyUnavailable", {
+      error: { code: "POLICY_SOURCE_UNAVAILABLE", message: "retry later" },
+    });
+    const terminalResponse = response("executed", { executionResult: { content: [] } });
+    const adapter = fakeAdapter(policyResponse, policyResponse, policyResponse, terminalResponse);
+    const coordination = fakeCoordination();
+    const { engine, store } = makeEngine({
+      adapter,
+      coordination,
+      now: () => clock.now,
+      policyUnavailableInitialRetryMs: 100,
+      policyUnavailableMaxRetryMs: 250,
+    });
+
+    await engine.propose(proposalInput());
+
+    clock.now += 100;
+    await engine.pollOnce();
+    clock.now += 199;
+    await engine.pollOnce();
+    expect(adapter.calls).toHaveLength(2);
+    clock.now += 1;
+    await engine.pollOnce();
+    clock.now += 249;
+    await engine.pollOnce();
+    expect(adapter.calls).toHaveLength(3);
+    clock.now += 1;
+    await engine.pollOnce();
+
+    const retryDelays = store
+      .getWorkflow(TASK_ID)
+      ?.adapterAttempts.filter(
+        (attempt): attempt is { outcome: string; retryAfterMs: number } =>
+          typeof attempt === "object" && attempt !== null && (attempt as { outcome?: unknown }).outcome === "policyUnavailable",
+      )
+      .map((attempt) => attempt.retryAfterMs);
+    expect(retryDelays).toEqual([100, 200, 250]);
+    expect(store.getWorkflow(TASK_ID)).toMatchObject({
+      state: "resolved",
+      resolution: { kind: "resolved", actionResponse: terminalResponse },
+      lastActionResponse: policyResponse,
+    });
+    expect(coordination.submitted).toHaveLength(0);
+    expect(adapter.calls).toHaveLength(4);
+  });
+
+  it("recovers a completed-package retry from stored state after restart", async () => {
+    const clock = { now: Date.parse("2026-07-26T18:00:00.000Z") };
+    const completedPackage = completedPackageForTest();
+    const policyResponse = response("policyUnavailable", {
+      error: { code: "POLICY_SOURCE_UNAVAILABLE", message: "retry completed package" },
+    });
+    let deliverUpdate = true;
+    const coordination = fakeCoordination(() => {
+      if (!deliverUpdate) return [];
+      deliverUpdate = false;
+      return [
+        {
+          version: "1",
+          type: "CoordinationActionUpdate",
+          actionRef: actionRef(),
+          state: "readyForSubmission",
+          expiresAt: EXPIRES_AT,
+          actionPackage: completedPackage as CoordinationActionUpdate["actionPackage"],
+        },
+      ];
+    });
+    const store = new MemoryWorkflowStore({ now: () => clock.now });
+    const firstAdapter = fakeAdapter(response("additionalApprovalsRequired"), policyResponse);
+    const first = makeEngine({
+      adapter: firstAdapter,
+      coordination,
+      store,
+      now: () => clock.now,
+      workerId: "worker-before-restart",
+      claimLeaseMs: 50,
+      submissionTimeoutMs: 10,
+      policyUnavailableInitialRetryMs: 100,
+      policyUnavailableMaxRetryMs: 400,
+    });
+    await first.engine.propose(proposalInput());
+    await first.engine.pollOnce();
+    expect(store.getWorkflow(TASK_ID)).toMatchObject({
+      state: "policyUnavailable",
+      completedPackage,
+      lastActionResponse: policyResponse,
+    });
+
+    // Advance clock past the first worker's claim lease (50ms) so the
+    // restarted worker can acquire ownership.
+    clock.now += 51;
+
+    const terminalResponse = response("executed", { executionResult: { content: [] } });
+    const restartedAdapter = fakeAdapter(terminalResponse);
+    const restartedCoordination = fakeCoordination();
+    const restarted = makeEngine({
+      adapter: restartedAdapter,
+      coordination: restartedCoordination,
+      store,
+      now: () => clock.now,
+      workerId: "worker-after-restart",
+      claimLeaseMs: 50,
+      submissionTimeoutMs: 10,
+      policyUnavailableInitialRetryMs: 100,
+      policyUnavailableMaxRetryMs: 400,
+    });
+
+    // First reconcile: retry is not yet due (retryAt is at base + 100ms,
+    // clock is at base + 51ms).
+    await restarted.engine.reconcile();
+    expect(restartedAdapter.calls).toHaveLength(0);
+    // Advance past the retry-due time.
+    clock.now = Date.parse("2026-07-26T18:00:00.000Z") + 100;
+    await restarted.engine.reconcile();
+
+    expect(restartedAdapter.calls).toEqual([completedPackage]);
+    expect(restartedCoordination.submitted).toHaveLength(0);
+    expect(store.getWorkflow(TASK_ID)).toMatchObject({
+      state: "resolved",
+      resolution: { kind: "resolved", actionResponse: terminalResponse },
+      lastActionResponse: policyResponse,
+    });
+  });
+
+  it("expires a temporary workflow instead of retrying past the Action Envelope", async () => {
+    const clock = { now: Date.parse("2026-07-26T18:00:00.000Z") };
+    const adapter = fakeAdapter(response("policyUnavailable"));
+    const coordination = fakeCoordination();
+    const { engine, store } = makeEngine({
+      adapter,
+      coordination,
+      now: () => clock.now,
+      policyUnavailableInitialRetryMs: 100,
+      policyUnavailableMaxRetryMs: 400,
+    });
+
+    await engine.propose({ ...proposalInput(), expiresAt: "2026-07-26T18:00:00.050Z" });
+    clock.now += 51;
+    await engine.pollOnce();
+
+    expect(adapter.calls).toHaveLength(1);
+    expect(coordination.submitted).toHaveLength(0);
+    expect(store.getWorkflow(TASK_ID)).toMatchObject({
+      state: "unresolvable",
+      resolution: { kind: "unresolvable", errorCode: "ACTION_EXPIRED_BEFORE_RESOLUTION" },
+    });
+  });
 });
 
 describe("pollOnce (bridge track advancement)", () => {
@@ -558,7 +780,7 @@ describe("pollOnce (bridge track advancement)", () => {
   });
 
   it("submits completed A2 when coordination reports readyForSubmission", async () => {
-    const completedPackage = { fake: "completed-package" };
+    const completedPackage = completedPackageForTest();
     const adapter = fakeAdapter(
       response("additionalApprovalsRequired"),
       response("executed", { executionResult: { content: [] } }),
@@ -678,6 +900,192 @@ describe("pollOnce (bridge track advancement)", () => {
     }
     expect(store.getWorkflow(TASK_ID)?.state).toBe("resolved");
   });
+
+  it("makes a permanent Coordination poll rejection terminal without another Verifier submission", async () => {
+    const adapter = fakeAdapter(response("additionalApprovalsRequired"));
+    const coordination: WorkflowCoordination = {
+      ...fakeCoordination(),
+      async poll() {
+        throw new MpasAuthError(403, "permission_denied", "Coordination poll authorization failed.");
+      },
+    };
+    const { engine, store } = makeEngine({ adapter, coordination });
+    await engine.propose(proposalInput());
+
+    await engine.pollOnce();
+    await engine.pollOnce();
+
+    expect(store.getWorkflow(TASK_ID)).toMatchObject({
+      state: "unresolvable",
+      resolution: { kind: "unresolvable", errorCode: "COORDINATION_AUTHORIZATION_FAILED" },
+    });
+    expect(adapter.calls).toHaveLength(1);
+  });
+
+  it("keeps a workflow retryable when Coordination polling is temporarily unavailable", async () => {
+    const adapter = fakeAdapter(response("additionalApprovalsRequired"));
+    const coordination: WorkflowCoordination = {
+      ...fakeCoordination(),
+      async poll() {
+        throw new CoordinationUnavailableError("Coordination Service timed out.");
+      },
+    };
+    const { engine, store } = makeEngine({ adapter, coordination });
+    await engine.propose(proposalInput());
+
+    await engine.pollOnce();
+
+    expect(store.getWorkflow(TASK_ID)?.state).toBe("awaitingApprovals");
+    expect(adapter.calls).toHaveLength(1);
+  });
+
+  it("ignores Coordination updates for a workflow owned by another proposer", async () => {
+    const adapter = fakeAdapter();
+    const store = new MemoryWorkflowStore();
+    store.createWorkflow({
+      ...proposalInput(),
+      actionPackage: { actionEnvelope: { proposer: { did: "did:jwk:other" } } },
+    });
+    const coordination = fakeCoordination(() => [{
+      version: "1",
+      type: "CoordinationActionUpdate",
+      actionRef: actionRef(),
+      state: "readyForSubmission",
+      expiresAt: EXPIRES_AT,
+      actionPackage: completedPackageForTest() as CoordinationActionUpdate["actionPackage"],
+    }]);
+    const { engine } = makeEngine({ adapter, coordination, store });
+
+    await engine.pollOnce();
+
+    expect(store.getWorkflow(TASK_ID)?.state).toBe("created");
+    expect(adapter.calls).toHaveLength(0);
+  });
+});
+
+describe("submission idempotency", () => {
+  it("records a content fingerprint on first submission and reuses the key after restart", async () => {
+    const clock = { now: Date.parse("2026-07-26T18:00:00.000Z") };
+    const endpoint: WorkflowActionEndpoint & { calls: { idempotencyKey?: string; actionPackage: unknown }[] } = {
+      calls: [],
+      async submitActionRequest(request) {
+        endpoint.calls.push(structuredClone(request));
+        const next = [new Error("adapter down"), response("executed")][endpoint.calls.length - 1];
+        if (next instanceof Error) throw next;
+        return next as ActionResponse;
+      },
+    };
+    const store = new MemoryWorkflowStore({ now: () => clock.now });
+    const first = makeEngine({
+      actionEndpoint: endpoint,
+      store,
+      workerId: "worker-before-restart",
+      now: () => clock.now,
+    });
+    await first.engine.propose(proposalInput());
+
+    // The first call should have recorded an idempotency binding
+    const record = store.getWorkflow(TASK_ID);
+    const bindings = (record?.adapterAttempts ?? []).filter(
+      (a: unknown) => typeof a === "object" && a !== null && (a as Record<string, unknown>).outcome === "idempotencyBound",
+    );
+    expect(bindings.length).toBeGreaterThanOrEqual(1);
+    expect((bindings[0] as Record<string, string>).stage).toBe("initial");
+
+    // Advance clock past the claim lease so the new worker can claim it
+    clock.now += 120_000;
+
+    const restarted = makeEngine({
+      actionEndpoint: endpoint,
+      store,
+      workerId: "worker-after-restart",
+      now: () => clock.now,
+    });
+    await restarted.engine.reconcile();
+
+    expect(endpoint.calls).toHaveLength(2);
+    expect(endpoint.calls[0].idempotencyKey).toBe(IDEMPOTENCY_KEY);
+    expect(endpoint.calls[1].idempotencyKey).toBe(endpoint.calls[0].idempotencyKey);
+    expect(endpoint.calls[1].actionPackage).toEqual(endpoint.calls[0].actionPackage);
+    expect(store.getWorkflow(TASK_ID)?.state).toBe("resolved");
+  });
+
+  it("uses the record key for both initial and completed submissions", async () => {
+    const endpoint: WorkflowActionEndpoint & { calls: { idempotencyKey?: string; actionPackage: unknown }[] } = {
+      calls: [],
+      async submitActionRequest(request) {
+        endpoint.calls.push(structuredClone(request));
+        const responses = [
+          response("additionalApprovalsRequired"),
+          response("executed", { executionResult: { content: [] } }),
+        ];
+        return responses[endpoint.calls.length - 1] as ActionResponse;
+      },
+    };
+    const completed = completedPackageForTest();
+    const coordination = fakeCoordination(() => [{
+      version: "1",
+      type: "CoordinationActionUpdate",
+      actionRef: actionRef(),
+      state: "readyForSubmission",
+      expiresAt: EXPIRES_AT,
+      actionPackage: completed as CoordinationActionUpdate["actionPackage"],
+    }]);
+    const { engine, store } = makeEngine({
+      actionEndpoint: endpoint,
+      coordination,
+    });
+
+    await engine.propose(proposalInput());
+    await engine.pollOnce();
+
+    expect(endpoint.calls).toHaveLength(2);
+    // Both submissions use the record's idempotency key (which changes after replacement)
+    expect(typeof endpoint.calls[0].idempotencyKey).toBe("string");
+    expect(typeof endpoint.calls[1].idempotencyKey).toBe("string");
+    expect(endpoint.calls[1].actionPackage).toEqual(completed);
+    expect(store.getWorkflow(TASK_ID)?.state).toBe("resolved");
+  });
+
+  it("fails closed when a completed key would be reused with different request bytes", async () => {
+    const endpoint: WorkflowActionEndpoint & { calls: { idempotencyKey?: string }[] } = {
+      calls: [],
+      async submitActionRequest(request) {
+        endpoint.calls.push(structuredClone(request));
+        const responses = [
+          response("additionalApprovalsRequired"),
+          new Error("completed submission timed out"),
+        ];
+        const next = responses[endpoint.calls.length - 1];
+        if (next instanceof Error) throw next;
+        return next as ActionResponse;
+      },
+    };
+    const coordination = fakeCoordination(() => [{
+      version: "1",
+      type: "CoordinationActionUpdate",
+      actionRef: actionRef(),
+      state: "readyForSubmission",
+      expiresAt: EXPIRES_AT,
+      actionPackage: completedPackageForTest("first-completed-package") as CoordinationActionUpdate["actionPackage"],
+    }]);
+    const { engine, store } = makeEngine({
+      actionEndpoint: endpoint,
+      coordination,
+    });
+    await engine.propose(proposalInput());
+    await engine.pollOnce();
+    expect(store.getWorkflow(TASK_ID)?.state).toBe("readyForSubmission");
+
+    store.saveCompletedPackage(TASK_ID, completedPackageForTest("changed-completed-package"));
+    await engine.reconcile();
+
+    expect(endpoint.calls).toHaveLength(2);
+    expect(store.getWorkflow(TASK_ID)).toMatchObject({
+      state: "unresolvable",
+      resolution: { kind: "unresolvable", errorCode: "IDEMPOTENCY_REQUEST_CONFLICT" },
+    });
+  });
 });
 
 describe("cancel", () => {
@@ -764,7 +1172,7 @@ describe("reconcile (startup recovery, feature spec §9.4)", () => {
     const coordination = fakeCoordination();
     const { engine, store } = makeEngine({ adapter, coordination });
     await engine.propose(proposalInput());
-    store.saveCompletedPackage(TASK_ID, { fake: "completed-package" });
+    store.saveCompletedPackage(TASK_ID, completedPackageForTest());
     store.compareAndSetState(TASK_ID, "awaitingApprovals", "submittingToVerifier");
 
     await engine.reconcile();
@@ -781,12 +1189,27 @@ describe("reconcile (startup recovery, feature spec §9.4)", () => {
     );
     const { engine, store } = makeEngine({ adapter });
     await engine.propose(proposalInput());
-    store.saveCompletedPackage(TASK_ID, { fake: "completed-package" });
+    store.saveCompletedPackage(TASK_ID, completedPackageForTest());
     store.compareAndSetState(TASK_ID, "awaitingApprovals", "submittingToVerifier");
 
     await engine.reconcile();
 
     expect(store.getWorkflow(TASK_ID)?.state).toBe("awaitingVerifierResult");
+  });
+
+  it("does not claim or advance a workflow owned by another proposer DID", async () => {
+    const adapter = fakeAdapter(response("executed"));
+    const store = new MemoryWorkflowStore();
+    store.createWorkflow({
+      ...proposalInput(),
+      actionPackage: { actionEnvelope: { proposer: { did: "did:jwk:other" } } },
+    });
+    const { engine } = makeEngine({ adapter, store });
+
+    await engine.reconcile();
+
+    expect(store.getWorkflow(TASK_ID)?.state).toBe("created");
+    expect(adapter.calls).toHaveLength(0);
   });
 });
 
@@ -837,8 +1260,18 @@ describe("waitForResult (client track observation)", () => {
     expect(await engine.waitForResult("urn:uuid:unknown", 0)).toBeUndefined();
   });
 
+  it("returns undefined for a workflow owned by another proposer DID", async () => {
+    const { engine, store } = makeEngine({ adapter: fakeAdapter() });
+    store.createWorkflow({
+      ...proposalInput(),
+      actionPackage: { actionEnvelope: { proposer: { did: "did:jwk:other" } } },
+    });
+
+    expect(await engine.waitForResult(TASK_ID, 0)).toBeUndefined();
+  });
+
   it("wakes a pending waiter when the workflow resolves", async () => {
-    const completedPackage = { fake: "completed-package" };
+    const completedPackage = completedPackageForTest();
     const adapter = fakeAdapter(response("additionalApprovalsRequired"), response("executed"));
     const coordination = fakeCoordination(() => [
       {

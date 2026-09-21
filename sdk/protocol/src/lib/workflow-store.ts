@@ -14,6 +14,7 @@
 
 export type BridgeWorkflowState =
   | "created"
+  | "policyUnavailable"
   | "submittingToCoordination"
   | "awaitingApprovals"
   | "readyForSubmission"

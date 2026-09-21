@@ -1,7 +1,11 @@
 import type {
+  ActionEnvelope,
+  ActionReference,
+  ApprovalRequest,
   ActionRequest,
   ActionResponse,
   CoordinationDeliveryResponse,
+  CoordinationActionUpdate,
   CoordinationPollResponse,
   CoordinationSessionResponse,
   CoordinationWorkAvailable,
@@ -15,6 +19,7 @@ import type {
   Timestamp,
 } from "../types/mpas.js";
 import { computeJsonHash } from "../utils/hash.js";
+import { parseActionPackage, validateActionEnvelope } from "./verification.js";
 
 /** Maximum length, in characters, of an MPAS body-level idempotency key. */
 export const MPAS_MAX_IDEMPOTENCY_KEY_LENGTH = 128;
@@ -327,7 +332,8 @@ export function parseRelayPollResponse(value: unknown): RelayPollResponse {
 
 /** Parses the workflow-only response returned by the Coordination Service poll. */
 export function parseCoordinationPollResponse(value: unknown): CoordinationPollResponse {
-  const object = requireRecord(value, "$", "CoordinationPollResponse must be a JSON object.");
+  const object = requireRecord(value, "$", "CoordinationPollResponse must be a JSON object.",
+    ["version", "type", "approvalRequests", "actionUpdates"]);
   requireLiteral(object.version, "1", "$.version");
   requireLiteral(object.type, "CoordinationPollResponse", "$.type");
   if (!Array.isArray(object.approvalRequests)) {
@@ -345,9 +351,188 @@ export function parseCoordinationPollResponse(value: unknown): CoordinationPollR
   return {
     version: "1",
     type: "CoordinationPollResponse",
-    approvalRequests: object.approvalRequests as CoordinationPollResponse["approvalRequests"],
-    actionUpdates: (object.actionUpdates ?? []) as CoordinationPollResponse["actionUpdates"],
+    approvalRequests: object.approvalRequests.map((request, index) =>
+      parseApprovalRequest(request, `$.approvalRequests[${index}]`)),
+    actionUpdates: ((object.actionUpdates ?? []) as unknown[]).map((update, index) =>
+      parseCoordinationActionUpdate(update, `$.actionUpdates[${index}]`)),
   };
+}
+
+function parseCoordinationActionUpdate(value: unknown, path: string): CoordinationActionUpdate {
+  const object = requireRecord(value, path, "CoordinationActionUpdate must be a JSON object.",
+    ["version", "type", "actionRef", "state", "expiresAt", "progress", "actionPackage", "cancelledAt", "rejectedAt"]);
+  requireLiteral(object.version, "1", `${path}.version`);
+  requireLiteral(object.type, "CoordinationActionUpdate", `${path}.type`);
+  const actionRef = parseActionReference(object.actionRef, `${path}.actionRef`);
+  if (!["awaitingApprovals", "readyForSubmission", "readyForResubmission", "executed", "rejected", "cancelled", "expired"].includes(object.state as string)) {
+    throw new RoutingValidationError("Invalid Coordination state.", `${path}.state`);
+  }
+  const expiresAt = requireTimestamp(object.expiresAt, `${path}.expiresAt`);
+  if (object.cancelledAt !== undefined || object.state === "cancelled") requireTimestamp(object.cancelledAt, `${path}.cancelledAt`);
+  if (object.rejectedAt !== undefined || object.state === "rejected") requireTimestamp(object.rejectedAt, `${path}.rejectedAt`);
+  if (object.state === "cancelled") {
+    if (object.progress !== undefined || object.actionPackage !== undefined) {
+      throw new RoutingValidationError("Cancelled updates must not include progress or an Action Package.", path);
+    }
+  } else {
+    const progressPath = `${path}.progress`;
+    const progress = requireRecord(object.progress, progressPath, "Coordination progress is required.", ["required", "collected", "pending"]);
+    for (const member of ["required", "collected"]) {
+      if (!Number.isSafeInteger(progress[member]) || (progress[member] as number) < 0) {
+        throw new RoutingValidationError("Progress counts must be non-negative integers.", `${progressPath}.${member}`);
+      }
+    }
+    if (!Array.isArray(progress.pending)) throw new RoutingValidationError("Pending signers must be an array.", `${progressPath}.pending`);
+    progress.pending.forEach((did, index) => requireDid(did, `${progressPath}.pending[${index}]`));
+  }
+  if (object.actionPackage !== undefined || object.state === "readyForSubmission" || object.state === "readyForResubmission") {
+    const packagePath = `${path}.actionPackage`;
+    const parsed = parseActionPackage(object.actionPackage);
+    if (!parsed.ok) throw new RoutingValidationError(parsed.error.message, packagePath + parsed.error.path.slice(1));
+    const { actionEnvelope, approvalBundle } = parsed.actionPackage;
+    const envelopeHash = computeJsonHash(actionEnvelope);
+    if (actionRef.actionId.value !== actionEnvelope.actionId.value || actionRef.actionId.scope !== actionEnvelope.actionId.scope ||
+        actionRef.actionEnvelopeHash.alg !== envelopeHash.alg || actionRef.actionEnvelopeHash.value !== envelopeHash.value ||
+        expiresAt !== actionEnvelope.expiresAt || approvalBundle.actionEnvelopeHash.alg !== envelopeHash.alg ||
+        approvalBundle.actionEnvelopeHash.value !== envelopeHash.value || approvalBundle.approvals.some(approval =>
+          approval.actionEnvelopeHash.alg !== envelopeHash.alg || approval.actionEnvelopeHash.value !== envelopeHash.value)) {
+      throw new RoutingValidationError("Action update and included package must bind the same Action.", packagePath);
+    }
+  }
+  requireJsonValue(object, path);
+  return object as unknown as CoordinationActionUpdate;
+}
+
+/** Parses a complete HTTP ActionRef without treating workflow data as authority. */
+export function parseActionReference(value: unknown, path = "$"): ActionReference {
+  const object = requireRecord(value, path, "ActionRef must be a JSON object.",
+    ["version", "type", "actionId", "actionEnvelopeHash"]);
+  requireLiteral(object.version, "1", `${path}.version`);
+  requireLiteral(object.type, "ActionRef", `${path}.type`);
+  const id = requireRecord(object.actionId, `${path}.actionId`, "Action ID is required.", ["value", "scope"]);
+  if (typeof id.value !== "string" || id.value.length === 0) {
+    throw new RoutingValidationError("Action ID value must be a non-empty string.", `${path}.actionId.value`);
+  }
+  if (id.scope !== undefined && (typeof id.scope !== "string" || id.scope.length === 0)) {
+    throw new RoutingValidationError("Action ID scope must be a non-empty string.", `${path}.actionId.scope`);
+  }
+  requireHash(object.actionEnvelopeHash, `${path}.actionEnvelopeHash`);
+  return object as unknown as ActionReference;
+}
+
+function parseApprovalRequest(value: unknown, path: string): ApprovalRequest {
+  const object = requireRecord(value, path, "ApprovalRequest must be a JSON object.",
+    ["version", "type", "actionRef", "signerReviewSet", "requestedDecision", "returnMode", "context"]);
+  requireLiteral(object.version, "1", `${path}.version`);
+  requireLiteral(object.type, "ApprovalRequest", `${path}.type`);
+  parseActionReference(object.actionRef, `${path}.actionRef`);
+  if (object.requestedDecision !== undefined) requireDecision(object.requestedDecision, `${path}.requestedDecision`);
+  if (object.returnMode !== undefined && object.returnMode !== "sync" && object.returnMode !== "async") {
+    throw new RoutingValidationError("Invalid approval return mode.", `${path}.returnMode`);
+  }
+  if (object.context !== undefined) {
+    requireRecord(object.context, `${path}.context`, "Approval context must be an object.");
+    requireJsonValue(object.context, `${path}.context`);
+  }
+  const reviewPath = `${path}.signerReviewSet`;
+  const review = requireRecord(object.signerReviewSet, reviewPath, "SignerReviewSet is required.",
+    ["version", "type", "actionEnvelope", "executionPayload", "authorizationRequirements", "createdAt", "expiresAt"]);
+  requireLiteral(review.version, "1", `${reviewPath}.version`);
+  requireLiteral(review.type, "SignerReviewSet", `${reviewPath}.type`);
+  const envelopePath = `${reviewPath}.actionEnvelope`;
+  const envelope = requireRecord(review.actionEnvelope, envelopePath, "Action Envelope is required.");
+  // Check expiry separately so callers can preserve the Signer profile's error code.
+  requireTimestamp(envelope.expiresAt, `${envelopePath}.expiresAt`);
+  requireTimestamp(envelope.createdAt, `${envelopePath}.createdAt`);
+  const validated = validateActionEnvelope(envelope as unknown as ActionEnvelope, { checkTime: false });
+  if (!validated.ok) {
+    throw new RoutingValidationError(validated.error.message, envelopePath + validated.error.path.slice(1));
+  }
+  const target = envelope.target as Record<string, unknown>;
+  if (target.resource !== undefined && typeof target.resource !== "string") {
+    throw new RoutingValidationError("Target resource must be a string.", `${envelopePath}.target.resource`);
+  }
+  requireJsonValue(envelope, envelopePath);
+  requireJsonValue(review.executionPayload, `${reviewPath}.executionPayload`);
+  if (review.createdAt !== undefined) requireTimestamp(review.createdAt, `${reviewPath}.createdAt`);
+  if (review.expiresAt !== undefined) requireTimestamp(review.expiresAt, `${reviewPath}.expiresAt`);
+  if (review.authorizationRequirements !== undefined) {
+    const authPath = `${reviewPath}.authorizationRequirements`;
+    const auth = requireRecord(review.authorizationRequirements, authPath, "Authorization Requirements must be an object.",
+      ["version", "type", "actionEnvelopeHash", "result", "verifier", "approvalRequirements", "policyRef", "createdAt", "expiresAt"]);
+    requireLiteral(auth.version, "1", `${authPath}.version`);
+    requireLiteral(auth.type, "AuthorizationRequirements", `${authPath}.type`);
+    requireHash(auth.actionEnvelopeHash, `${authPath}.actionEnvelopeHash`);
+    if (!["additionalApprovalsRequired", "rejected", "notSupported", "malformed", "policyUnavailable"].includes(auth.result as string)) {
+      throw new RoutingValidationError("Invalid authorization result.", `${authPath}.result`);
+    }
+    const verifier = requireRecord(auth.verifier, `${authPath}.verifier`, "Verifier is required.", ["did"]);
+    requireDid(verifier.did, `${authPath}.verifier.did`);
+    if (auth.policyRef !== undefined && typeof auth.policyRef !== "string") {
+      throw new RoutingValidationError("Policy reference must be a string.", `${authPath}.policyRef`);
+    }
+    if (auth.createdAt !== undefined) requireTimestamp(auth.createdAt, `${authPath}.createdAt`);
+    if (auth.expiresAt !== undefined) requireTimestamp(auth.expiresAt, `${authPath}.expiresAt`);
+    if (auth.result === "additionalApprovalsRequired" || auth.approvalRequirements !== undefined) {
+      const requirementsPath = `${authPath}.approvalRequirements`;
+      const requirements = requireRecord(auth.approvalRequirements, requirementsPath, "An approval path is required.",
+        ["anyOf", "allOf", "overrideSigners"]);
+      if (Object.keys(requirements).length === 0) {
+        throw new RoutingValidationError("An approval path is required.", requirementsPath);
+      }
+      for (const [kind, entries] of Object.entries(requirements)) {
+        const entriesPath = `${requirementsPath}.${kind}`;
+        if (!Array.isArray(entries) || entries.length === 0) {
+          throw new RoutingValidationError("Approval paths must be a non-empty array.", entriesPath);
+        }
+        entries.forEach((entry, index) => {
+          const entryPath = `${entriesPath}[${index}]`;
+          const override = kind === "overrideSigners";
+          const rule = requireRecord(entry, entryPath, "Approval path must be an object.", override
+            ? ["signer", "permissions", "description"]
+            : ["type", "threshold", "eligibleSigners", "decision", "description"]);
+          if (rule.description !== undefined && typeof rule.description !== "string") {
+            throw new RoutingValidationError("Description must be a string.", `${entryPath}.description`);
+          }
+          if (override) requireDid(rule.signer, `${entryPath}.signer`);
+          else {
+            requireLiteral(rule.type, "threshold", `${entryPath}.type`);
+            if (!Number.isInteger(rule.threshold) || (rule.threshold as number) < 1) {
+              throw new RoutingValidationError("Threshold must be a positive integer.", `${entryPath}.threshold`);
+            }
+            if (rule.decision !== undefined) requireDecision(rule.decision, `${entryPath}.decision`);
+          }
+          const member = override ? "permissions" : "eligibleSigners";
+          const values = rule[member];
+          if (!Array.isArray(values) || values.length === 0) {
+            throw new RoutingValidationError(`${member} must be a non-empty array.`, `${entryPath}.${member}`);
+          }
+          values.forEach((item, itemIndex) => {
+            const itemPath = `${entryPath}.${member}[${itemIndex}]`;
+            if (!override) requireDid(item, itemPath);
+            else if (typeof item !== "string" || item.length === 0) {
+              throw new RoutingValidationError("Permission must be a non-empty string.", itemPath);
+            }
+          });
+        });
+      }
+    }
+  }
+  return object as unknown as ApprovalRequest;
+}
+
+function requireHash(value: unknown, path: string): void {
+  const hash = requireRecord(value, path, "Hash must be an object.", ["alg", "value"]);
+  if (!["sha-256", "sha-384", "sha-512", "sha3-256", "sha3-384", "sha3-512"].includes(hash.alg as string) ||
+      typeof hash.value !== "string" || !/^[A-Za-z0-9_-]+$/.test(hash.value)) {
+    throw new RoutingValidationError("Hash must contain a supported algorithm and base64url value.", path);
+  }
+}
+
+function requireDecision(value: unknown, path: string): void {
+  if (!["propose", "approve", "reject", "abstain"].includes(value as string)) {
+    throw new RoutingValidationError("Invalid decision.", path);
+  }
 }
 
 /** Returns whether `did` occurs in the envelope's explicit recipient list. */
@@ -452,8 +637,10 @@ function validateOptionalIdempotencyKey(value: unknown, path: string): string | 
   return validateIdempotencyKey(value);
 }
 
-function requireRecord(value: unknown, path: string, message: string): Record<string, unknown> {
+function requireRecord(value: unknown, path: string, message: string, members?: readonly string[]): Record<string, unknown> {
   if (!isRecord(value)) throw new RoutingValidationError(message, path);
+  const unexpected = members && Object.keys(value).find((key) => !members.includes(key));
+  if (unexpected !== undefined) throw new RoutingValidationError("Object contains an undeclared member.", `${path}.${unexpected}`);
   return value;
 }
 
@@ -473,10 +660,10 @@ function requireDid(value: unknown, path: string): Did {
   return value as Did;
 }
 
-function requireTimestamp(value: unknown, path: string): Timestamp {
+export function requireTimestamp(value: unknown, path: string): Timestamp {
   if (typeof value !== "string" ||
       !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value) ||
-      Number.isNaN(Date.parse(value))) {
+      Number.isNaN(Date.parse(value)) || new Date(value).toISOString() !== value) {
     throw new RoutingValidationError("Expected an RFC 3339 timestamp.", path);
   }
   return value;

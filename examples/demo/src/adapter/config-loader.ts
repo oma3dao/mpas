@@ -12,6 +12,11 @@ import type { Did } from "../core/types.js";
 import { validatePolicyConfig, type PolicyConfig, type PolicyEntry, type Requirement } from "../core/policy-engine.js";
 import type { McpHttpTarget } from "./dispatch/mcp-http.js";
 import type { McpStdioTarget } from "./dispatch/mcp-stdio.js";
+import type {
+  OAuthClientConfiguration,
+  OAuthRefreshPolicy,
+  OAuthSharingPolicy,
+} from "./oauth-operator.js";
 import { buildTrustReport, type TrustContext } from "./trust.js";
 import {
   promptPluginUse,
@@ -61,15 +66,31 @@ export interface DeploymentConfig {
     credentialHandle: string;
     provider: "file" | "macos-keychain";
   }>;
-  executionTarget: McpStdioTarget | McpHttpTarget;
+  executionTarget: McpStdioTarget | ManagedOAuthHttpTarget | McpHttpTarget;
   policy: MpasApplicationPolicy;
   signerKeys: SignerKey[];
   /**
    * Routing for operations absent from both the plugin and the policy.
-   * "allow" (default) proxies them with the adapter credential on the
-   * proposer's signature alone; "deny" rejects them (fail closed).
+   * Omitted or "deny" rejects them before credential access. Explicit "allow"
+   * proxies them with the adapter credential on the proposer's signature alone.
    */
   passThrough?: "allow" | "deny";
+}
+
+export interface ManagedOAuthConfiguration {
+  type: "oauth2";
+  session: string;
+  scopes?: string[];
+  scopePolicy?: "fixed";
+  issuer?: string;
+  client?: OAuthClientConfiguration;
+  owner?: string;
+  sharing?: Partial<OAuthSharingPolicy>;
+  refresh?: Partial<OAuthRefreshPolicy>;
+}
+
+export interface ManagedOAuthHttpTarget extends Omit<McpHttpTarget, "auth"> {
+  auth: ManagedOAuthConfiguration;
 }
 
 export interface LoadedDeploymentConfig {
@@ -342,6 +363,10 @@ async function loadDeploymentConfigFile(
       filePath,
     );
   }
+  if (usesManagedOAuth) {
+    const oauthConfigurationError = validateManagedOAuthConfiguration(config, filePath);
+    if (oauthConfigurationError) return oauthConfigurationError;
+  }
   const policyValidation = validatePolicyConfig(config.policy);
   if (!policyValidation.ok) {
     return loadError("CONFIG_SCHEMA_INVALID", `Policy does not conform to the MPAS JSON Verifier Policy Profile: ${policyValidation.message}`, filePath);
@@ -471,6 +496,83 @@ async function loadDeploymentConfigFile(
       plugin: pluginResult.plugin,
     },
   };
+}
+
+function validateManagedOAuthConfiguration(
+  config: DeploymentConfig,
+  filePath: string,
+): { ok: false; error: DeploymentConfigLoadError } | null {
+  if (config.executionTarget.type !== "mcp.http" || config.executionTarget.auth?.type !== "oauth2") return null;
+  const auth = config.executionTarget.auth as ManagedOAuthConfiguration;
+  if (config.credentialBindings.length !== 1 || config.credentialBindings[0]?.provider !== "file") {
+    return loadError(
+      "CONFIG_SCHEMA_INVALID",
+      "Managed OAuth requires exactly one file-backed OAuth session binding.",
+      filePath,
+    );
+  }
+  if (auth.scopePolicy !== undefined && auth.scopePolicy !== "fixed") {
+    return loadError("CONFIG_SCHEMA_INVALID", "Managed OAuth scopePolicy currently supports only fixed.", filePath);
+  }
+  if (auth.scopes !== undefined && (!Array.isArray(auth.scopes) ||
+      !auth.scopes.every((scope) => typeof scope === "string" && scope.length > 0))) {
+    return loadError("CONFIG_SCHEMA_INVALID", "Managed OAuth scopes must be non-empty strings.", filePath);
+  }
+  if (auth.issuer !== undefined) {
+    try {
+      if (new URL(auth.issuer).protocol !== "https:") throw new Error("not HTTPS");
+    } catch {
+      return loadError("CONFIG_SCHEMA_INVALID", "Managed OAuth issuer must be an HTTPS URL.", filePath);
+    }
+  }
+  const client = auth.client ?? { type: "auto" };
+  if (!["auto", "static", "cimd", "dynamic"].includes(client.type)) {
+    return loadError("CONFIG_SCHEMA_INVALID", "Managed OAuth client mode is invalid.", filePath);
+  }
+  if ((client.type === "static" || (client.type === "auto" && client.clientId !== undefined)) &&
+      (typeof client.clientId !== "string" || client.clientId.length === 0)) {
+    return loadError("CONFIG_SCHEMA_INVALID", "Managed OAuth static client mode requires clientId.", filePath);
+  }
+  const clientSecret = client.type === "static" || client.type === "auto" ? client.clientSecret : undefined;
+  if (clientSecret !== undefined && !/^\{\{credential:[A-Za-z0-9][A-Za-z0-9._-]{0,127}\}\}$/.test(clientSecret)) {
+    return loadError("CONFIG_SCHEMA_INVALID", "Managed OAuth clientSecret must be an exact credential reference.", filePath);
+  }
+  const cimd = client.type === "cimd" || client.type === "auto" ? client.clientIdMetadataDocument : undefined;
+  if (client.type === "cimd" && typeof cimd !== "string") {
+    return loadError("CONFIG_SCHEMA_INVALID", "Managed OAuth CIMD mode requires clientIdMetadataDocument.", filePath);
+  }
+  if (cimd !== undefined) {
+    try {
+      const url = new URL(cimd);
+      if (url.protocol !== "https:" || url.pathname === "/") throw new Error("invalid CIMD URL");
+    } catch {
+      return loadError(
+        "CONFIG_SCHEMA_INVALID",
+        "Managed OAuth clientIdMetadataDocument must use HTTPS and contain a non-root path.",
+        filePath,
+      );
+    }
+  }
+  if (auth.owner !== undefined && (typeof auth.owner !== "string" || auth.owner.length === 0)) {
+    return loadError("CONFIG_SCHEMA_INVALID", "Managed OAuth owner must be a non-empty operator principal.", filePath);
+  }
+  for (const [field, values] of Object.entries(auth.sharing ?? {})) {
+    if (!Array.isArray(values) || !values.every((value) => typeof value === "string" && value.length > 0)) {
+      return loadError("CONFIG_SCHEMA_INVALID", `Managed OAuth sharing.${field} must contain non-empty strings.`, filePath);
+    }
+  }
+  if (auth.sharing?.applicationDids && !auth.sharing.applicationDids.includes(config.target.applicationDid)) {
+    return loadError("CONFIG_SCHEMA_INVALID", "Managed OAuth sharing must authorize the deployment Application DID.", filePath);
+  }
+  const safetyWindowMs = auth.refresh?.safetyWindowMs;
+  const jitterMaxMs = auth.refresh?.jitterMaxMs;
+  if (safetyWindowMs !== undefined && (!Number.isInteger(safetyWindowMs) || safetyWindowMs < 0 || safetyWindowMs > 300_000)) {
+    return loadError("CONFIG_SCHEMA_INVALID", "Managed OAuth refresh safetyWindowMs must be from 0 to 300000.", filePath);
+  }
+  if (jitterMaxMs !== undefined && (!Number.isInteger(jitterMaxMs) || jitterMaxMs < 0 || jitterMaxMs > 60_000)) {
+    return loadError("CONFIG_SCHEMA_INVALID", "Managed OAuth refresh jitterMaxMs must be from 0 to 60000.", filePath);
+  }
+  return null;
 }
 
 export async function computeArtifactDid(value: unknown): Promise<string> {

@@ -111,6 +111,15 @@ describe("compareAndSetState", () => {
     }
     expect(store.getWorkflow(TASK_ID)?.state).toBe("resolved");
   });
+
+  it("keeps policyUnavailable explicit, nonterminal, and recoverable", () => {
+    createDefault(store);
+
+    expect(store.compareAndSetState(TASK_ID, "created", "policyUnavailable")).toBe(true);
+    expect(store.getWorkflow(TASK_ID)?.state).toBe("policyUnavailable");
+    expect(store.listRecoverableWorkflows().map((record) => record.taskId)).toEqual([TASK_ID]);
+    expect(store.compareAndSetState(TASK_ID, "policyUnavailable", "created")).toBe(true);
+  });
 });
 
 describe("claimWorkflow (exclusive worker claims)", () => {

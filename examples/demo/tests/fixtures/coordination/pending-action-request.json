@@ -7,7 +7,7 @@
     "type": "AuthorizationRequirements",
     "actionEnvelopeHash": {
       "alg": "sha-256",
-      "value": "se9mhCubXMN3pv-0ndiCMzo184Nku-d7mKbhj5vb5K4"
+      "value": "KqHGl3FMEUh79nfbmxtEGr--_C0OYqm2lj1a0gH4WpE"
     },
     "result": "additionalApprovalsRequired",
     "verifier": {

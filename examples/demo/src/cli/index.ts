@@ -6,7 +6,7 @@ import { basename, dirname, join, parse, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { homedir } from "node:os";
 import { daemonStatus, defaultAdapterKeyPath, defaultConfigDir, defaultCredentialDir, startDaemon } from "../adapter/daemon.js";
-import { loadDeploymentConfigs } from "../adapter/config-loader.js";
+import { loadDeploymentConfigs, type ManagedOAuthConfiguration } from "../adapter/config-loader.js";
 import { FileCredentialProvider } from "../adapter/credential-provider.js";
 import { startCoordinationDaemon } from "../coordination/daemon.js";
 import type { CoordinationAuthOptions } from "../coordination/coordination-api-server.js";
@@ -21,6 +21,7 @@ import {
   type ResolveOAuthDeployment,
   fileOAuthOperatorService,
   resolveOAuthApplication,
+  validateManagedOAuthSession,
 } from "../adapter/oauth-operator.js";
 import {
   assertSignerTools,
@@ -198,8 +199,15 @@ export async function runCli(
       }
       const resolveDeployment = dependencies.resolveOAuthDeployment ?? resolveOAuthApplication;
       const selection = await resolveDeployment(options.configDir ?? defaultConfigDir(), options.applicationDid);
+      const staticCredentialProvider = new FileCredentialProvider(options.credentialDir ?? defaultCredentialDir());
       const service = dependencies.oauthOperator ?? fileOAuthOperatorService({
+        credentialDir: options.credentialDir ?? defaultCredentialDir(),
         onAuthorizationUrl: (url) => { io.stderr.write(`Open this URL to authorize the Credential Adapter:\n${url}\n`); },
+        resolveStaticClientSecret: async (handle) => {
+          const result = await staticCredentialProvider.getCredential(handle);
+          if (!result.ok) throw new Error(result.error.message);
+          return result.value;
+        },
       });
       const request = {
         ...selection,
@@ -305,7 +313,7 @@ export async function runCli(
   }
 }
 
-export async function dryRunActionFile(path: string, options: Pick<ParsedOptions, "configDir"> = {}) {
+export async function dryRunActionFile(path: string, options: Pick<ParsedOptions, "configDir"> & { now?: number } = {}) {
   const parseResult = parseActionPackage(JSON.parse(await readFile(path, "utf8")));
   if (!parseResult.ok) {
     return {
@@ -337,6 +345,7 @@ export async function dryRunActionFile(path: string, options: Pick<ParsedOptions
   const verification = await verifyActionPackage(actionPackage, {
     trustedSigners: loadedConfig.config.signerKeys,
     trustedApplicationDids: [loadedConfig.config.target.applicationDid],
+    now: options.now,
   });
   if (verification.status !== "verified") {
     return {
@@ -488,7 +497,11 @@ export async function validateConfig(name: string, options: Pick<ParsedOptions, 
   }
 
   const credentialProvider = new FileCredentialProvider(options.credentialDir ?? defaultCredentialDir());
-  const credentialChecks = [];
+  const credentialChecks: Array<{ handle: string; provider: string; ok: boolean; error?: string; state?: string }> = [];
+  const managedOAuth = config.config.executionTarget.type === "mcp.http" &&
+    config.config.executionTarget.auth?.type === "oauth2"
+    ? config.config.executionTarget.auth as ManagedOAuthConfiguration
+    : undefined;
   for (const binding of config.config.credentialBindings) {
     if (binding.provider !== "file") {
       credentialChecks.push({
@@ -496,6 +509,35 @@ export async function validateConfig(name: string, options: Pick<ParsedOptions, 
         provider: binding.provider,
         ok: false,
         error: "CREDENTIAL_PROVIDER_UNSUPPORTED",
+      });
+      continue;
+    }
+
+    if (managedOAuth) {
+      const validation = await validateManagedOAuthSession({
+        applicationDid: config.config.target.applicationDid,
+        resourceUrl: config.config.executionTarget.type === "mcp.http"
+          ? config.config.executionTarget.url
+          : "",
+        session: managedOAuth.session,
+        credentialHandle: binding.credentialHandle,
+        scopes: managedOAuth.scopes,
+        refreshScope: config.plugin.credentialRequirements
+          ?.map((requirement: { refreshScope?: string }) => requirement.refreshScope)
+          .find((scope: string | undefined) => typeof scope === "string" && scope.trim().length > 0)
+          ?.trim() ?? "offline_access",
+        issuer: managedOAuth.issuer,
+        client: managedOAuth.client,
+        owner: managedOAuth.owner,
+        sharing: managedOAuth.sharing,
+        refresh: managedOAuth.refresh,
+      }, options.credentialDir ?? defaultCredentialDir());
+      credentialChecks.push({
+        handle: binding.credentialHandle,
+        provider: "managed-oauth",
+        ok: validation.ok,
+        state: validation.state,
+        error: validation.error,
       });
       continue;
     }
@@ -652,7 +694,7 @@ interface ValidationResult {
   name: string;
   applicationDid: string;
   pluginDid: string;
-  credentials: Array<{ handle: string; provider: string; ok: boolean; error?: string }>;
+  credentials: Array<{ handle: string; provider: string; ok: boolean; error?: string; state?: string }>;
   signerKeys: Array<{ did: string; label?: string; ok: boolean; error?: string }>;
   bridgeConfigs?: Array<{ file: string; did?: string; ok: boolean; error?: string }>;
 }
@@ -668,7 +710,8 @@ function formatValidationResult(result: ValidationResult): string {
 
   lines.push("Credentials:");
   for (const c of result.credentials) {
-    lines.push(c.ok ? ok(`${c.handle} (found)`) : fail(`${c.handle} — ${c.error}`));
+    const detail = c.state ?? (c.ok ? "found" : c.error);
+    lines.push(c.ok ? ok(`${c.handle} (${detail})`) : fail(`${c.handle} — ${detail}`));
   }
   lines.push("");
 

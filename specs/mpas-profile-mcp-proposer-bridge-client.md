@@ -29,6 +29,8 @@ Verifier results, and service-to-service interfaces. This profile does not
 restate those lower-layer contracts or prescribe bridge storage and process
 topology beyond the client-visible guarantees defined here.
 
+The [MPAS MCP Signer Server Profile](./mpas-profile-mcp-signer.md) defines a separate four-tool MCP surface for Signers. The proposing client and this proposer bridge are not in the Signer's Approval submission path.
+
 Profile version 2 supports transparent disclosure only. It does not define
 opaque authorization metadata, approval-count progress, task subscriptions,
 or a multi-tenant bridge service.

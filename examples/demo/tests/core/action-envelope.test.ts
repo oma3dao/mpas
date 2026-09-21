@@ -5,6 +5,9 @@ import { describe, expect, it } from "vitest";
 import { validateActionEnvelope } from "../../src/core/verification.js";
 import type { ActionEnvelope, ActionPackage } from "../../src/core/types.js";
 
+/** Deterministic clock pinned inside the fixture validity window. */
+const FIXTURE_NOW = Date.parse("2026-06-05T19:00:00.000Z");
+
 const fixturesDir = fileURLToPath(new URL("../fixtures/core/", import.meta.url));
 
 async function readActionPackage(file: string): Promise<ActionPackage> {
@@ -17,7 +20,7 @@ describe("validateActionEnvelope", () => {
     async (fixtureFile) => {
       const actionPackage = await readActionPackage(fixtureFile);
 
-      expect(validateActionEnvelope(actionPackage.actionEnvelope)).toEqual({ ok: true });
+      expect(validateActionEnvelope(actionPackage.actionEnvelope, { now: FIXTURE_NOW })).toEqual({ ok: true });
     },
   );
 

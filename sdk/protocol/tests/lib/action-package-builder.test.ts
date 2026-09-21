@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { compactVerify, importJWK, type JWK } from "jose";
+import { canonicalize } from "json-canonicalize";
 import { describe, expect, it } from "vitest";
 import {
   ActionPackageBuilder,
@@ -142,6 +143,47 @@ describe("ActionPackageBuilder", () => {
       ...verifierRequirements,
       actionEnvelopeHash: { alg: "sha-256", value: "not-h1" },
     })).rejects.toThrow("do not bind to the Action being replaced");
+  });
+
+  it("builds the other Core-permitted proposer decision and keeps canonical JWS bytes", async () => {
+    const keyManager = await KeyManager.fromFile(join(fixturesDir, "keys", "proposer.json"));
+    const proposer = await readJson<KeyFixture>(join(fixturesDir, "keys", "proposer.json"));
+    const builder = new ActionPackageBuilder({
+      applicationDid: "did:web:github.example",
+      executionProfile: {
+        id: "did:web:profiles.oma3.org:mcp",
+        format: "mcp.toolsCall",
+      },
+      keyManager,
+      proposerDecision: "approve",
+    });
+
+    const actionPackage = await builder.buildFromToolCall("create_issue", {});
+    const approval = actionPackage.approvalBundle.approvals[0];
+    const publicKey = await importJWK(proposer.publicJwk, "EdDSA");
+    const verified = await compactVerify(approval.signature.value, publicKey);
+    const payloadText = Buffer.from(verified.payload).toString("utf8");
+
+    expect(approval.decision).toBe("approve");
+    expect(JSON.parse(payloadText)).toMatchObject({ decision: "approve", signerDid: proposer.did });
+    expect(payloadText).toBe(canonicalize(JSON.parse(payloadText)));
+  });
+
+  it("rejects builder validity windows over the Core 24-hour maximum", async () => {
+    const keyManager = await KeyManager.fromFile(join(fixturesDir, "keys", "proposer.json"));
+
+    expect(
+      () =>
+        new ActionPackageBuilder({
+          applicationDid: "did:web:github.example",
+          executionProfile: {
+            id: "did:web:profiles.oma3.org:mcp",
+            format: "mcp.toolsCall",
+          },
+          keyManager,
+          defaultExpirationMinutes: 24 * 60 + 1,
+        }),
+    ).toThrow("at most 1440 minutes");
   });
 
 });

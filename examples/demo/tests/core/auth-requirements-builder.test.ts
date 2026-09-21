@@ -7,6 +7,9 @@ import { evaluatePolicy, type PolicyConfig } from "../../src/core/policy-engine.
 import { computeJsonHash, verifyActionPackage, type TrustedSigner } from "../../src/core/verification.js";
 import type { ActionPackage, Did } from "../../src/core/types.js";
 
+/** Deterministic clock pinned inside the fixture validity window. */
+const FIXTURE_NOW = Date.parse("2026-06-05T19:00:00.000Z");
+
 const fixturesDir = fileURLToPath(new URL("../fixtures/", import.meta.url));
 
 interface KeyFixture {
@@ -59,6 +62,7 @@ describe("buildAuthorizationRequirements", () => {
     const verification = await verifyActionPackage(actionPackage, {
       trustedSigners: await trustedSigners(),
       trustedApplicationDids: ["did:web:github-mirror.example"],
+      now: FIXTURE_NOW,
     });
     if (verification.status !== "verified") {
       throw new Error("fixture should verify before policy evaluation");

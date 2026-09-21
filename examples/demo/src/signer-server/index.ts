@@ -17,19 +17,22 @@ import type { JWK } from "jose";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 
 import { KeyManager } from "@oma3/mpas/key-manager";
-import { CoordinationServiceClient } from "@oma3/mpas/coordination-service-client";
+import {
+  CoordinationResponseError,
+  CoordinationServiceClient,
+  CoordinationUnavailableError,
+  MpasAuthError,
+} from "@oma3/mpas/coordination-service-client";
+import { RoutingValidationError } from "@oma3/mpas/routing";
 import { ApprovalBuilder } from "@oma3/mpas/approval-builder";
 import { verifyJsonHash } from "@oma3/mpas/hash";
 import type {
   ActionEnvelope,
   Approval,
   ApprovalRequest,
-  CanonicalApprovalPayload,
   CoordinationApprovalResponse,
-  CoordinationPollResponse,
   Decision,
   Did,
-  HashObject,
   SignerReviewSet,
 } from "@oma3/mpas";
 
@@ -39,6 +42,8 @@ export interface SignerServerConfig {
   signerKey: KeySource;
   coordinationUrl: string;
   signerDid?: Did;
+  /** Trusted clock used for expiry checks. */
+  now?: () => number;
 }
 
 export type KeySource = string | JWK;
@@ -47,9 +52,27 @@ interface McpToolDefinition {
   name: string;
   description?: string;
   inputSchema: Record<string, unknown>;
+  outputSchema: Record<string, unknown>;
 }
 
 type ToolCallResult = CallToolResult;
+
+type SignerErrorCode =
+  | "SIGNER_INPUT_INVALID"
+  | "APPROVAL_REQUEST_NOT_FOUND"
+  | "REVIEW_SET_INTEGRITY_ERROR"
+  | "SIGNER_NOT_ELIGIBLE"
+  | "ACTION_EXPIRED"
+  | "COORDINATION_APPROVAL_REJECTED"
+  | "COORDINATION_RESPONSE_INVALID"
+  | "COORDINATION_UNAVAILABLE"
+  | "UNKNOWN_TOOL";
+
+interface SignerError {
+  code: SignerErrorCode;
+  message: string;
+  details?: Record<string, unknown>;
+}
 
 // ─── Signer Server ───────────────────────────────────────────────────────────
 
@@ -76,72 +99,146 @@ export class SignerServer {
         name: "mpas_list_pending",
         description: "List actions pending this maintainer's approval.",
         inputSchema: { type: "object", properties: {}, additionalProperties: false },
+        outputSchema: successOutputSchema(["approvalRequests"], {
+          approvalRequests: { type: "array", items: { type: "object" } },
+        }),
       },
       {
         name: "mpas_review_action",
         description: "Fetch and verify the review set for a pending action.",
         inputSchema: actionIdSchema(),
+        outputSchema: successOutputSchema(["approvalRequest", "reviewSet"], {
+          approvalRequest: { type: "object" },
+          reviewSet: { type: "object" },
+        }),
       },
       {
         name: "mpas_approve",
         description: "Approve a pending action.",
         inputSchema: actionIdSchema(),
+        outputSchema: decisionOutputSchema(),
       },
       {
         name: "mpas_reject",
         description: "Reject a pending action.",
         inputSchema: actionIdSchema(),
+        outputSchema: decisionOutputSchema(),
       },
     ];
   }
 
-  async handleToolCall(toolName: string, args: object): Promise<ToolCallResult> {
-    const keyManager = await this.keyManagerPromise;
+  async handleToolCall(toolName: string, args: unknown): Promise<ToolCallResult> {
+    if (!this.getToolDefinitions().some((tool) => tool.name === toolName)) {
+      return errorResult("UNKNOWN_TOOL", `Unknown signer tool: ${toolName}`);
+    }
 
-    switch (toolName) {
-      case "mpas_list_pending": {
-        const poll = await this.coordinationService.pollWork();
-        return textResult("Pending actions fetched.", { approvalRequests: poll.approvalRequests });
-      }
-      case "mpas_review_action": {
-        const actionId = requiredStringArg(args, "actionId");
-        const approvalRequest = await this.findApprovalRequest(actionId);
-        if (!approvalRequest) {
-          return errorResult("APPROVAL_REQUEST_NOT_FOUND", `No pending approval request found for action: ${actionId}`, { actionId });
-        }
-        const reviewSet = approvalRequest.signerReviewSet;
-        const integrityError = reviewSetIntegrityError(reviewSet);
-        if (integrityError) {
-          return errorResult("REVIEW_SET_INTEGRITY_ERROR", integrityError, { actionId });
-        }
-        return textResult("Review set fetched.", { approvalRequest, reviewSet });
-      }
-      case "mpas_approve":
-      case "mpas_reject": {
-        const actionId = requiredStringArg(args, "actionId");
-        const approvalRequest = await this.findApprovalRequest(actionId);
-        if (!approvalRequest) {
-          return errorResult("APPROVAL_REQUEST_NOT_FOUND", `No pending approval request found for action: ${actionId}`, { actionId });
-        }
-        const reviewSet = approvalRequest.signerReviewSet;
-        const integrityError = reviewSetIntegrityError(reviewSet);
-        if (integrityError) {
-          return errorResult("REVIEW_SET_INTEGRITY_ERROR", integrityError, { actionId });
-        }
+    const inputError = signerInputError(toolName, args);
+    if (inputError) return errorResult(inputError.code, inputError.message, inputError.details);
 
-        const approvalBuilder = new ApprovalBuilder({ signer: keyManager });
-        const approval = await approvalBuilder.buildApproval(
-          reviewSet.actionEnvelope,
-          toolName === "mpas_approve" ? "approve" : "reject",
-        );
-        await this.coordinationService.submitApproval({
-          actionEnvelopeHash: approvalRequest.actionRef.actionEnvelopeHash,
-          approval,
-        });
-        return textResult(toolName === "mpas_approve" ? "Approval submitted." : "Rejection submitted.", { approval });
+    try {
+      switch (toolName) {
+        case "mpas_list_pending": {
+          const poll = await this.coordinationService.pollWork();
+          return textResult("Pending actions fetched.", { approvalRequests: poll.approvalRequests });
+        }
+        case "mpas_review_action": {
+          const actionId = requiredStringArg(args, "actionId");
+          const approvalRequest = await this.findApprovalRequest(actionId);
+          if (!approvalRequest) {
+            return errorResult(
+              "APPROVAL_REQUEST_NOT_FOUND",
+              `No pending approval request found for action: ${actionId}`,
+              { actionId },
+            );
+          }
+          const keyManager = await this.keyManagerPromise;
+          const reviewError = reviewSetIntegrityError(
+            approvalRequest,
+            actionId,
+            approvalRequest.requestedDecision,
+            keyManager.did,
+            this.config.now?.() ?? Date.now(),
+          );
+          if (reviewError) return errorResult(reviewError.code, reviewError.message, reviewError.details);
+          return textResult("Review set fetched.", {
+            approvalRequest,
+            reviewSet: approvalRequest.signerReviewSet,
+          });
+        }
+        case "mpas_approve":
+        case "mpas_reject": {
+          const actionId = requiredStringArg(args, "actionId");
+          const approvalRequest = await this.findApprovalRequest(actionId);
+          if (!approvalRequest) {
+            return errorResult(
+              "APPROVAL_REQUEST_NOT_FOUND",
+              `No pending approval request found for action: ${actionId}`,
+              { actionId },
+            );
+          }
+          const keyManager = await this.keyManagerPromise;
+          const decision = toolName === "mpas_approve" ? "approve" : "reject";
+          const reviewError = reviewSetIntegrityError(
+            approvalRequest,
+            actionId,
+            decision,
+            keyManager.did,
+            this.config.now?.() ?? Date.now(),
+          );
+          if (reviewError) return errorResult(reviewError.code, reviewError.message, reviewError.details);
+
+          const approvalBuilder = new ApprovalBuilder({ signer: keyManager });
+          const approval = await approvalBuilder.buildApproval(approvalRequest.signerReviewSet.actionEnvelope, decision);
+          const coordinationResponse: CoordinationApprovalResponse = await this.coordinationService.submitApproval({
+            actionEnvelopeHash: approvalRequest.actionRef.actionEnvelopeHash,
+            approval,
+          });
+          if (!coordinationResponse.accepted) {
+            return errorResult(
+              "COORDINATION_APPROVAL_REJECTED",
+              "The Coordination Service did not accept the signed decision.",
+              { approval, coordinationResponse },
+            );
+          }
+          if (!sameActionReference(coordinationResponse, approvalRequest)) {
+            return errorResult(
+              "COORDINATION_RESPONSE_INVALID",
+              "The Coordination response does not reference the approved Action.",
+              { approval, coordinationResponse },
+            );
+          }
+          return textResult(
+            toolName === "mpas_approve" ? "Approval submitted." : "Rejection submitted.",
+            { approval, coordinationResponse },
+          );
+        }
+        default:
+          return errorResult("UNKNOWN_TOOL", `Unknown signer tool: ${toolName}`);
       }
-      default:
-        return errorResult("UNKNOWN_TOOL", `Unknown signer tool: ${toolName}`);
+    } catch (error) {
+      if (error instanceof MpasAuthError) {
+        return errorResult("COORDINATION_RESPONSE_INVALID", "Coordination authentication failed.");
+      }
+      if (error instanceof RoutingValidationError) {
+        // Field-specific review failures retain their profile codes through MCP.
+        // Listing never returns an incomplete object as successful pending data.
+        if (toolName !== "mpas_list_pending" && /^\$\.approvalRequests\[\d+\]\./.test(error.path)) {
+          if (error.path.includes(".signerReviewSet.") && error.path.endsWith(".expiresAt")) {
+            return errorResult("ACTION_EXPIRED", "The Action or review material has an invalid expiry.");
+          }
+          if (/\.(executionPayloadHash|actionEnvelopeHash|authorizationRequirements|requestedDecision)(\.|$)/.test(error.path)) {
+            return errorResult("REVIEW_SET_INTEGRITY_ERROR", "Review hash or approval metadata is invalid.");
+          }
+        }
+        return errorResult("COORDINATION_RESPONSE_INVALID", "Coordination returned malformed approval work.");
+      }
+      if (error instanceof CoordinationUnavailableError) {
+        return errorResult("COORDINATION_UNAVAILABLE", error.message);
+      }
+      if (error instanceof CoordinationResponseError) {
+        return errorResult("COORDINATION_RESPONSE_INVALID", error.message);
+      }
+      throw error;
     }
   }
 
@@ -155,7 +252,7 @@ export class SignerServer {
       tools: this.getToolDefinitions(),
     }));
     server.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest) =>
-      this.handleToolCall(request.params.name, toArgsObject(request.params.arguments)),
+      this.handleToolCall(request.params.name, request.params.arguments),
     );
 
     return server;
@@ -173,9 +270,20 @@ function actionIdSchema(): McpToolDefinition["inputSchema"] {
   return {
     type: "object",
     required: ["actionId"],
-    properties: { actionId: { type: "string" } },
+    properties: { actionId: { type: "string", minLength: 1 } },
     additionalProperties: false,
   };
+}
+
+function successOutputSchema(required: string[], properties: Record<string, unknown>): Record<string, unknown> {
+  return { type: "object", required, properties, additionalProperties: false };
+}
+
+function decisionOutputSchema(): Record<string, unknown> {
+  return successOutputSchema(["approval", "coordinationResponse"], {
+    approval: { type: "object" },
+    coordinationResponse: { type: "object" },
+  });
 }
 
 function loadKeyManager(signerKey: KeySource): Promise<KeyManager> {
@@ -185,32 +293,133 @@ function loadKeyManager(signerKey: KeySource): Promise<KeyManager> {
   return Promise.resolve(KeyManager.fromJwk(signerKey as JWK));
 }
 
-function reviewSetIntegrityError(reviewSet: SignerReviewSet): string | undefined {
+function reviewSetIntegrityError(
+  approvalRequest: ApprovalRequest,
+  actionId: string,
+  decision: Decision | undefined,
+  signerDid: Did,
+  now: number,
+): SignerError | undefined {
+  const reviewSet: SignerReviewSet = approvalRequest.signerReviewSet;
+  if (
+    approvalRequest.actionRef.actionId.value !== actionId ||
+    reviewSet.actionEnvelope.actionId.value !== actionId ||
+    reviewSet.actionEnvelope.actionId.scope !== approvalRequest.actionRef.actionId.scope
+  ) {
+    return signerError("REVIEW_SET_INTEGRITY_ERROR", "Action IDs do not match across the request and review set.", actionId);
+  }
+  if (!verifyJsonHash(reviewSet.actionEnvelope, approvalRequest.actionRef.actionEnvelopeHash)) {
+    return signerError("REVIEW_SET_INTEGRITY_ERROR", "Action Envelope hash does not match the Action reference.", actionId);
+  }
   if (!verifyJsonHash(reviewSet.executionPayload, reviewSet.actionEnvelope.executionPayloadHash)) {
-    return "Execution Payload hash does not match the Action Envelope.";
+    return signerError("REVIEW_SET_INTEGRITY_ERROR", "Execution Payload hash does not match the Action Envelope.", actionId);
+  }
+  const authorizationRequirements = reviewSet.authorizationRequirements;
+  if (
+    !authorizationRequirements ||
+    authorizationRequirements.result !== "additionalApprovalsRequired" ||
+    !verifyJsonHash(reviewSet.actionEnvelope, authorizationRequirements.actionEnvelopeHash)
+  ) {
+    return signerError(
+      "REVIEW_SET_INTEGRITY_ERROR",
+      "Authorization Requirements do not bind a usable approval path to the Action Envelope.",
+      actionId,
+    );
+  }
+  if (
+    expiredAt(reviewSet.actionEnvelope.expiresAt, now, true) ||
+    expiredAt(reviewSet.expiresAt, now) ||
+    expiredAt(authorizationRequirements.expiresAt, now)
+  ) {
+    return signerError("ACTION_EXPIRED", "The Action or review material has expired.", actionId);
+  }
+  if (decision !== "approve" && decision !== "reject") {
+    return signerError("REVIEW_SET_INTEGRITY_ERROR", "The requested decision must be approve or reject.", actionId);
+  }
+  if (approvalRequest.requestedDecision && approvalRequest.requestedDecision !== decision) {
+    return signerError("REVIEW_SET_INTEGRITY_ERROR", "The tool decision does not match the requested decision.", actionId);
+  }
+  const requirements = authorizationRequirements.approvalRequirements;
+  const thresholdPaths = [...(requirements.anyOf ?? []), ...(requirements.allOf ?? [])];
+  const matchesThreshold = thresholdPaths.some(
+    (requirement) =>
+      requirement.eligibleSigners.includes(signerDid) &&
+      (requirement.decision ?? "approve") === decision,
+  );
+  const matchesOverride = (requirements.overrideSigners ?? []).some(
+    (override) => override.signer === signerDid && override.permissions.includes(decision),
+  );
+  if (!matchesThreshold && !matchesOverride) {
+    return signerError("SIGNER_NOT_ELIGIBLE", "The configured Signer is not eligible for the requested decision.", actionId);
   }
   return undefined;
 }
 
-function requiredStringArg(args: object, name: string): string {
-  const value = (args as Record<string, unknown>)[name];
-  if (typeof value !== "string" || value.length === 0) {
-    throw new Error(`Missing required argument: ${name}`);
-  }
-  return value;
+function signerError(code: SignerErrorCode, message: string, actionId: string): SignerError {
+  return { code, message, details: { actionId } };
 }
 
-function toArgsObject(args: unknown): object {
-  if (args && typeof args === "object" && !Array.isArray(args)) return args;
-  return {};
+function expiredAt(value: string | undefined, now: number, required = false): boolean {
+  if (value === undefined) return required;
+  const parsed = Date.parse(value);
+  return !Number.isFinite(parsed) || parsed <= now;
+}
+
+function sameActionReference(
+  response: CoordinationApprovalResponse,
+  request: ApprovalRequest,
+): boolean {
+  return (
+    response.actionRef.actionId.value === request.actionRef.actionId.value &&
+    response.actionRef.actionId.scope === request.actionRef.actionId.scope &&
+    response.actionRef.actionEnvelopeHash.alg === request.actionRef.actionEnvelopeHash.alg &&
+    response.actionRef.actionEnvelopeHash.value === request.actionRef.actionEnvelopeHash.value
+  );
+}
+
+function signerInputError(toolName: string, args: unknown): SignerError | undefined {
+  if (!args || typeof args !== "object" || Array.isArray(args)) {
+    return { code: "SIGNER_INPUT_INVALID", message: "Signer tool arguments must be a JSON object." };
+  }
+  const keys = Object.keys(args);
+  if (toolName === "mpas_list_pending") {
+    return keys.length === 0
+      ? undefined
+      : { code: "SIGNER_INPUT_INVALID", message: "mpas_list_pending accepts only an empty object." };
+  }
+  if (
+    keys.length !== 1 ||
+    keys[0] !== "actionId" ||
+    typeof (args as Record<string, unknown>).actionId !== "string" ||
+    (args as Record<string, unknown>).actionId === ""
+  ) {
+    return {
+      code: "SIGNER_INPUT_INVALID",
+      message: `${toolName} requires exactly one non-empty actionId string.`,
+    };
+  }
+  return undefined;
+}
+
+function requiredStringArg(args: unknown, name: string): string {
+  const value = (args as Record<string, unknown>)[name];
+  return value as string;
 }
 
 function textResult(message: string, structuredContent: Record<string, unknown>): ToolCallResult {
   return { content: [{ type: "text", text: message }], structuredContent };
 }
 
-function errorResult(code: string, message: string, structuredContent?: Record<string, unknown>): ToolCallResult {
-  return { isError: true, content: [{ type: "text", text: `${code}: ${message}` }], structuredContent };
+function errorResult(
+  code: SignerErrorCode,
+  message: string,
+  details?: Record<string, unknown>,
+): ToolCallResult {
+  return {
+    isError: true,
+    content: [{ type: "text", text: `${code}: ${message}` }],
+    structuredContent: { code, message, ...(details ? { details } : {}) },
+  };
 }
 
 // ─── CLI Entry Point ─────────────────────────────────────────────────────────

@@ -2,6 +2,7 @@ import http from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
 import { prepareMcpHttp, type McpHttpTarget } from "../../src/adapter/dispatch/mcp-http.js";
 import type { OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
+import { startOAuthProtectedMcpFixture } from "../fixtures/oauth-protected-mcp.js";
 
 let server: http.Server | undefined;
 let initializedProtocolVersion: string | undefined;
@@ -80,6 +81,28 @@ async function startMcpServer(toolDelayMs = 0): Promise<{ url: string }> {
 }
 
 describe("prepareMcpHttp", () => {
+  it.each([200, 401, 403, 307, 308] as const)("transmits static-credential calls once on HTTP %s without exposing upstream errors", async (status) => {
+    const fixture = await startOAuthProtectedMcpFixture({ toolStatus: status, toolErrorBody: "STATIC_SECRET_BODY" });
+    const prepared = await prepareMcpHttp({ type: "mcp.http", url: fixture.resourceUrl,
+      headers: { authorization: "Bearer {{credential:test}}" }, timeoutMs: 1000 }, "fixture-access-token", "2024-11-05");
+    expect(prepared.ok).toBe(true);
+    try {
+      if (!prepared.ok) throw new Error("Static credential initialization failed");
+      const result = await prepared.session.transmit("fixture_tool", { exact: "payload" });
+      expect(result.ok).toBe(status === 200);
+      if (!result.ok) expect(result.error.code).toBe(status === 401 ? "OAUTH_AUTHENTICATION_FAILED" : status === 403 ? "OAUTH_SCOPE_DEMAND" : "TRANSPORT_ERROR");
+      expect(JSON.stringify(result)).not.toMatch(/STATIC_SECRET_BODY|fixture-access-token|scope=/);
+      expect(fixture.requests.filter(r => r.rpcMethod === "tools/call")).toHaveLength(1);
+      expect(fixture.toolEffects).toEqual([{ name: "fixture_tool", arguments: { exact: "payload" } }]);
+      expect(fixture.requests.filter(r => r.path !== "/mcp")).toEqual([]);
+      expect(fixture.tokenRequests).toEqual([]);
+      console.log(JSON.stringify({ case: "static credential", status, realRequests: 1, targetEffects: 1, authRequests: 0 }));
+    } finally {
+      if (prepared.ok) await prepared.session.close();
+      await fixture.close();
+    }
+  });
+
   it("uses a managed OAuth provider without a static credential", async () => {
     const { url } = await startMcpServer();
     const provider: OAuthClientProvider = {

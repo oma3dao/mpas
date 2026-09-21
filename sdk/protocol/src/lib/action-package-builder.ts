@@ -6,7 +6,9 @@ import type {
   AdditionalApprovalsAuthorizationRequirements,
   Approval,
   CanonicalApprovalPayload,
+  Decision,
   Did,
+  Hash,
   ExecutionPayload,
 } from "../types/mpas.js";
 import { computeJsonHash } from "../utils/hash.js";
@@ -28,26 +30,41 @@ export interface ActionPackageBuilderConfig {
   signer?: MpasJwsSigner;
   /** Default Action validity window. Defaults to 30 minutes. */
   defaultExpirationMinutes?: number;
+  /** Initial Proposer decision. Core permits `propose` and `approve`; defaults to `propose`. */
+  proposerDecision?: Extract<Decision, "propose" | "approve">;
+  /** Profile-defined payload hashing. Defaults to JSON/JCS/SHA-256 for compatibility. */
+  hashPayload?: (payload: ExecutionPayload) => Hash;
 }
 
 /** Builds complete, Proposer-signed Action Packages from MCP tool calls. */
 export class ActionPackageBuilder {
   private readonly signer: MpasJwsSigner;
   private readonly defaultExpirationMinutes: number;
+  private readonly proposerDecision: Extract<Decision, "propose" | "approve">;
 
   constructor(private readonly config: ActionPackageBuilderConfig) {
     if (Boolean(config.signer) === Boolean(config.keyManager)) throw new Error("Supply exactly one signer or keyManager.");
     this.signer = config.signer ?? config.keyManager!;
     validateSignerIdentity(this.signer);
     this.defaultExpirationMinutes = config.defaultExpirationMinutes ?? 30;
+    if (this.defaultExpirationMinutes <= 0 || this.defaultExpirationMinutes > 24 * 60) {
+      throw new RangeError("defaultExpirationMinutes must be greater than zero and at most 1440 minutes.");
+    }
+    this.proposerDecision = config.proposerDecision ?? "propose";
   }
 
   /** Builds and signs one complete Action Package for a tool name and arguments object. */
   async buildFromToolCall(toolName: string, args: object): Promise<ActionPackage> {
-    const payload = this.createPayload(toolName, args);
+    return this.buildFromPayload(this.createPayload(toolName, args));
+
+
+
+  }
+
+  /** Builds and signs one complete Action Package from a profile-native payload. */
+  async buildFromPayload(payload: ExecutionPayload): Promise<ActionPackage> {
     const envelope = this.createEnvelope(payload);
     const approval = await this.createProposerApproval(envelope);
-
     return this.createPackage(payload, envelope, approval);
   }
 
@@ -139,7 +156,7 @@ export class ActionPackageBuilder {
         applicationDid: this.config.applicationDid,
       },
       executionProfile: this.config.executionProfile,
-      executionPayloadHash: computeJsonHash(payload),
+      executionPayloadHash: (this.config.hashPayload ?? computeJsonHash)(payload),
       actionId: {
         value: `urn:uuid:${randomUUID()}`,
       },
@@ -153,7 +170,7 @@ export class ActionPackageBuilder {
     const expiresAt = new Date(now.getTime() + this.defaultExpirationMinutes * 60 * 1000);
     return {
       ...structuredClone(prior),
-      executionPayloadHash: computeJsonHash(payload),
+      executionPayloadHash: (this.config.hashPayload ?? computeJsonHash)(payload),
       actionId: { value: `urn:uuid:${randomUUID()}` },
       createdAt: now.toISOString(),
       expiresAt: expiresAt.toISOString(),
@@ -166,7 +183,7 @@ export class ActionPackageBuilder {
     const approvalPayload: CanonicalApprovalPayload = {
       type: "ApprovalPayload",
       actionEnvelopeHash,
-      decision: "propose",
+      decision: this.proposerDecision,
       signerDid: this.signer.did,
       createdAt,
     };
@@ -176,7 +193,7 @@ export class ActionPackageBuilder {
       version: "1",
       type: "Approval",
       actionEnvelopeHash,
-      decision: "propose",
+      decision: this.proposerDecision,
       signature: {
         format: "jws",
         value: signature,

@@ -413,9 +413,9 @@ export interface CoordinationApprovalResponse {
   version: MpasVersion;
   type: "CoordinationApprovalSubmissionResponse";
   accepted: boolean;
-  actionRef?: ActionReference;
-  state?: CoordinationState;
-  createdAt?: Timestamp;
+  actionRef: ActionReference;
+  state: CoordinationState;
+  createdAt: Timestamp;
 }
 
 export interface CoordinationCancelResponse {
@@ -432,11 +432,12 @@ export interface CoordinationCancelResponse {
 
 export interface CredentialRequirement {
   type: string;
-  requiredCapabilities?: string[];
+  /** Abstract, non-normative authority metadata for review only. */
+  expectedAuthority?: string[];
   /**
    * Provider-specific OAuth refresh scope. Defaults to `offline_access` when
    * omitted. This is not a permission scope and MUST NOT be copied from
-   * `requiredCapabilities`.
+   * `expectedAuthority`.
    */
   refreshScope?: string;
   description?: string;

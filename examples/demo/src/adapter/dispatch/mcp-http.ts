@@ -2,11 +2,11 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { TransportSendOptions } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
-import type { OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
+import { extractWWWAuthenticateParams, type OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
 import { createHardenedFetch } from "../hardened-fetch.js";
 import { classifyOAuthPrepareError, oauthLoginCommand } from "../oauth-operator.js";
 import { withInitializeProtocolVersion } from "./mcp-protocol-version.js";
-import { errorMessage, McpClientSession, type DispatchPrepareResult } from "./mcp-stdio.js";
+import { errorMessage, McpClientSession, McpDispatchBoundaryError, type DispatchPrepareResult } from "./mcp-stdio.js";
 
 export interface McpHttpTarget {
   type: "mcp.http";
@@ -92,7 +92,31 @@ class VersionedStreamableHttpClientTransport extends StreamableHTTPClientTranspo
     options: ConstructorParameters<typeof StreamableHTTPClientTransport>[1],
     private readonly initializationProtocolVersion: string,
   ) {
-    super(url, options);
+    const fetchRequest = options?.fetch ?? globalThis.fetch;
+    super(url, {
+      ...options,
+      fetch: async (input, init) => {
+        // Inspect this serialized request, not shared session state: concurrent
+        // calls must not let one request enable recovery for another.
+        const message: unknown = init?.method === "POST" && typeof init.body === "string"
+          ? JSON.parse(init.body) : undefined;
+        const messages = Array.isArray(message) ? message : [message];
+        const isToolCall = messages.some((item: unknown) =>
+          typeof item === "object" && item !== null && "method" in item && item.method === "tools/call",
+        );
+        const response = await fetchRequest(input, isToolCall ? { ...init, redirect: "manual" } : init);
+        if (isToolCall && !response.ok) {
+          const code = response.status === 401 ? "OAUTH_AUTHENTICATION_FAILED"
+            : response.status === 403 && extractWWWAuthenticateParams(response).error === "insufficient_scope"
+              ? "OAUTH_SCOPE_DEMAND" : "TRANSPORT_ERROR";
+          // Stop before SDK session-header/auth handling. Never consume or echo
+          // hostile bodies/challenges, refresh credentials, or follow redirects.
+          await response.body?.cancel().catch(() => {});
+          throw new McpDispatchBoundaryError(code);
+        }
+        return response;
+      },
+    });
   }
 
   override send(message: JSONRPCMessage, options?: TransportSendOptions): Promise<void> {

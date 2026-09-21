@@ -96,6 +96,8 @@ The core MPAS specification remains authoritative for:
 
 This HTTP profile adds a concrete API contract so independently implemented Proposers, Signers, Action Relays, Coordination Services, Verifiers, and Applications can interoperate.
 
+The [MPAS MCP Signer Server Profile](./mpas-profile-mcp-signer.md) defines a separate MCP tool transport for Signers that poll and submit Approvals through the Coordination Service interfaces in this profile. It does not change the Core Approval objects or Coordination wire formats defined here.
+
 ---
 
 ## 4. Common HTTP Rules

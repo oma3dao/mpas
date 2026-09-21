@@ -8,7 +8,7 @@
   "plugin": {
     "pluginDid": "did:web:plugins.oma3.org:github-mirror-plugin",
     "pluginVersion": "0.1.0",
-    "artifactDid": "did:artifact:bafkreibz3gttsq5iq7tynp5yldhroq3sybhtiogeuarody5wlstl3umpxy",
+    "artifactDid": "did:artifact:bafkreiboiym5t7serxxvynew6qzrjjo65lqiqv6jnjunkwmyp3hrvgh7qq",
     "path": "../plugins/github-mirror-plugin.json"
   },
   "credentialBindings": [

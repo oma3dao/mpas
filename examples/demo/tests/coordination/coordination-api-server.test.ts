@@ -4,9 +4,13 @@ import { CompactSign, importJWK, type JWK } from "jose";
 import { canonicalize } from "json-canonicalize";
 import { afterEach, describe, expect, it } from "vitest";
 import { createCoordinationApiServer } from "../../src/coordination/coordination-api-server.js";
+import { CoordinationStore } from "../../src/coordination/store.js";
 import type { CoordinationActionRequest } from "../../src/coordination/types.js";
 import type { ActionPackage, Approval, Decision, Did, Hash } from "../../src/core/types.js";
 import { computeJsonHash } from "../../src/core/verification.js";
+
+/** Deterministic clock pinned inside the fixture validity window. */
+const FIXTURE_NOW = Date.parse("2026-06-05T19:00:00.000Z");
 
 interface FixtureKey {
   did: Did;
@@ -132,7 +136,7 @@ describe("coordination HTTP endpoint", () => {
     const app = createApp();
     const request = await coordinationActionRequest();
     const conflictingPackage = structuredClone(request.actionPackage);
-    conflictingPackage.actionEnvelope.expiresAt = "2030-01-02T00:00:00.000Z";
+    conflictingPackage.actionEnvelope.expiresAt = "2026-06-06T18:00:00.000Z";
     const conflictingHash = computeJsonHash(conflictingPackage.actionEnvelope);
     conflictingPackage.approvalBundle.actionEnvelopeHash = conflictingHash;
 
@@ -192,7 +196,7 @@ describe("coordination HTTP endpoint", () => {
 });
 
 function createApp() {
-  const app = createCoordinationApiServer();
+  const app = createCoordinationApiServer({ store: new CoordinationStore({ now: FIXTURE_NOW }) });
   apps.add(app);
   return app;
 }

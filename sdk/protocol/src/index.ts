@@ -20,6 +20,7 @@ export * from "./lib/rfc9421.js";
 export * from "./lib/routing.js";
 
 // Protocol primitives — Verifier side
+export * from "./lib/dispatch-ledger.js";
 export * from "./lib/verification.js";
 export * from "./lib/mcp-tasks-extension.js";
 export * from "./lib/mcp-tasks-server.js";
@@ -68,6 +69,12 @@ export {
   type PayloadValidationResult,
 } from "./lib/plugin-loader.js";
 export * from "./lib/receipt-builder.js";
+export {
+  verifyExecutionReceipt as verifyReceiptCanonical,
+  type ReceiptVerificationOptions,
+  type ReceiptVerificationErrorCode,
+  type ReceiptVerificationResult,
+} from "./lib/receipt-verifier.js";
 export * from "./lib/auth-requirements-builder.js";
 export * from "./lib/did-jwk.js";
 export * from "./lib/trace.js";

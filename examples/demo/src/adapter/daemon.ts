@@ -49,6 +49,8 @@ export interface DaemonOptions {
   host?: string;
   port?: number;
   maxEnvelopeValidityMs?: number;
+  /** Deterministic clock for testing. Defaults to Date.now(). */
+  now?: number;
   journalPath?: string;
   tracePath?: string;
   /** Hosted Action Relay used for outbound Verifier delivery polling. */
@@ -126,97 +128,111 @@ export async function startDaemon(options: DaemonOptions = {}): Promise<StartedD
     throw new Error(loaded.error.message);
   }
 
-  const adapterKey = await loadAdapterKey(options.adapterKeyPath ?? defaultAdapterKeyPath());
-  const ledger = new DispatchLedger(new FileDispatchJournal(options.journalPath ?? defaultJournalPath()));
-  const traceWriter = options.tracePath ? new TraceWriter(options.tracePath) : undefined;
-  const traceLogger = new TraceLogger("adapter", traceWriter);
-  const app = createAdapterApiServer({
-    configsByApplicationDid: loaded.configsByApplicationDid,
-    credentialProvider: new FileCredentialProvider(options.credentialDir ?? defaultCredentialDir()),
-    adapterDid: adapterKey.did,
-    adapterSigner: KeyManager.fromJwk(adapterKey.privateJwk, { did: adapterKey.did }),
-    maxEnvelopeValidityMs: options.maxEnvelopeValidityMs,
-    ledger,
-    traceLogger,
-  });
-
+  const ledger = new DispatchLedger(
+    new FileDispatchJournal(options.journalPath ?? defaultJournalPath()),
+    options.now !== undefined ? () => options.now! : undefined,
+  );
+  let appToClose: FastifyInstance | undefined;
   let verifierRelayWorker: VerifierRelayWorker | undefined;
-  const verifierRelayUrl = options.verifierRelayUrl ?? options.verifierCoordinationUrl;
-  if (verifierRelayUrl) {
-    const keyManager = KeyManager.fromJwk(adapterKey.privateJwk, { did: adapterKey.did });
-    if (keyManager.did !== adapterKey.did) {
-      throw new Error(
-        `Adapter key DID ${adapterKey.did} does not match the DID derived from its private key ${keyManager.did}.`,
-      );
-    }
-    const relayClient = options.verifierRelayClient ?? options.verifierCoordinationClient ?? new ActionRelayClient({
-      url: verifierRelayUrl,
-      signer: keyManager,
-      webSocketFactory: ({ url, headers }) => new WebSocket(url, {
-        headers: { Authorization: headers.Authorization },
-      }) as unknown as ActionRelayWebSocket,
+  try {
+    const adapterKey = await loadAdapterKey(options.adapterKeyPath ?? defaultAdapterKeyPath());
+    // Host startup occurs after the previous daemon's workers have stopped.
+    // Merely opening a second store connection never performs this transition.
+    ledger.recoverExecuting();
+    const traceWriter = options.tracePath ? new TraceWriter(options.tracePath) : undefined;
+    const traceLogger = new TraceLogger("adapter", traceWriter);
+    const app = createAdapterApiServer({
+      configsByApplicationDid: loaded.configsByApplicationDid,
+      credentialProvider: new FileCredentialProvider(options.credentialDir ?? defaultCredentialDir()),
+      adapterDid: adapterKey.did,
+      adapterSigner: KeyManager.fromJwk(adapterKey.privateJwk, { did: adapterKey.did }),
+      maxEnvelopeValidityMs: options.maxEnvelopeValidityMs,
+      now: options.now,
+      ledger,
+      traceLogger,
     });
-    const stateStore = options.verifierRelayStateStore ?? options.verifierCoordinationStateStore ??
-      new FileVerifierRelayStateStore(
-        options.verifierRelayStatePath ?? options.verifierCoordinationStatePath ?? defaultVerifierRelayStatePath(),
-      );
-    verifierRelayWorker = await VerifierRelayWorker.create({
-      relayUrl: verifierRelayUrl,
-      verifierDid: adapterKey.did,
-      client: relayClient,
-      stateStore,
-      processAction: async (envelope) => {
-        const actionPackage = envelope.payload.actionPackage;
-        const actionId = actionPackage.actionEnvelope.actionId;
-        const envelopeHash = computeJsonHash(actionPackage.actionEnvelope).value;
-        const recovery = ledger.recoveryFor(actionId, envelopeHash);
-        if (recovery?.response) return recovery.response;
-        if (recovery?.resolution === "indeterminate") {
-          const response = await buildIndeterminateRecoveryResponse(actionPackage, {
-            adapterDid: adapterKey.did,
-            adapterSigner: KeyManager.fromJwk(adapterKey.privateJwk, { did: adapterKey.did }),
-          });
-          ledger.resolve(actionId, "indeterminate", response);
-          return response;
-        }
+    appToClose = app;
+    app.addHook("onClose", async () => {
+      try { await verifierRelayWorker?.stop(); }
+      finally { ledger.close(); }
+    });
+    const verifierRelayUrl = options.verifierRelayUrl ?? options.verifierCoordinationUrl;
+    if (verifierRelayUrl) {
+      const keyManager = KeyManager.fromJwk(adapterKey.privateJwk, { did: adapterKey.did });
+      if (keyManager.did !== adapterKey.did) {
+        throw new Error(
+          `Adapter key DID ${adapterKey.did} does not match the DID derived from its private key ${keyManager.did}.`,
+        );
+      }
+      const relayClient = options.verifierRelayClient ?? options.verifierCoordinationClient ?? new ActionRelayClient({
+        url: verifierRelayUrl,
+        signer: keyManager,
+        webSocketFactory: ({ url, headers }) => new WebSocket(url, {
+          headers: { Authorization: headers.Authorization },
+        }) as unknown as ActionRelayWebSocket,
+      });
+      const stateStore = options.verifierRelayStateStore ?? options.verifierCoordinationStateStore ??
+        new FileVerifierRelayStateStore(
+          options.verifierRelayStatePath ?? options.verifierCoordinationStatePath ?? defaultVerifierRelayStatePath(),
+        );
+      verifierRelayWorker = await VerifierRelayWorker.create({
+        relayUrl: verifierRelayUrl,
+        verifierDid: adapterKey.did,
+        client: relayClient,
+        stateStore,
+        processAction: async (envelope) => {
+          const actionPackage = envelope.payload.actionPackage;
+          const actionId = actionPackage.actionEnvelope.actionId;
+          const envelopeHash = computeJsonHash(actionPackage.actionEnvelope);
+          const recovery = ledger.recoveryFor(actionId, envelopeHash);
+          if (recovery?.response) return recovery.response;
+          if (recovery?.resolution === "indeterminate") {
+            const response = await buildIndeterminateRecoveryResponse(actionPackage, {
+              adapterDid: adapterKey.did,
+              adapterSigner: KeyManager.fromJwk(adapterKey.privateJwk, { did: adapterKey.did }),
+            });
+            const winner = ledger.resolve(actionId, "indeterminate", response);
+            if (!winner?.response) throw new Error("Recovered dispatch response was not persisted.");
+            return winner.response;
+          }
 
-        const response = await app.inject({
-          method: "POST",
-          url: "/mpas/v1/verifier/action",
-          headers: { "content-type": "application/mpas+json" },
-          payload: JSON.stringify(envelope),
-        });
-        if (response.statusCode < 200 || response.statusCode >= 300) {
-          if (
-            response.statusCode === 408 ||
-            response.statusCode === 425 ||
-            response.statusCode === 429 ||
-            response.statusCode >= 500
-          ) {
-            throw new ActionRelayUnavailableError(
-              `Credential Adapter temporarily failed a polled Action envelope with HTTP ${response.statusCode}.`,
-            );
-          }
-          throw new ActionRelayResponseError(
-            `Credential Adapter rejected a polled Action envelope with HTTP ${response.statusCode}.`,
-          );
-        }
-        try {
-          const parsed = parseActionResponse(JSON.parse(response.body) as unknown);
-          if (parsed.result === "pending") {
-            throw new ActionRelayUnavailableError(
-              "Credential Adapter is still processing the polled Action envelope.",
-            );
-          }
-          if (
-            parsed.result === "rejected" &&
-            (parsed.error?.code === "REPLAY_DETECTED" || parsed.error?.code === "ACTION_ID_HASH_MISMATCH")
-          ) {
+          const response = await app.inject({
+            method: "POST",
+            url: "/mpas/v1/verifier/action",
+            headers: { "content-type": "application/mpas+json" },
+            payload: JSON.stringify(envelope),
+          });
+          if (response.statusCode < 200 || response.statusCode >= 300) {
+            if (
+              response.statusCode === 408 ||
+              response.statusCode === 425 ||
+              response.statusCode === 429 ||
+              response.statusCode >= 500
+            ) {
+              throw new ActionRelayUnavailableError(
+                `Credential Adapter temporarily failed a polled Action envelope with HTTP ${response.statusCode}.`,
+              );
+            }
             throw new ActionRelayResponseError(
-              `Credential Adapter cannot recover the original response (${parsed.error.code}).`,
+              `Credential Adapter rejected a polled Action envelope with HTTP ${response.statusCode}.`,
             );
           }
-          return parsed;
+          try {
+            const parsed = parseActionResponse(JSON.parse(response.body) as unknown);
+            if (parsed.result === "pending") {
+              throw new ActionRelayUnavailableError(
+                "Credential Adapter is still processing the polled Action envelope.",
+              );
+            }
+            if (
+              parsed.result === "rejected" &&
+              (parsed.error?.code === "REPLAY_DETECTED" || parsed.error?.code === "ACTION_ID_HASH_MISMATCH")
+            ) {
+              throw new ActionRelayResponseError(
+                `Credential Adapter cannot recover the original response (${parsed.error.code}).`,
+              );
+            }
+            return parsed;
         } catch (error) {
           if (error instanceof ActionRelayResponseError || error instanceof ActionRelayUnavailableError) {
             throw error;
@@ -231,7 +247,6 @@ export async function startDaemon(options: DaemonOptions = {}): Promise<StartedD
         : {}),
       onEvent: options.verifierRelayEventSink ?? options.verifierCoordinationEventSink ?? logVerifierRelayEvent,
     });
-    app.addHook("onClose", async () => verifierRelayWorker?.stop());
   }
 
   const address = await app.listen({
@@ -248,6 +263,11 @@ export async function startDaemon(options: DaemonOptions = {}): Promise<StartedD
       ? { verifierRelayWorker, verifierCoordinationWorker: verifierRelayWorker }
       : {}),
   };
+  } catch (error) {
+    try { await appToClose?.close(); }
+    finally { ledger.close(); }
+    throw error;
+  }
 }
 
 export async function daemonStatus(options: Pick<DaemonOptions, "configDir" | "host" | "port"> = {}) {

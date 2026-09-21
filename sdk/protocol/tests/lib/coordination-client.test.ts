@@ -169,7 +169,14 @@ describe("Coordination Service clients", () => {
       } else if (endpointPath === "/mpas/v1/coordination/poll") {
         sendJson(response, pollResponse);
       } else if (endpointPath === "/mpas/v1/coordination/approval") {
-        sendJson(response, { version: "1", type: "CoordinationApprovalSubmissionResponse", accepted: true });
+        sendJson(response, {
+          version: "1",
+          type: "CoordinationApprovalSubmissionResponse",
+          accepted: true,
+          actionRef: pollResponse.approvalRequests[0].actionRef,
+          state: "awaitingApprovals",
+          createdAt: "2026-06-05T18:20:00.000Z",
+        });
       } else if (endpointPath === "/mpas/v1/coordination/workflow-cancel") {
         sendJson(response, {
           version: "1",
@@ -295,6 +302,176 @@ describe("Coordination Service clients", () => {
       const client = new CoordinationClient({ url: server.url });
       await expect(client.poll("did:web:agents.example:x")).rejects.toMatchObject({
         name: "CoordinationResponseInvalid",
+      });
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("preserves a complete negative Approval response instead of treating it as success", async () => {
+    const actionPackage = await readJson<ActionPackage>(
+      join(fixturesDir, "action-packages", "valid-create-issue-package.json"),
+    );
+    const approval = actionPackage.approvalBundle.approvals[0] as Approval;
+    const responseBody = {
+      version: "1",
+      type: "CoordinationApprovalSubmissionResponse",
+      accepted: false,
+      actionRef: {
+        version: "1",
+        type: "ActionRef",
+        actionId: actionPackage.actionEnvelope.actionId,
+        actionEnvelopeHash: actionPackage.approvalBundle.actionEnvelopeHash,
+      },
+      state: "awaitingApprovals",
+      createdAt: "2026-06-05T18:20:00.000Z",
+    } as const;
+    const server = await startMockCoordination((_request, response) => sendJson(response, responseBody));
+
+    try {
+      const client = new CoordinationServiceClient({
+        url: server.url,
+        participantDid: actionPackage.actionEnvelope.proposer.did,
+      });
+      await expect(client.submitApproval({
+        actionEnvelopeHash: actionPackage.approvalBundle.actionEnvelopeHash,
+        approval,
+      })).resolves.toEqual(responseBody);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("rejects malformed Approval response bodies", async () => {
+    const actionPackage = await readJson<ActionPackage>(
+      join(fixturesDir, "action-packages", "valid-create-issue-package.json"),
+    );
+    const approval = actionPackage.approvalBundle.approvals[0] as Approval;
+    const server = await startMockCoordination((_request, response) => {
+      sendJson(response, { version: "1", type: "CoordinationApprovalSubmissionResponse", accepted: "yes" });
+    });
+
+    try {
+      const client = new CoordinationServiceClient({
+        url: server.url,
+        participantDid: actionPackage.actionEnvelope.proposer.did,
+      });
+      await expect(client.submitApproval({
+        actionEnvelopeHash: actionPackage.approvalBundle.actionEnvelopeHash,
+        approval,
+      })).rejects.toBeInstanceOf(CoordinationResponseError);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it.each(["actionRef", "state", "createdAt"] as const)(
+    "rejects an Approval response missing %s",
+    async (missingField) => {
+      const actionPackage = await readJson<ActionPackage>(
+        join(fixturesDir, "action-packages", "valid-create-issue-package.json"),
+      );
+      const approval = actionPackage.approvalBundle.approvals[0] as Approval;
+      const responseBody: Record<string, unknown> = {
+        version: "1",
+        type: "CoordinationApprovalSubmissionResponse",
+        accepted: true,
+        actionRef: {
+          version: "1",
+          type: "ActionRef",
+          actionId: actionPackage.actionEnvelope.actionId,
+          actionEnvelopeHash: actionPackage.approvalBundle.actionEnvelopeHash,
+        },
+        state: "awaitingApprovals",
+        createdAt: "2026-06-05T18:20:00.000Z",
+      };
+      delete responseBody[missingField];
+      const server = await startMockCoordination((_request, response) => sendJson(response, responseBody));
+
+      try {
+        const client = new CoordinationServiceClient({
+          url: server.url,
+          participantDid: actionPackage.actionEnvelope.proposer.did,
+        });
+        await expect(client.submitApproval({
+          actionEnvelopeHash: actionPackage.approvalBundle.actionEnvelopeHash,
+          approval,
+        })).rejects.toMatchObject({
+          name: "CoordinationResponseInvalid",
+          code: "COORDINATION_RESPONSE_INVALID",
+        });
+      } finally {
+        await server.close();
+      }
+    },
+  );
+
+  it("accepts a complete Approval response in the executed state", async () => {
+    const actionPackage = await readJson<ActionPackage>(
+      join(fixturesDir, "action-packages", "valid-create-issue-package.json"),
+    );
+    const approval = actionPackage.approvalBundle.approvals[0] as Approval;
+    const responseBody = {
+      version: "1",
+      type: "CoordinationApprovalSubmissionResponse",
+      accepted: true,
+      actionRef: {
+        version: "1",
+        type: "ActionRef",
+        actionId: actionPackage.actionEnvelope.actionId,
+        actionEnvelopeHash: actionPackage.approvalBundle.actionEnvelopeHash,
+      },
+      state: "executed",
+      createdAt: "2026-06-05T18:20:00.000Z",
+    } as const;
+    const server = await startMockCoordination((_request, response) => sendJson(response, responseBody));
+
+    try {
+      const client = new CoordinationServiceClient({
+        url: server.url,
+        participantDid: actionPackage.actionEnvelope.proposer.did,
+      });
+      await expect(client.submitApproval({
+        actionEnvelopeHash: actionPackage.approvalBundle.actionEnvelopeHash,
+        approval,
+      })).resolves.toEqual(responseBody);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("rejects an Approval response with an undeclared top-level member", async () => {
+    const actionPackage = await readJson<ActionPackage>(
+      join(fixturesDir, "action-packages", "valid-create-issue-package.json"),
+    );
+    const approval = actionPackage.approvalBundle.approvals[0] as Approval;
+    const responseBody = {
+      version: "1",
+      type: "CoordinationApprovalSubmissionResponse",
+      accepted: true,
+      actionRef: {
+        version: "1",
+        type: "ActionRef",
+        actionId: actionPackage.actionEnvelope.actionId,
+        actionEnvelopeHash: actionPackage.approvalBundle.actionEnvelopeHash,
+      },
+      state: "executed",
+      createdAt: "2026-06-05T18:20:00.000Z",
+      undeclared: "rejected",
+    } as const;
+    const server = await startMockCoordination((_request, response) => sendJson(response, responseBody));
+
+    try {
+      const client = new CoordinationServiceClient({
+        url: server.url,
+        participantDid: actionPackage.actionEnvelope.proposer.did,
+      });
+      await expect(client.submitApproval({
+        actionEnvelopeHash: actionPackage.approvalBundle.actionEnvelopeHash,
+        approval,
+      })).rejects.toMatchObject({
+        name: "CoordinationResponseInvalid",
+        code: "COORDINATION_RESPONSE_INVALID",
       });
     } finally {
       await server.close();
