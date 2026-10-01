@@ -246,7 +246,7 @@ describe("CoordinationStore", () => {
 
   it("denies a proposer decision that the settled policy does not authorize", async () => {
     const request = await coordinationActionRequest();
-    const store = new CoordinationStore();
+    const store = new CoordinationStore({ now: FIXTURE_NOW });
     const proposer = await fixtureKey("proposer");
     store.createWorkflow(request);
 
