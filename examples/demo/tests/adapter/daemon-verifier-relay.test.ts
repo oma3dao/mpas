@@ -1,10 +1,14 @@
+import { realpathSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { createServer } from "node:net";
+import { once } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import {
   buildDeliveryEnvelope,
+  computeJsonHash,
   type ActionPackage,
   type ActionRequest,
   type ActionResponse,
@@ -16,6 +20,7 @@ import {
   type Did,
 } from "@oma3/mpas";
 import { startDaemon } from "../../src/adapter/daemon.js";
+import { DispatchLedger, FileDispatchJournal } from "../../src/adapter/dispatch-ledger.js";
 import type {
   VerifierRelayClient,
   VerifierRelayState,
@@ -29,8 +34,8 @@ const fixtures = fileURLToPath(new URL("../fixtures/", import.meta.url));
 const relayUrl = "https://relay.example";
 
 describe("Credential Adapter hosted-Verifier integration", () => {
-  it("polls, processes through Fastify, journals, and delivers the Verifier response", async () => {
-    const workspace = await mkdtemp(join(tmpdir(), "mpas-daemon-verifier-"));
+  it.each(["executed", "interrupted"])("recovers exact %s responses across daemon restart without retransmission", async mode => {
+    const workspace = await mkdtemp(join(realpathSync(tmpdir()), "mpas-daemon-verifier-"));
     const configDir = join(workspace, "config");
     const credentialDir = join(workspace, "credentials");
     await mkdir(configDir, { recursive: true });
@@ -44,6 +49,22 @@ describe("Credential Adapter hosted-Verifier integration", () => {
       ...(config.plugin as Record<string, unknown>),
       path: join(fixtures, "plugins", "github-mirror-plugin.json"),
     };
+    const targetCalls = join(workspace, "target-calls.jsonl");
+    const targetScript = join(workspace, "target.mjs");
+    await writeFile(targetScript, `
+import { appendFileSync } from "node:fs";
+import { createInterface } from "node:readline";
+createInterface({input:process.stdin}).on("line", line => {
+  const message = JSON.parse(line);
+  if (message.method !== "initialize" && message.method !== "tools/call") return;
+  if (message.method === "tools/call") appendFileSync(${JSON.stringify(targetCalls)}, JSON.stringify({pid:process.pid})+"\\n");
+  const result = message.method === "initialize"
+    ? {protocolVersion:message.params.protocolVersion,capabilities:{tools:{}},serverInfo:{name:"relay-counted-target",version:"1"}}
+    : {content:[{type:"text",text:"durable relay target result"}]};
+  process.stdout.write(JSON.stringify({jsonrpc:"2.0",id:message.id,result})+"\\n");
+});
+`);
+    config.executionTarget = { type: "mcp.stdio", command: process.execPath, args: [targetScript], timeoutMs: 1000 };
     await writeFile(join(configDir, "github-auto-approve.json"), `${JSON.stringify(config, null, 2)}\n`);
     const credentialPath = join(credentialDir, "github-mirror-token.json");
     await writeFile(credentialPath, `${JSON.stringify({ value: "ghp_test" })}\n`, { mode: 0o600 });
@@ -68,6 +89,12 @@ describe("Credential Adapter hosted-Verifier integration", () => {
     const stateStore = new MemoryStateStore();
     const journalPath = join(workspace, "dispatch-ledger.jsonl");
     const events: string[] = [];
+    if (mode === "interrupted") {
+      const previous = new DispatchLedger(new FileDispatchJournal(journalPath), () => FIXTURE_NOW);
+      previous.authorizeDispatch(actionPackage.actionEnvelope.actionId,
+        computeJsonHash(actionPackage.actionEnvelope), actionPackage.actionEnvelope.expiresAt);
+      previous.close();
+    }
 
     const daemon = await startDaemon({
       configDir,
@@ -92,22 +119,113 @@ describe("Credential Adapter hosted-Verifier integration", () => {
         recipients: [actionPackage.actionEnvelope.proposer.did],
         payload: {
           type: "ActionResponse",
-          result: "executed",
+          result: mode === "executed" ? "executed" : "indeterminate",
           executionReceipt: { type: "ExecutionReceipt" },
         },
       });
       expect(stateStore.state?.cursor).toBe("cursor-1");
       expect(events).toContain("connected");
       expect(events).toContain("page_processed");
-      const journal = await readFile(journalPath, "utf8");
-      expect(journal).toContain('"event":"executing"');
-      expect(journal).toContain('"event":"resolved"');
-      expect(journal).toContain('"response":{"version":"1","type":"ActionResponse"');
     } finally {
       await daemon.app.close();
     }
 
     expect(client.socket.close).toHaveBeenCalled();
+    const reopened = new DispatchLedger(new FileDispatchJournal(journalPath));
+    try {
+      expect(reopened.recoveryFor(actionPackage.actionEnvelope.actionId,
+        computeJsonHash(actionPackage.actionEnvelope))?.response).toEqual(client.submissions[0].payload);
+      expect(reopened.check(actionPackage.actionEnvelope.actionId,
+        computeJsonHash(actionPackage.actionEnvelope))).toMatchObject({ kind: "reject", code: "REPLAY_DETECTED" });
+    } finally { reopened.close(); }
+
+    // A fresh relay cursor/cache must still recover the ledger's exact receipt.
+    const secondClient = new FakeCoordinationClient(requestEnvelope);
+    const restarted = await startDaemon({ configDir, credentialDir, adapterKeyPath, journalPath,
+      port: 0, maxEnvelopeValidityMs: Number.MAX_SAFE_INTEGER, trustContext: null,
+      confirmPluginUse: async () => true, verifierRelayUrl: relayUrl, verifierRelayClient: secondClient,
+      verifierRelayStateStore: new MemoryStateStore(), verifierRelayEventSink: () => {} });
+    try {
+      await vi.waitFor(() => expect(secondClient.submissions).toHaveLength(1));
+      expect(secondClient.submissions[0].payload).toEqual(client.submissions[0].payload);
+      const replay = await restarted.app.inject({ method: "POST", url: "/mpas/v1/action",
+        payload: { version: "1", type: "ActionRequest", actionPackage } });
+      expect(replay.json()).toMatchObject({ result: "rejected", error: { code: "REPLAY_DETECTED" } });
+    } finally { await restarted.app.close(); }
+    expect(secondClient.socket.close).toHaveBeenCalled();
+    const calls = await readFile(targetCalls, "utf8").catch(error => {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      return "";
+    });
+    const records = calls.trim() ? calls.trim().split("\n").map(line => JSON.parse(line) as { pid: number }) : [];
+    expect(records).toHaveLength(mode === "executed" ? 1 : 0);
+    for (const record of records) expect(() => process.kill(record.pid, 0)).toThrow();
+    console.log(JSON.stringify({ case: "daemon restart " + mode, journalPath, targetCalls: records.length,
+      exactStoredResponse: secondClient.submissions[0].payload, socketsClosed: true }));
+  });
+
+  it.each(["invalid-record", "key-mismatch", "listen-failure"])("%s startup failure closes the actual database", async fault => {
+    const workspace = await mkdtemp(join(realpathSync(tmpdir()), "mpas-daemon-failed-start-"));
+    const journalPath = join(workspace, "dispatch-ledger.jsonl");
+    const initial = new FileDispatchJournal(journalPath);
+    if (fault === "invalid-record") initial.insertIfAbsent('{"value":"invalid"}', '{"version":"1","version":"2"}');
+    initial.close();
+    const key = JSON.parse(await readFile(join(fixtures, "test-keys", "adapter.json"), "utf8"));
+    if (fault === "key-mismatch") key.did = "did:jwk:incorrect";
+    const adapterKeyPath = join(workspace, "adapter.json");
+    await writeFile(adapterKeyPath, JSON.stringify(key), { mode: 0o600 });
+    const closed: FileDispatchJournal[] = [];
+    const close = FileDispatchJournal.prototype.close;
+    const spy = vi.spyOn(FileDispatchJournal.prototype, "close").mockImplementation(function (this: FileDispatchJournal) {
+      closed.push(this); close.call(this);
+    });
+    const occupied = createServer();
+    if (fault === "listen-failure") { occupied.listen(0, "127.0.0.1"); await once(occupied, "listening"); }
+    try {
+      await expect(startDaemon({ configDir: join(fixtures, "configs"), credentialDir: workspace,
+        adapterKeyPath, journalPath, trustContext: null, confirmPluginUse: async () => true,
+        port: fault === "listen-failure" ? (occupied.address() as { port: number }).port : 0,
+        ...(fault === "key-mismatch" ? { verifierRelayUrl: relayUrl } : {}),
+      })).rejects.toThrow();
+      expect(closed.length).toBeGreaterThan(0);
+      for (const store of new Set(closed)) expect(() => store.entries()).toThrow();
+    } finally {
+      spy.mockRestore();
+      if (occupied.listening) await new Promise<void>(resolve => occupied.close(() => resolve()));
+    }
+  });
+
+  it.each(["expired", "unexpired"] as const)("starts over an %s legacy JSONL journal only once it no longer blocks replay", async state => {
+    const workspace = await mkdtemp(join(realpathSync(tmpdir()), "mpas-daemon-legacy-journal-"));
+    const journalPath = join(workspace, "dispatch-ledger.jsonl");
+    const expiresAt = "2026-06-05T19:00:00.000Z";
+    // One executing event as written by the JSONL journal this store replaces.
+    const legacy = `${JSON.stringify({ event: "executing", actionId: { value: "urn:uuid:legacy" },
+      envelopeHash: "hashA", expiresAt, at: "2026-06-05T18:00:00.000Z" })}\n`;
+    await writeFile(journalPath, legacy);
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const options = { configDir: join(fixtures, "configs"), credentialDir: workspace,
+      adapterKeyPath: join(fixtures, "test-keys", "adapter.json"), journalPath, port: 0,
+      now: Date.parse(expiresAt) + (state === "expired" ? 1 : 0), trustContext: null, confirmPluginUse: async () => true };
+    try {
+      if (state === "unexpired") {
+        await expect(startDaemon(options)).rejects.toThrow(journalPath);
+        expect(await readFile(journalPath, "utf8")).toBe(legacy);
+        return;
+      }
+      const daemon = await startDaemon(options);
+      try {
+        expect(await readFile(`${journalPath}.legacy-2026-06-05T19-00-00-001Z`, "utf8")).toBe(legacy);
+        expect((await readFile(journalPath)).subarray(0, 15).toString("binary")).toBe("SQLite format 3");
+        expect(stderr.mock.calls.map(call => String(call[0])))
+          .toContainEqual(expect.stringContaining('"event":"legacy_dispatch_journal_retired"'));
+        expect((await daemon.app.inject({ method: "GET", url: "/mpas/v1/health" })).statusCode).toBe(200);
+      } finally {
+        await daemon.app.close();
+      }
+    } finally {
+      stderr.mockRestore();
+    }
   });
 });
 

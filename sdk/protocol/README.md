@@ -41,6 +41,65 @@ Evaluate JSON policy configurations per the MPAS Policy Profile:
 - `buildAndSignExecutionReceipt` — construct and JWS-sign Execution Receipts
 - `buildAuthorizationRequirements` — build AuthorizationRequirements from unsatisfied policy rules
 
+### Verifier Dispatch Ledger (`lib/dispatch-ledger.ts`)
+
+Import `DispatchLedger` and `MemoryDispatchStore` from `@oma3/mpas`. The portable
+ledger implements Core section 6.9; it is separate from proposer workflow state.
+The public barrel also exports `DispatchStore`, `DispatchRecord`,
+`DispatchResolution`, `DispatchRecovery`, `LedgerCheck`, `serializeDispatchRecord`
+and `parseDispatchRecord`. No SQLite dependency or dispatch subpath is required.
+
+```typescript
+import { DispatchLedger, type DispatchStore } from "@oma3/mpas";
+
+declare const durableStore: DispatchStore;
+const ledger = new DispatchLedger(durableStore, Date.now, 0);
+// At host restart only, after all prior dispatch workers have stopped:
+ledger.recoverExecuting();
+// Stop accepting work and drain current dispatches before shutdown:
+ledger.close();
+```
+
+The constructor accepts a synchronous store, trusted clock, and trusted finite
+nonnegative timestamp tolerance in milliseconds. Its default memory store is
+for tests or explicitly ephemeral use: it cannot survive a process restart.
+Opening another connection does not recover live work. The host, not the
+store, owns the stopped-worker precondition for `recoverExecuting()`.
+
+- `check(actionId, envelopeHash)` is advisory. Only `absent` returned from
+  `authorizeDispatch(actionId, envelopeHash, expiresAt)` grants transmission.
+  Call it after verification and side-effect-free target preparation, directly
+  before transmission. An atomic unique insert chooses the sole winner.
+- Replay identity is the complete Action ID, canonically encoded as JSON.
+  Pass the complete `HashObject`, including its algorithm. Same-hash executing
+  Actions are pending; a different hash is rejected; any resolved Action is replay.
+- `resolve(actionId, resolution, response?)` returns the immutable winning record
+  or undefined for an unknown Action. A response must match both the original
+  full hash and result. The first resolution wins; a missing response can be
+  attached once to that same result. Return the winning persisted response,
+  not a locally produced response that lost a comparison race.
+- `recoveryFor(actionId, envelopeHash)` returns copied internal recovery data.
+  Public replay still rejects. Startup recovery durably marks executing records
+  indeterminate and never grants retransmission, even when no target call occurred.
+- `prune()` is explicit: it removes only resolved records strictly after expiry
+  plus tolerance, using compare-and-delete. Equality, live executing records,
+  and responses still in their recovery interval are retained. `size()` counts
+  validated records. Invalid or overflowed timestamps fail closed.
+
+Stores implement atomic `get`, `insertIfAbsent`, `compareAndSwap`, `entries`,
+`deleteIfMatch` and `close`. Successful mutations must be durable before return;
+comparison conflicts return false and I/O failures throw. Storage failure before
+grant means close prepared resources and transmit nothing. Failure after
+transmission must not expose an unpersisted terminal response or permit a retry.
+
+Stored values are closed, versioned canonical JSON records. Parsers reject raw
+duplicate members, noncanonical bytes, bad timestamps, unknown fields and invalid
+response bindings; corrupt data must never be treated as an empty store. Returned
+objects do not alias stored data. Storage validation is not receipt verification:
+consumers still use `verifyExecutionReceipt` with their expected trust context.
+The demo supplies a durable SQLite `DispatchStore` and documents its runtime and
+operator requirements in [its README](../../examples/demo/README.md#durable-dispatch-storage).
+
 ### Proposer Primitives (`lib/action-package-builder.ts`, `lib/approval-builder.ts`)
 
 - `ActionPackageBuilder` — construct Action Packages from tool calls

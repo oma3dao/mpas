@@ -1,3 +1,4 @@
+import { realpathSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -38,7 +39,7 @@ async function startFixtureDaemon() {
   (config.plugin as Record<string, unknown>).path = join(fixturesDir, "plugins", "github-mirror-plugin.json");
   await writeFile(join(tmpDir, "github-auto-approve.json"), `${JSON.stringify(config, null, 2)}\n`);
 
-  const journalDir = await mkdtemp(join(tmpdir(), "mpas-cli-journal-"));
+  const journalDir = await mkdtemp(join(realpathSync(tmpdir()), "mpas-cli-journal-"));
   const daemon = await startDaemon({
     configDir: tmpDir,
     credentialDir: await credentialDir(),

@@ -1,20 +1,22 @@
+import { realpathSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { FastifyInstance } from "fastify";
 import { compactVerify, importJWK, type JWK } from "jose";
-import { buildDeliveryEnvelope, type ActionPackage } from "@oma3/mpas";
+import { buildDeliveryEnvelope, parseDispatchRecord, serializeDispatchRecord, type ActionPackage } from "@oma3/mpas";
 import { loadDeploymentConfigs } from "../../src/adapter/config-loader.js";
 import { FileCredentialProvider } from "../../src/adapter/credential-provider.js";
 import {
   buildIndeterminateRecoveryResponse,
   createAdapterApiServer,
 } from "../../src/adapter/adapter-api-server.js";
-import { DispatchLedger } from "../../src/adapter/dispatch-ledger.js";
+import { DispatchLedger, FileDispatchJournal } from "../../src/adapter/dispatch-ledger.js";
 import type { Did, ExecutionReceipt, ReceiptPayload } from "../../src/core/types.js";
 import { computeJsonHash } from "../../src/core/verification.js";
+import { TraceLogger } from "../../src/core/trace.js";
 
 /** Deterministic clock pinned inside the fixture validity window. */
 const FIXTURE_NOW = Date.parse("2026-06-05T19:00:00.000Z");
@@ -27,6 +29,7 @@ const protocolVersionFixtureServer = fileURLToPath(
 );
 const missingFixtureServer = join(fixturesDir, "adapter", "missing-mcp-server.mjs");
 const apps: FastifyInstance[] = [];
+const stores: FileDispatchJournal[] = [];
 
 interface KeyFixture {
   did: Did;
@@ -122,11 +125,188 @@ async function verifyReceiptPayload(receipt: ExecutionReceipt): Promise<ReceiptP
   return JSON.parse(Buffer.from(payload).toString("utf8")) as ReceiptPayload;
 }
 
+/** A real test-owned MCP process records initialization and tools/call separately. */
+async function countingTarget() {
+  const dir = await mkdtemp(join(realpathSync(tmpdir()), "mpas-ledger-target-"));
+  const eventsPath = join(dir, "events.jsonl"), server = join(dir, "server.mjs");
+  await writeFile(server, `
+import { appendFileSync } from "node:fs";
+import { createInterface } from "node:readline";
+const lines = createInterface({input: process.stdin});
+lines.on("line", line => {
+  const request = JSON.parse(line);
+  if (request.method !== "initialize" && request.method !== "tools/call") return;
+  appendFileSync(${JSON.stringify(eventsPath)}, JSON.stringify({event:request.method,pid:process.pid})+"\\n");
+  const result = request.method === "initialize"
+    ? {protocolVersion:request.params.protocolVersion,capabilities:{tools:{}},serverInfo:{name:"counted-target",version:"1"}}
+    : {content:[{type:"text",text:"counted durable target result"}]};
+  process.stdout.write(JSON.stringify({jsonrpc:"2.0",id:request.id,result})+"\\n");
+});
+`);
+  const configDir = await makeTargetConfigDir(server, 1000);
+  const journalPath = join(dir, "dispatch-ledger.jsonl");
+  const store = new FileDispatchJournal(journalPath); stores.push(store);
+  const ledger = new DispatchLedger(store, () => FIXTURE_NOW);
+  const app = await makeApp(configDir, ledger);
+  const actionPackage = await readJson<ActionPackage>(join(fixturesDir, "core", "valid-no-approval-required.json"));
+  const actionId = actionPackage.actionEnvelope.actionId, hash = computeJsonHash(actionPackage.actionEnvelope);
+  return {
+    app, ledger, store, journalPath, actionPackage, actionId, hash,
+    async countAndCheckClosed() {
+      const events = (await readFile(eventsPath, "utf8")).trim().split("\n")
+        .map(line => JSON.parse(line) as { event: string; pid: number });
+      for (const pid of new Set(events.map(event => event.pid))) {
+        expect(() => process.kill(pid, 0)).toThrowError(expect.objectContaining({ code: "ESRCH" }));
+      }
+      return { calls: events.filter(event => event.event === "tools/call").length,
+        initialized: events.filter(event => event.event === "initialize").length, events };
+    },
+  };
+}
+
 afterEach(async () => {
   await Promise.all(apps.splice(0).map((app) => app.close()));
+  for (const store of stores.splice(0)) store.close();
+  vi.restoreAllMocks();
 });
 
 describe("HTTP endpoint", () => {
+  it("simultaneous direct and verifier requests share one durable grant and target call", async () => {
+    const target = await countingTarget();
+    const direct = submitFixture(target.app, "valid-no-approval-required.json");
+    const relayed = target.app.inject({ method: "POST", url: "/mpas/v1/verifier/action",
+      payload: { version: "1", type: "ActionRequest", actionPackage: target.actionPackage } });
+    const responses = await Promise.all([direct, relayed]);
+    expect(responses.map(value => value.statusCode)).toEqual([200, 200]);
+    expect(responses.filter(value => value.json().result === "executed")).toHaveLength(1);
+    expect(responses.filter(value => ["pending", "rejected"].includes(value.json().result))).toHaveLength(1);
+    const evidence = await target.countAndCheckClosed();
+    expect(evidence.calls).toBe(1);
+    const winner = responses.find(value => value.json().result === "executed")!.json();
+    expect(target.ledger.recoveryFor(target.actionId, target.hash)?.response).toEqual(winner);
+    expect((await verifyReceiptPayload(winner.executionReceipt)).result).toBe("executed");
+    console.log(JSON.stringify({ case: "adapter simultaneous routes", journalPath: target.journalPath, ...evidence }));
+  });
+
+  it.each(["write", "fsync", "ambiguous-commit"])("%s failure before grant closes prepared resources and sends zero calls", async fault => {
+    const target = await countingTarget();
+    const insert = target.store.insertIfAbsent.bind(target.store);
+    vi.spyOn(target.store, "insertIfAbsent").mockImplementation((key, bytes) => {
+      if (fault === "ambiguous-commit") insert(key, bytes);
+      throw new Error("injected storage " + fault);
+    });
+    const response = await submitFixture(target.app, "valid-no-approval-required.json");
+    expect(response.statusCode).toBe(500);
+    expect(response.json()).not.toHaveProperty("executionReceipt");
+    const evidence = await target.countAndCheckClosed();
+    expect(evidence).toMatchObject({ calls: 0, initialized: 1 });
+    expect(target.ledger.check(target.actionId, target.hash).kind).toBe(fault === "ambiguous-commit" ? "pending" : "absent");
+    target.store.close();
+    const reopened = new FileDispatchJournal(target.journalPath); stores.push(reopened);
+    const restarted = new DispatchLedger(reopened, () => FIXTURE_NOW);
+    expect(restarted.recoverExecuting()).toBe(fault === "ambiguous-commit" ? 1 : 0);
+    console.log(JSON.stringify({ case: "adapter injected pre-grant " + fault, injected: true,
+      physicalPowerCut: false, journalPath: target.journalPath, ...evidence }));
+  });
+
+  it("a post-target persistence failure emits no terminal result and never grants a retry", async () => {
+    const target = await countingTarget();
+    const trace = vi.spyOn(TraceLogger.prototype, "emit");
+    const failure = vi.spyOn(target.store, "compareAndSwap").mockImplementation(() => {
+      throw new Error("injected response commit failure");
+    });
+    const response = await submitFixture(target.app, "valid-no-approval-required.json");
+    expect(response.statusCode).toBe(500);
+    expect(response.json()).not.toHaveProperty("executionReceipt");
+    expect(response.json()).not.toHaveProperty("executionResult");
+    expect(trace.mock.calls.filter(([type]) => type === "dispatch" || type === "receipt_generated")).toEqual([]);
+    expect(target.ledger.check(target.actionId, target.hash).kind).toBe("pending");
+    const retry = await submitFixture(target.app, "valid-no-approval-required.json");
+    expect(retry.json()).toMatchObject({ result: "pending" });
+    failure.mockRestore(); target.store.close();
+    const reopened = new FileDispatchJournal(target.journalPath); stores.push(reopened);
+    const restarted = new DispatchLedger(reopened, () => FIXTURE_NOW);
+    expect(restarted.recoverExecuting()).toBe(1);
+    expect(restarted.recoveryFor(target.actionId, target.hash)?.resolution).toBe("indeterminate");
+    const evidence = await target.countAndCheckClosed(); expect(evidence.calls).toBe(1);
+    console.log(JSON.stringify({ case: "adapter post-target commit failure", journalPath: target.journalPath, ...evidence }));
+  });
+
+  it("returns the persisted competing winner, including a once-only signed recovery response", async () => {
+    const target = await countingTarget();
+    const trace = vi.spyOn(TraceLogger.prototype, "emit");
+    const compare = target.store.compareAndSwap.bind(target.store);
+    vi.spyOn(target.store, "compareAndSwap").mockImplementationOnce((key, expected, bytes) => {
+      const proposed = parseDispatchRecord(bytes);
+      if (proposed.status !== "resolved") throw new Error("Expected terminal candidate");
+      const { response: _losingResponse, ...record } = proposed;
+      expect(compare(key, expected, serializeDispatchRecord({ ...record, resolution: "indeterminate" }))).toBe(true);
+      return false;
+    });
+    const response = await submitFixture(target.app, "valid-no-approval-required.json");
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ result: "indeterminate", error: { code: "DISPATCH_RECOVERY_INDETERMINATE" } });
+    expect(response.json()).not.toHaveProperty("executionResult");
+    expect((await verifyReceiptPayload(response.json().executionReceipt)).result).toBe("indeterminate");
+    expect(target.ledger.recoveryFor(target.actionId, target.hash)?.response).toEqual(response.json());
+    expect(trace.mock.calls.filter(([type]) => type === "dispatch" || type === "receipt_generated"))
+      .toEqual([["receipt_generated", expect.objectContaining({ result: "indeterminate" })],
+        ["dispatch", expect.objectContaining({ result: "indeterminate" })]]);
+    expect((await target.countAndCheckClosed()).calls).toBe(1);
+  });
+
+  it("rejects an envelope that expires during target preparation as expired, with zero target calls", async () => {
+    const dir = await mkdtemp(join(realpathSync(tmpdir()), "mpas-expiring-target-"));
+    const eventsPath = join(dir, "events.jsonl"), server = join(dir, "server.mjs");
+    await writeFile(server, `
+import { appendFileSync } from "node:fs";
+import { createInterface } from "node:readline";
+createInterface({input: process.stdin}).on("line", line => {
+  const request = JSON.parse(line);
+  if (request.method !== "initialize" && request.method !== "tools/call") return;
+  appendFileSync(${JSON.stringify(eventsPath)}, JSON.stringify({event:request.method,pid:process.pid})+"\\n");
+  const result = request.method === "initialize"
+    ? {protocolVersion:request.params.protocolVersion,capabilities:{tools:{}},serverInfo:{name:"expiry-target",version:"1"}}
+    : {content:[{type:"text",text:"unexpected"}]};
+  process.stdout.write(JSON.stringify({jsonrpc:"2.0",id:request.id,result})+"\\n");
+});
+`);
+    const configs = await loadDeploymentConfigs(await makeTargetConfigDir(server, 1000), { confirmPluginUse: async () => true });
+    if (!configs.ok) throw new Error(configs.error.message);
+    const adapter = await readJson<KeyFixture>(join(fixturesDir, "test-keys", "adapter.json"));
+    const provider = new FileCredentialProvider(await credentialDir());
+    const actionPackage = await readJson<ActionPackage>(join(fixturesDir, "core", "valid-no-approval-required.json"));
+    // No fixed clock: the server and its default ledger read Date, faked only in
+    // this test. The credential read happens after the stateless expiry check
+    // and before the grant, so moving the clock there expires the envelope mid-request.
+    const read = provider.getCredential.bind(provider);
+    vi.spyOn(provider, "getCredential").mockImplementation(async handle => {
+      vi.setSystemTime(Date.parse(actionPackage.actionEnvelope.expiresAt));
+      return read(handle);
+    });
+    const trace = vi.spyOn(TraceLogger.prototype, "emit");
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(FIXTURE_NOW);
+    try {
+      const app = createAdapterApiServer({ configsByApplicationDid: configs.configsByApplicationDid,
+        credentialProvider: provider, adapterDid: adapter.did, adapterSigningKey: adapter.privateJwk });
+      apps.push(app);
+      const response = await submitFixture(app, "valid-no-approval-required.json");
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({ result: "expired", error: { code: "EXPIRED_ACTION_ENVELOPE" } });
+      expect((await verifyReceiptPayload(response.json().executionReceipt)).result).toBe("expired");
+      expect(trace.mock.calls).toContainEqual(["verification_step",
+        expect.objectContaining({ step: "expiry_check", passed: false, phase: "dispatch_grant" })]);
+    } finally {
+      vi.useRealTimers();
+    }
+    const events = (await readFile(eventsPath, "utf8")).trim().split("\n").map(line => JSON.parse(line) as { event: string; pid: number });
+    expect(events.map(event => event.event)).toEqual(["initialize"]);
+    for (const pid of new Set(events.map(event => event.pid))) {
+      expect(() => process.kill(pid, 0)).toThrowError(expect.objectContaining({ code: "ESRCH" }));
+    }
+  });
+
   it("responds to health checks", async () => {
     const app = await makeApp();
     const response = await app.inject({ method: "GET", url: "/mpas/v1/health" });
@@ -170,7 +350,7 @@ describe("HTTP endpoint", () => {
   });
 
   it("rejects a second submission of a resolved actionId as replay", async () => {
-    const ledger = new DispatchLedger();
+    const ledger = new DispatchLedger(undefined, () => FIXTURE_NOW);
     const app = await makeApp(await makeAutoApproveConfigDir(), ledger);
     const first = await submitFixture(app, "valid-no-approval-required.json");
     expect(first.json()).toMatchObject({ result: "executed" });
@@ -180,7 +360,7 @@ describe("HTTP endpoint", () => {
     );
     expect(ledger.recoveryFor(
       actionPackage.actionEnvelope.actionId,
-      computeJsonHash(actionPackage.actionEnvelope).value,
+      computeJsonHash(actionPackage.actionEnvelope),
     )?.response).toEqual(first.json());
 
     const second = await submitFixture(app, "valid-no-approval-required.json");

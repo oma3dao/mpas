@@ -20,6 +20,7 @@ export * from "./lib/rfc9421.js";
 export * from "./lib/routing.js";
 
 // Protocol primitives — Verifier side
+export * from "./lib/dispatch-ledger.js";
 export * from "./lib/verification.js";
 export * from "./lib/mcp-tasks-extension.js";
 export * from "./lib/mcp-tasks-server.js";
