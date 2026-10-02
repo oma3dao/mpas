@@ -111,6 +111,7 @@ dependencies, build each package, and run the test suites in dependency order:
 ```sh
 npm ci --prefix sdk/protocol
 npm run build --prefix sdk/protocol
+npm run docs:check --prefix sdk/protocol
 npm test --prefix sdk/protocol
 
 npm ci --prefix bridge-generator
@@ -122,6 +123,11 @@ npm run build --prefix examples/demo
 npm test --prefix examples/demo
 npm run test:e2e:mcp-bridge --prefix examples/demo
 ```
+
+The `docs:check` command verifies that the SDK README's public-export inventory is complete
+and that every TypeScript example in it compiles against the built package. The SDK's `npm test`
+also runs it, with controls showing that it fails on a missing export, a broken example and a
+stale path.
 
 For the complete local governed-action walkthrough, including proposer,
 maintainer, Credential Adapter, policy, and agent-harness configuration, follow

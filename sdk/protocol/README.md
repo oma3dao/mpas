@@ -62,10 +62,22 @@ the published alpha API. New integrations should use the canonical names above.
 - `buildDeliveryEnvelope`, recipient membership, and expiration helpers
 - body/header idempotency resolution and request fingerprinting
 
-### Key Management (`lib/key-manager.ts`, `lib/did-key.ts`)
+### Key Management (`lib/key-manager.ts`, `lib/did-jwk.ts`)
 
 - `KeyManager` — load Ed25519 or P-256 keys, preserve `did:jwk`, sign/verify JWS and raw bytes
 - `deriveDidJwk`, `didJwkToJwk`, `didJwkToKid`, `generateEd25519Key`, `generateP256Key`, `generateMpasKey` — DID and key utilities
+
+```typescript
+// @docs-check: run
+import { deriveDidJwk, didJwkToKid, generateEd25519Key } from "@oma3/mpas";
+
+const key = await generateEd25519Key();
+const did = deriveDidJwk(key.publicJwk);
+const kid = didJwkToKid(did);
+if (did !== key.did || kid !== key.kid || !did.startsWith("did:jwk:")) {
+  throw new Error("DID derivation round trip failed");
+}
+```
 
 ### Proposer Bridge Runtime (`lib/bridge-runtime.ts`, `lib/mcp-protocol-server.ts`, `lib/mcp-tasks-server.ts`, `lib/mcp-compatibility-server.ts`, `lib/workflow-engine.ts`, `lib/workflow-store.ts`)
 
@@ -105,8 +117,6 @@ npm install @oma3/mpas@alpha
 ```typescript
 import {
   verifyActionPackage,
-  evaluatePolicy,
-  KeyManager,
   ActionPackageBuilder,
   CoordinationServiceClient,
 } from "@oma3/mpas";
@@ -249,7 +259,23 @@ Envelope hash, expiration, and Proposer Approval. Submit A2 and Proposer-authore
 A2-bound requirements through the coordination workflow:
 
 ```typescript
-import { ActionPackageBuilder, CoordinationServiceClient } from "@oma3/mpas";
+import {
+  ActionPackageBuilder,
+  CoordinationServiceClient,
+  type ActionPackage,
+  type ActionResponse,
+  type AdditionalApprovalsAuthorizationRequirements,
+  type Did,
+  type KeyManager,
+  type MpasRfc9421Signer,
+} from "@oma3/mpas";
+
+declare const response: ActionResponse;
+declare const actionPackage: ActionPackage;
+declare const proposerSigner: MpasRfc9421Signer;
+declare const applicationDid: Did;
+declare const executionProfile: { id: Did; format: string };
+declare const keyManager: KeyManager;
 
 if (response.result === "additionalApprovalsRequired" &&
     response.authorizationRequirements) {
@@ -262,9 +288,10 @@ if (response.result === "additionalApprovalsRequired" &&
     executionProfile,
     keyManager,
   });
+  const requirements = response.authorizationRequirements as AdditionalApprovalsAuthorizationRequirements;
   const replacement = await builder.buildCoordinationReplacement(
     actionPackage,
-    response.authorizationRequirements,
+    requirements,
   );
   await coordination.createApprovalWorkflow({
     actionPackage: replacement.actionPackage,
@@ -501,8 +528,13 @@ Each module is available as a direct import for consumers that want to avoid pul
 | `@oma3/mpas/routing` | Delivery Envelope and idempotency helpers |
 | `@oma3/mpas/approval-builder` | Approval construction |
 | `@oma3/mpas/approval-requirements` | Coordination-side approval expression evaluation |
+| `@oma3/mpas/bridge-tasks` | Bridge task helpers for the proposer bridge runtime |
+| `@oma3/mpas/rfc9421` | RFC 9421 HTTP message signature helpers |
 | `@oma3/mpas/hash` | Hash utilities |
+| `@oma3/mpas/signer` | MPAS signer identity and JWS signing |
+| `@oma3/mpas/signature-suites` | Registered signature-suite configuration |
 | `@oma3/mpas/trace` | Trace logging |
+| `@oma3/mpas/package.json` | Package manifest (name and version) |
 
 ## Building
 

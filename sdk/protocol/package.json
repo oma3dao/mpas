@@ -127,6 +127,7 @@
   "scripts": {
     "build": "rm -rf dist && tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.build.json --noEmit",
+    "docs:check": "node tests/scripts/check-docs.mjs",
     "test": "node tests/scripts/run-tests.mjs",
     "prepack": "npm run build",
     "prepublishOnly": "npm test"
