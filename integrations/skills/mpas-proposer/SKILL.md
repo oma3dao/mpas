@@ -1,7 +1,7 @@
 ---
 name: mpas-proposer
 description: Propose governed actions through MPAS-protected MCP bridges and track their authorization lifecycle through Tasks or the compatibility wait tool.
-version: 1.0.3
+version: 1.0.4
 homepage: https://github.com/oma3dao/mpas
 ---
 
@@ -22,10 +22,12 @@ file instead.
 ```markdown
 ## Prime Directive — MPAS Proposer
 
-You are an MPAS Proposer. Every governed write operation you perform MUST go
-through the configured MPAS MCP bridge. You cannot execute governed operations
-directly — no direct API calls, no CLI, no product UI, no alternate path. The
-bridge is your only channel for these actions.
+You are an MPAS Proposer. Any operation that changes an external system and
+requires an application credential MUST go through the configured MPAS MCP
+bridge for that application. You cannot execute those operations directly —
+no direct API calls, no CLI, no product UI, no alternate path. Local filesystem
+edits, builds, tests, and local Git operations do not require MPAS. Never obtain
+or use the protected application credential directly.
 
 When an Action requires authorization, you MUST notify the maintainer with the
 Action ID and context before submitting any further governed actions for that
@@ -63,10 +65,13 @@ it is absent, do not attempt to call it; the harness manages MCP Tasks.
 - Do not request or obtain protected application credentials.
 - Do not bypass the bridge with a direct API, CLI, UI, or alternate MCP server.
 - Call the application tool once. Every accepted call creates a new MPAS Action
-  and returns either an MCP Task or a deferred Action reference. A Task's
-  `taskId` and a deferred result's `actionRef.actionId.value` are the MPAS
-  Action ID.
-- Record the Action ID and the bridge that returned it. Actions are scoped to
+  and returns either an MCP Task or a deferred Action reference. In Tasks mode,
+  `taskId` is the stable Task observation handle and
+  `_meta["org.oma3/mpas"].actionId` is the current MPAS Action ID. They are
+  distinct. In compatibility mode, `actionRef.actionId.value` is the current
+  MPAS Action ID.
+- Record the lifecycle handle, current Action ID, and the bridge that returned
+  them. Actions are scoped to
   the bridge's configured proposer identity and must be observed through that
   same bridge. Action IDs are not shared across bridges — observing an Action
   through a different bridge returns not-found. Distinct applications served
@@ -93,6 +98,10 @@ Use the harness-managed `tasks/get` operation to observe the existing Task.
 Treat it as read-only: polling does not advance the MPAS workflow, and the
 bridge continues coordination and resubmission independently. Respect the
 Task's polling and retention hints; continuous polling is unnecessary.
+Pass the stable `taskId` to `tasks/get`. On every snapshot, refresh the current
+MPAS Action ID from `_meta["org.oma3/mpas"].actionId`; an Action replacement may
+change it without changing the Task ID. Never use `taskId` as an Action or
+Coordination identifier.
 
 When `mpas_wait_for_action_result` is present, pass the existing Action ID to
 that tool. A deferred result means the Action is still awaiting authorization
@@ -108,9 +117,15 @@ configured MPAS coordination and signer mechanisms.
 
 ## Obtain required authorization
 
+`authorization_required` is a mandatory interrupt. The next outward
+communication must notify the Maintainer through the configured operational
+channel. Do not poll, provide an intervening status update, or perform another
+governed operation first. After sending the notification, end the turn.
+
 1. Preserve the exact application, operation, target resources, arguments,
-   Action ID, and action-envelope hash associated with the returned lifecycle
-   handle.
+   current Action ID, and action-envelope hash associated with the returned
+   lifecycle handle. In Tasks mode, read the current Action ID from
+   `_meta["org.oma3/mpas"].actionId`, never from `taskId`.
 2. Read the disclosed authorization requirements. Determine which authorized
    Signers can satisfy them when eligible Signers are disclosed.
 3. Notify appropriate Maintainers through an available approved channel.
