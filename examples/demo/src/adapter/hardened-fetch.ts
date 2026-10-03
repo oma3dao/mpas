@@ -1,4 +1,4 @@
-import { Agent } from "undici";
+import { Agent, fetch as undiciFetch } from "undici";
 
 import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
 
@@ -121,8 +121,8 @@ export interface HardenedFetchOptions {
   /**
    * Bound on a single attempt. Omit for requests whose duration is legitimately
    * open-ended — MCP tool calls, streamed responses — so the caller's own signal stays
-   * the only response deadline. Setting it also makes a stalled attempt retryable, which
-   * is the only way to recover a path that goes silent after the handshake.
+   * the only response deadline. Only GET/HEAD may retry after this deadline; non-idempotent requests fail
+   * without replay because their remote outcome may be unknown.
    */
   attemptTimeoutMs?: number;
   /** Budget shared across every request made through this fetch instance. */
@@ -147,9 +147,9 @@ interface Attempt {
 
 export function createHardenedFetch(options: HardenedFetchOptions = {}): FetchLike {
   const injectedFetch = options.fetch;
-  const fetchFn = injectedFetch ?? fetch;
+  const fetchFn: FetchLike = injectedFetch ?? fetchWithUndici;
   const label = options.label ?? "HTTP request";
-  // Connect tuning only applies to the runtime's fetch. An injected fetch keeps whatever
+  // Connect tuning only applies to the managed Undici fetch. An injected fetch keeps whatever
   // transport the caller supplied, so a retry through it would repeat the first attempt
   // byte for byte and is suppressed below.
   const managesTransport = injectedFetch === undefined;
@@ -182,7 +182,7 @@ export function createHardenedFetch(options: HardenedFetchOptions = {}): FetchLi
       if (deadline?.expired()) throw budgetExhausted(label, url, error);
 
       const failureCode = connectFailureCode(error);
-      if (!managesTransport || !isRetryable(failureCode, first.timedOut(), init?.body)) {
+      if (!managesTransport || !isRetryable(failureCode, first.timedOut(), init?.body, init?.method ?? "GET")) {
         throw transportFailure(label, error, failureCode, first.timedOut(), url);
       }
 
@@ -202,17 +202,12 @@ export function createHardenedFetch(options: HardenedFetchOptions = {}): FetchLi
   };
 }
 
-/**
- * A connect failure sends no bytes, so it is unconditionally safe to replay. An attempt
- * that stalled after the handshake is not provably safe — the server may have processed
- * a request whose response was lost. It is still replayed, because the alternative is
- * worse: on a degraded path the request is far more likely to have been dropped than
- * processed, and in the one case where a token grant did land, the locally stored
- * refresh token is already stale and needs operator attention either way.
- */
-function isRetryable(failureCode: string | undefined, timedOut: boolean, body: unknown): boolean {
-  if (failureCode === undefined && !timedOut) return false;
-  return isReplayableBody(body);
+/** Only known connect failures are safe to replay for non-idempotent requests. */
+function isRetryable(failureCode: string | undefined, timedOut: boolean, body: unknown, method: string): boolean {
+  if (!isReplayableBody(body)) return false;
+  if (failureCode !== undefined) return true;
+  // A lost response does not prove a token/code POST was never processed.
+  return timedOut && ["GET", "HEAD"].includes(method.toUpperCase());
 }
 
 function beginAttempt(
@@ -296,3 +291,21 @@ function isReplayableBody(body: unknown): boolean {
   if (body instanceof ArrayBuffer) return true;
   return ArrayBuffer.isView(body);
 }
+
+// The MCP SDK uses instanceof global Response when classifying OAuth errors.
+// Keep the transport and Agent from the same Undici package, but adapt its response
+// at the SDK boundary without buffering streaming MCP bodies.
+const fetchWithUndici: FetchLike = async (input, init) => {
+  const response = await (undiciFetch as unknown as FetchLike)(input, init);
+  const adapted = new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers,
+  });
+  Object.defineProperties(adapted, {
+    url: { value: response.url },
+    redirected: { value: response.redirected },
+    type: { value: response.type },
+  });
+  return adapted;
+};

@@ -3,6 +3,7 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import type { TransportSendOptions } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
 import type { OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
+import { guardOAuthScopes, type OAuthScopeChallenge } from "../oauth-scope-guard.js";
 import { createHardenedFetch } from "../hardened-fetch.js";
 import { classifyOAuthPrepareError, oauthLoginCommand } from "../oauth-operator.js";
 import { withInitializeProtocolVersion } from "./mcp-protocol-version.js";
@@ -30,8 +31,14 @@ export async function prepareMcpHttp(
   protocolVersion: string,
   authProvider?: OAuthClientProvider,
   oauthOperatorCommand?: string,
+  onScopeChallenge?: (challenge: OAuthScopeChallenge) => void,
 ): Promise<DispatchPrepareResult> {
   const timeoutMs = target.timeoutMs ?? 30_000;
+  const fetchFn = createHardenedFetch({ label: "MCP request" });
+  const guardedFetch = authProvider ? guardOAuthScopes(
+    fetchFn, authProvider, target.auth?.scopes ?? [],
+    oauthOperatorCommand ?? "mpas oauth login", onScopeChallenge,
+  ) : fetchFn;
   const transport = new VersionedStreamableHttpClientTransport(
     new URL(target.url),
     {
@@ -42,7 +49,7 @@ export async function prepareMcpHttp(
       // deadline is set: a tools/call may legitimately run long, so the caller's own
       // timeout stays the only response bound and retries remain limited to connect
       // failures, where no request bytes were sent.
-      fetch: createHardenedFetch({ label: "MCP request" }),
+      fetch: guardedFetch,
       requestInit: {
         headers: credential ? injectCredential(target.headers ?? {}, credential) : target.headers,
       },
