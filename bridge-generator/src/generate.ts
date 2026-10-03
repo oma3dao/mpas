@@ -31,7 +31,7 @@ import {
 import { generateBridge, generateToolsJson, generateWorkflowStore } from "./bridge-codegen.js";
 import { generatePlugin } from "./plugin-codegen.js";
 import { discoverUpstream } from "./discovery.js";
-import type { GeneratedPlugin, McpToolDefinition, UpstreamInfo } from "./types.js";
+import type { CredentialRequirement, GeneratedPlugin, McpToolDefinition, UpstreamInfo } from "./types.js";
 
 export const GENERATOR_VERSION = "0.2.0";
 
@@ -102,6 +102,9 @@ export async function runGenerate(options: GenerateOptions): Promise<void> {
     join(appDir, "build-artifacts", "tools-list.snapshot.json"),
   );
   const previousPlugin = await readJsonIfExists<Partial<GeneratedPlugin>>(join(appDir, "plugin.json"));
+  const previousCredentialRequirements = previousPlugin?.credentialRequirements === undefined
+    ? undefined
+    : validateCredentialRequirements(previousPlugin.credentialRequirements);
 
   // --- build-artifacts ---
   const snapshot = buildToolsListSnapshot(upstream.tools);
@@ -129,7 +132,7 @@ export async function runGenerate(options: GenerateOptions): Promise<void> {
     plugin.pluginVersion = previousPlugin.pluginVersion ?? plugin.pluginVersion;
     plugin.publisherDid = previousPlugin.publisherDid ?? plugin.publisherDid;
     plugin.applicationDid = previousPlugin.applicationDid ?? plugin.applicationDid;
-    plugin.credentialRequirements = previousPlugin.credentialRequirements ?? plugin.credentialRequirements;
+    plugin.credentialRequirements = previousCredentialRequirements ?? validateCredentialRequirements(plugin.credentialRequirements);
   }
   if (options.applicationDid ?? orgConfig?.application.applicationDid) {
     plugin.applicationDid = options.applicationDid ?? orgConfig!.application.applicationDid;
@@ -238,6 +241,43 @@ function validateRegistryEntry(entry: RegistryEntry): void {
   if (missing.length > 0) {
     throw new GenerateError(`Registry entry is missing required fields: ${missing.join(", ")}`);
   }
+}
+
+function validateCredentialRequirements(value: unknown): CredentialRequirement[] {
+  if (!Array.isArray(value)) {
+    throw new GenerateError("plugin credentialRequirements must be an array.");
+  }
+  const allowed = new Set(["type", "expectedAuthority", "refreshScope", "description"]);
+  return value.map((item, index) => {
+    if (typeof item !== "object" || item === null || Array.isArray(item)) {
+      throw new GenerateError(`plugin credentialRequirements[${index}] must be an object.`);
+    }
+    const requirement = item as Record<string, unknown>;
+    const unexpected = Object.keys(requirement).find((key) => !allowed.has(key));
+    if (unexpected) {
+      throw new GenerateError(`plugin credentialRequirements[${index}] contains undeclared member ${unexpected}.`);
+    }
+    if (typeof requirement.type !== "string") {
+      throw new GenerateError(`plugin credentialRequirements[${index}].type must be a string.`);
+    }
+    if (
+      requirement.expectedAuthority !== undefined &&
+      (!Array.isArray(requirement.expectedAuthority) ||
+        !requirement.expectedAuthority.every((entry) => typeof entry === "string"))
+    ) {
+      throw new GenerateError(`plugin credentialRequirements[${index}].expectedAuthority must be a string array.`);
+    }
+    if (
+      requirement.refreshScope !== undefined &&
+      (typeof requirement.refreshScope !== "string" || requirement.refreshScope.length === 0)
+    ) {
+      throw new GenerateError(`plugin credentialRequirements[${index}].refreshScope must be a non-empty string.`);
+    }
+    if (requirement.description !== undefined && typeof requirement.description !== "string") {
+      throw new GenerateError(`plugin credentialRequirements[${index}].description must be a string.`);
+    }
+    return requirement as unknown as CredentialRequirement;
+  });
 }
 
 async function loadOrgConfig(path: string): Promise<OrgConfig> {

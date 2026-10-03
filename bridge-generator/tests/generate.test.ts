@@ -194,7 +194,11 @@ describe("runGenerate", () => {
     plugin.pluginDid = "did:web:plugins.wivity.example:github";
     plugin.publisherDid = "did:web:wivity.example";
     plugin.applicationDid = "did:web:github.example";
-    plugin.credentialRequirements = [{ type: "MembershipCredential" }];
+    plugin.credentialRequirements = [{
+      type: "MembershipCredential",
+      expectedAuthority: ["membership.review"],
+      refreshScope: "offline_access",
+    }];
     plugin.operations.create_issue.impact = "high";
     await writeFile(pluginPath, `${JSON.stringify(plugin, null, 2)}\n`);
 
@@ -204,11 +208,30 @@ describe("runGenerate", () => {
     expect(regenerated.pluginDid).toBe("did:web:plugins.wivity.example:github");
     expect(regenerated.publisherDid).toBe("did:web:wivity.example");
     expect(regenerated.applicationDid).toBe("did:web:github.example");
-    expect(regenerated.credentialRequirements).toEqual([{ type: "MembershipCredential" }]);
+    expect(regenerated.credentialRequirements).toEqual([{
+      type: "MembershipCredential",
+      expectedAuthority: ["membership.review"],
+      refreshScope: "offline_access",
+    }]);
     expect(regenerated.operations.create_issue.impact).toBe("high");
     // --application-did still wins over the preserved value when given.
     await generate({ outDir: join(appDir, ".."), applicationDid: "did:web:override.example" });
     expect((await readJson<typeof plugin>(pluginPath)).applicationDid).toBe("did:web:override.example");
+  });
+
+  it.each([
+    ["legacy authority", [{ type: "oauthToken", requiredCapabilities: ["repo.write"] }]],
+    ["mixed authority", [{ type: "oauthToken", expectedAuthority: ["repo.write"], requiredCapabilities: ["repo.write"] }]],
+    ["unknown key", [{ type: "oauthToken", expectedAuthority: ["repo.write"], authorityHint: "write" }]],
+    ["provider scopes", [{ type: "oauthToken", scopes: ["repo"] }]],
+  ])("rejects preserved plugin credential requirements with %s", async (_label, credentialRequirements) => {
+    const appDir = await generate();
+    const pluginPath = join(appDir, "plugin.json");
+    const plugin = await readJson<{ credentialRequirements: unknown[] }>(pluginPath);
+    plugin.credentialRequirements = credentialRequirements;
+    await writeFile(pluginPath, `${JSON.stringify(plugin, null, 2)}\n`);
+
+    await expect(generate({ outDir: join(appDir, "..") })).rejects.toThrow(/credentialRequirements/);
   });
 
   it("applies --application-did and org config to plugin and registry entry", async () => {

@@ -98,7 +98,7 @@ const applicationPluginSchema = {
         required: ["type"],
         properties: {
           type: { type: "string" },
-          requiredCapabilities: { type: "array", items: { type: "string" } },
+          expectedAuthority: { type: "array", items: { type: "string" } },
           refreshScope: { type: "string", minLength: 1 },
           description: { type: "string" },
         },
@@ -142,6 +142,11 @@ describe("plugin, config, and key fixtures", () => {
     expect(JSON.stringify(plugin)).not.toContain("nativeBinding");
     expect(JSON.stringify(plugin)).not.toContain("policySuggestions");
     expect(plugin.credentialRequirements).toBeDefined();
+    expect(plugin.credentialRequirements?.[0]).toMatchObject({
+      expectedAuthority: ["issue.write", "pullRequest.merge", "pullRequest.read", "branch.delete"],
+    });
+    expect(JSON.stringify(plugin)).not.toContain("requiredCapabilities");
+    expect(JSON.stringify(plugin)).not.toContain('"scopes"');
   });
 
   it("valid Action Package payloads validate against plugin operation schemas", async () => {

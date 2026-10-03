@@ -4,7 +4,7 @@ import type {
 } from "../../src/adapter/artifact-trust-client.js";
 
 export const artifactDid =
-  "did:artifact:bafkreibz3gttsq5iq7tynp5yldhroq3sybhtiogeuarody5wlstl3umpxy";
+  "did:artifact:bafkreiboiym5t7serxxvynew6qzrjjo65lqiqv6jnjunkwmyp3hrvgh7qq";
 
 export function makeEvidence(
   schemaName = "security-assessment",

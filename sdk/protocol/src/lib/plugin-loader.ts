@@ -17,7 +17,7 @@ export interface MpasApplicationPlugin {
   };
   credentialRequirements?: Array<{
     type: string;
-    requiredCapabilities?: string[];
+    expectedAuthority?: string[];
     refreshScope?: string;
     description?: string;
   }>;
@@ -108,7 +108,7 @@ const applicationPluginSchema = {
         required: ["type"],
         properties: {
           type: { type: "string" },
-          requiredCapabilities: { type: "array", items: { type: "string" } },
+          expectedAuthority: { type: "array", items: { type: "string" } },
           refreshScope: { type: "string", minLength: 1 },
           description: { type: "string" },
         },

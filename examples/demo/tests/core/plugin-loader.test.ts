@@ -73,6 +73,9 @@ describe("loadPlugin", () => {
         "delete_branch_mirror",
         "merge_pull_request_mirror",
       ]);
+      expect(result.plugin.credentialRequirements?.[0]).toMatchObject({
+        expectedAuthority: ["issue.write", "pullRequest.merge", "pullRequest.read", "branch.delete"],
+      });
     }
   });
 
@@ -103,6 +106,28 @@ describe("loadPlugin", () => {
       error: {
         code: "PLUGIN_SCHEMA_INVALID",
       },
+    });
+  });
+
+  it.each([
+    ["legacy authority", { type: "oauthToken", requiredCapabilities: ["repo.write"] }],
+    ["mixed authority", { type: "oauthToken", expectedAuthority: ["repo.write"], requiredCapabilities: ["repo.write"] }],
+    ["unknown key", { type: "oauthToken", expectedAuthority: ["repo.write"], authorityHint: "write" }],
+    ["provider scopes", { type: "oauthToken", scopes: ["repo"] }],
+  ])("rejects %s in plugin credential requirements", async (_label, requirement) => {
+    const dir = await mkdtemp(join(tmpdir(), "mpas-plugin-loader-"));
+    const path = join(dir, "invalid-credential-requirement.json");
+    const plugin = JSON.parse(
+      await readFile(join(pluginsDir, "github-mirror-plugin.json"), "utf8"),
+    ) as { credentialRequirements: unknown[] };
+    plugin.credentialRequirements = [requirement];
+    await writeFile(path, JSON.stringify(plugin));
+
+    const result = await loadPlugin(path);
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "PLUGIN_SCHEMA_INVALID" },
     });
   });
 
@@ -197,11 +222,11 @@ describe("loadPlugin resource bounds (N33)", () => {
 
   it("accepts a document at exactly 20,000 nodes and rejects 20,001", async () => {
     const plugin = basePlugin();
-    plugin.credentialRequirements = [{ type: "x", requiredCapabilities: [] as string[] }];
+    plugin.credentialRequirements = [{ type: "x", expectedAuthority: [] as string[] }];
     const base = countJsonNodes(plugin);
-    const requirements = plugin.credentialRequirements as Array<{ requiredCapabilities: string[] }>;
+    const requirements = plugin.credentialRequirements as Array<{ expectedAuthority: string[] }>;
     const padTo = (target: number) => {
-      requirements[0].requiredCapabilities = Array.from({ length: target - base }, () => "a");
+      requirements[0].expectedAuthority = Array.from({ length: target - base }, () => "a");
     };
 
     padTo(PLUGIN_RESOURCE_LIMITS.maxPluginDocumentNodes);

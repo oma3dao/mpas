@@ -370,7 +370,7 @@ function makeGithubPlugin(variant: DemoVariant) {
     credentialRequirements: [
       {
         type: "oauthToken",
-        requiredCapabilities: ["issue.write", "pullRequest.merge", "pullRequest.read", "branch.delete"],
+        expectedAuthority: ["issue.write", "pullRequest.merge", "pullRequest.read", "branch.delete"],
         description: "GitHub OAuth token with repository access for configured repositories.",
       },
     ],
