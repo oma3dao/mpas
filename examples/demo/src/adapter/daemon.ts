@@ -1,3 +1,4 @@
+import { trustContextFromEnvironment } from "./trust-environment.js";
 import { readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
@@ -24,7 +25,6 @@ import { TraceLogger, TraceWriter } from "../core/trace.js";
 import type { Did } from "../core/types.js";
 import { computeJsonHash } from "../core/verification.js";
 import {
-  DEFAULT_TRUST_CONTEXT,
   type TrustContext,
 } from "./trust.js";
 import type { ConfirmPluginUse } from "./trust-prompt.js";
@@ -117,7 +117,7 @@ export async function startDaemon(options: DaemonOptions = {}): Promise<StartedD
   const configDir = options.configDir ?? defaultConfigDir();
   const trustContext =
     options.trustContext === undefined
-      ? DEFAULT_TRUST_CONTEXT
+      ? trustContextFromEnvironment()
       : options.trustContext;
 
   const loaded = await loadDeploymentConfigs(configDir, {

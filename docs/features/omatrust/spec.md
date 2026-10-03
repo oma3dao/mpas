@@ -149,8 +149,17 @@ check.
 
 ### TrustContext
 
-`TrustContext` is an internal injection point, not operator configuration.
-Normal daemon startup uses the complete production Artifact Trust API URL.
+`TrustContext` remains the embedding/test injection point. Normal daemon startup
+uses the mainnet defaults. Operators may explicitly override all three environment
+variables together: `MPAS_ARTIFACT_TRUST_API_URL`,
+`MPAS_ARTIFACT_TRUST_CHAIN_ID`, and `MPAS_ARTIFACT_TRUST_EAS_CONTRACT`.
+Partial tuples, non-HTTPS endpoints, embedded credentials/query/fragment, invalid
+chain IDs, and malformed contract addresses fail startup. An explicit injected
+`trustContext` (including null for existing test usage) takes precedence.
+The response must still match the configured chain ID, CAIP-2 identity, and EAS
+contract; an override does not disable trust checks. These settings are trusted
+operator configuration, never proposer input. No live configuration is changed
+by adding this support.
 RPC, schema, issuer, and verification policy remain backend concerns. MPAS
 binds each endpoint context to the chain and EAS deployment it expects so a
 valid response from the wrong network cannot be accepted.
