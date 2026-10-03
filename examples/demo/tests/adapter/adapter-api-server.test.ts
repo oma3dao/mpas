@@ -5,12 +5,13 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
 import { compactVerify, importJWK, type JWK } from "jose";
-import { buildDeliveryEnvelope, type ActionPackage } from "@oma3/mpas";
-import { loadDeploymentConfigs } from "../../src/adapter/config-loader.js";
+import { buildDeliveryEnvelope, computeToolSurfaceHash, type ActionPackage } from "@oma3/mpas";
+import { loadDeploymentConfigs, type LoadedDeploymentConfig } from "../../src/adapter/config-loader.js";
 import { FileCredentialProvider } from "../../src/adapter/credential-provider.js";
 import {
   buildIndeterminateRecoveryResponse,
   createAdapterApiServer,
+  inspectTargetSurface,
 } from "../../src/adapter/adapter-api-server.js";
 import { DispatchLedger } from "../../src/adapter/dispatch-ledger.js";
 import type { Did, ExecutionReceipt, ReceiptPayload } from "../../src/core/types.js";
@@ -47,7 +48,7 @@ async function credentialDir() {
   return dir;
 }
 
-async function makeApp(configDir?: string, ledger?: DispatchLedger) {
+async function makeApp(configDir?: string, ledger?: DispatchLedger, configure?: (entry: LoadedDeploymentConfig) => void) {
   // The shared configs dir holds the mirror and live-demo applications. They
   // have distinct applicationDids, so both route cleanly — no shadowing.
   const effectiveConfigDir = configDir ?? join(fixturesDir, "configs");
@@ -57,6 +58,7 @@ async function makeApp(configDir?: string, ledger?: DispatchLedger) {
   if (!configs.ok) {
     throw new Error(configs.error.message);
   }
+  if (configure) for (const entry of configs.configsByApplicationDid.values()) configure(entry);
   const adapter = await readJson<KeyFixture>(join(fixturesDir, "test-keys", "adapter.json"));
   const app = createAdapterApiServer({
     configsByApplicationDid: configs.configsByApplicationDid,
@@ -396,6 +398,50 @@ describe("HTTP endpoint", () => {
       result: "rejected",
       error: { code: "ACTION_BLOCKED_BY_POLICY" },
     });
+  });
+
+  it.each([true, false])("routes an ungoverned tool only if publisher attested it (%s)", async (attested) => {
+    const tools = attested ? [{ name: "create_issue_mirror", inputSchema: { type: "object" } }] : [];
+    const hash = computeToolSurfaceHash(tools);
+    const app = await makeApp(await makeAutoApproveConfigDir(), undefined, entry => {
+      entry.plugin.toolSurface = { hash, toolNames: tools.map(tool => tool.name) };
+      // Inherited names are not operator policy entries.
+      Object.setPrototypeOf(entry.config.policy.policies!, { create_issue_mirror: [] });
+    });
+    const actionPackage = await readJson<ActionPackage>(join(fixturesDir, "core/valid-no-approval-required.json"));
+    const response = await app.inject({ method: "POST", url: "/mpas/v1/action", payload: {
+      version: "1", type: "ActionRequest", actionPackage, upstreamBinding: { toolSurface: hash },
+    } });
+    expect(response.json()).toMatchObject(attested ? { result: "executed" } : {
+      result: "rejected", error: { code: "OPERATION_NOT_ATTESTED" },
+    });
+  });
+
+  it.each(["missing", "surface", "digest"])("rejects %s binding before preparing an unreachable target", async (mismatch) => {
+    const hash = computeToolSurfaceHash([]);
+    const app = await makeApp(await makeAutoApproveConfigDir(), undefined, entry => {
+      entry.plugin.toolSurface = { hash, toolNames: [] };
+      entry.config.executionTarget = { type: "mcp.stdio", command: missingFixtureServer };
+    });
+    const actionPackage = await readJson<ActionPackage>(join(fixturesDir, "core/valid-no-approval-required.json"));
+    const upstreamBinding = mismatch === "missing" ? undefined : {
+      toolSurface: mismatch === "surface" ? computeToolSurfaceHash([{ name: "different" }]) : hash,
+      ...(mismatch === "digest" ? { upstreamDigest: `sha256:${"a".repeat(64)}` } : {}),
+    };
+    const response = await app.inject({ method: "POST", url: "/mpas/v1/action", payload: {
+      version: "1", type: "ActionRequest", actionPackage, upstreamBinding,
+    } });
+    expect(response.json()).toMatchObject({ result: "rejected", error: { code: "UPSTREAM_BINDING_MISMATCH" } });
+  });
+
+  it("reports startup tool drift without dispatching an operation", async () => {
+    const configs = await loadDeploymentConfigs(await makeAutoApproveConfigDir(), { confirmPluginUse: async () => true });
+    if (!configs.ok) throw new Error(configs.error.message);
+    const entry = [...configs.configsByApplicationDid.values()][0]!;
+    entry.plugin.toolSurface = { hash: computeToolSurfaceHash([]), toolNames: [] };
+    const report = await inspectTargetSurface(entry, new FileCredentialProvider(await credentialDir()));
+    expect(report).toMatchObject({ status: "drift", schemaDrift: true });
+    expect(report.unknownTools?.length).toBeGreaterThan(0);
   });
 
   it("rejects an ungoverned operation when passThrough is deny", async () => {

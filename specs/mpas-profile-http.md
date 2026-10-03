@@ -625,6 +625,43 @@ Fields:
 | `audience`       | Conditional | Action endpoint origin only when this is the outer body of a signed bare request.     |
 | `context`       | Optional | Non-authoritative request metadata. MUST NOT override policy or MPAS artifact contents. |
 
+#### Bridge/upstream synchronization binding
+
+`ActionRequest.upstreamBinding` is optional non-authoritative infrastructure
+metadata: `{ "toolSurface": { "alg": "sha-256", "value": "…" },
+"upstreamDigest": "sha256:…" }`. Only `toolSurface` is required within it;
+`upstreamDigest`, when supplied, MUST be a lowercase 64-hex OCI SHA-256 digest.
+The binding and hash objects are closed. Hash construction is defined in the
+Application Plugin Profile §6.3; this is the complete captured tool surface.
+
+Bridges MUST attach their generation-time binding on every initial and completed
+Action submission, including exact retries. It stays outside the Action Envelope
+and Action Package; it MUST NOT affect approval semantics, policy evaluation,
+credential selection, or application identity. Request authentication covers it
+as HTTP metadata, and normal idempotency comparison includes it.
+
+After resolving the deployment by application DID, and before policy/dispatch,
+the adapter MUST compare the binding to that deployment's loaded plugin surface
+and execution-target digest pin. Comparison is per request, never merely startup.
+A supplied binding without a matching plugin surface MUST be rejected. A missing
+binding MUST be rejected for surface-aware plugins. For legacy plugins without a
+surface, absent binding retains compatibility. When either side supplies a digest,
+both MUST supply the same pin. The reference implementation recognizes explicit
+`image@sha256:<64 hex>` execution-target arguments; it does not resolve floating
+tags or claim to attest the live HTTP server implementation. Ambiguous pins are
+configuration errors. This check is synchronization, not proof of trust.
+
+| Code | ActionResponse result | Meaning |
+| --- | --- | --- |
+| `UPSTREAM_BINDING_MISMATCH` | `rejected` | Missing/mismatched surface-aware binding or upstream pin; no dispatch. |
+| `OPERATION_NOT_ATTESTED` | `rejected` | Ungoverned operation absent from the plugin's attested surface; no dispatch. |
+
+Both are stateless, non-retryable-until-corrected rejections. Live tool discovery
+is diagnostic; the installed plugin and trusted policy still determine routing.
+See MCP profile §5/§6.2 and Application Plugin Profile §6.3. Plugin migration,
+bridge regeneration and adapter rollout must be coordinated; publishing an SDK
+alone does not update deployed artifacts.
+
 The same endpoint and request type are used for:
 
 - A1 Action Package submission for execution or policy evaluation;

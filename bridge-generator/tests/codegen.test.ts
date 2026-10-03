@@ -214,3 +214,17 @@ describe("inferImpact", () => {
     expect(inferImpact(name)).toBe(impact);
   });
 });
+
+
+describe("baked surface binding", () => {
+  it("emits the same full surface into plugin and bridge with an explicit OCI digest", () => {
+    const pin = `sha256:${"a".repeat(64)}`;
+    const info = { ...upstream, command: "docker", args: ["run", `image@${pin}`] };
+    const plugin = JSON.parse(generatePlugin(info.tools, info.protocolVersion));
+    expect(plugin.toolSurface.toolNames).toEqual(info.tools.map(tool => tool.name).sort());
+    const code = generateBridge(info);
+    expect(code).toContain(plugin.toolSurface.hash.value);
+    expect(code).toContain(pin);
+    expect(code).toContain("upstreamBinding:");
+  });
+});

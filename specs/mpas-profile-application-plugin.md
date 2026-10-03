@@ -316,6 +316,33 @@ In contrast, `pluginDid` (§6.1) identifies the plugin line across versions. Bot
 
 ---
 
+### 6.3 Attested MCP tool surface
+
+An MCP plugin MAY include `toolSurface`, a closed object with `hash` and
+`toolNames`. `toolNames` MUST contain the unique names from the complete captured
+`tools/list`, including deliberately ungoverned tools. Publishers SHOULD emit
+names in ascending UTF-16 code-unit order. An empty surface is valid.
+
+The normative hash is unpadded base64url(SHA-256(UTF-8(JCS(sorted tools array)))).
+Sort complete tool definitions by `name` using ascending UTF-16 code-unit order;
+reject duplicate names. Preserve every field, including schemas, descriptions,
+annotations and extensions. Cosmetic changes therefore change this hash. Do not
+hash discovery timestamps, pagination wrappers, or server metadata. The generator,
+plugin, registry and bridge MUST use the same captured full definitions. No
+`capturedAt` is included here; generator metadata carries that timestamp separately
+so unchanged generation artifacts remain deterministic.
+
+The hash object MUST use `alg: "sha-256"` and a canonical 32-byte base64url value.
+The plugin artifact DID covers this declaration, so updating it requires the normal
+artifact/attestation migration. This attests the publisher's declared surface;
+it does not authenticate a live server or prove its implementation safe.
+See MCP profile §5 for routing and HTTP profile §6.3 for bridge synchronization.
+
+Test vector: an empty tools array canonicalizes to `[]` and hashes to
+`T1PNoYwrqgwDVLtfmj7L5e0Sq02OEbqHPC8RFhICuUU`.
+
+---
+
 ## 7. Execution Profile Binding
 
 The `executionProfile` object identifies the execution profile and payload format described by the plugin.
@@ -880,6 +907,41 @@ This appendix provides an initial JSON Schema for structural validation. The sch
     "operations"
   ],
   "properties": {
+    "toolSurface": {
+      "type": "object",
+      "required": [
+        "hash",
+        "toolNames"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "hash": {
+          "type": "object",
+          "required": [
+            "alg",
+            "value"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "alg": {
+              "const": "sha-256"
+            },
+            "value": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$"
+            }
+          }
+        },
+        "toolNames": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
     "version": {
       "const": "1"
     },

@@ -21,6 +21,7 @@ export interface MpasApplicationPlugin {
     refreshScope?: string;
     description?: string;
   }>;
+  toolSurface?: { hash: import("../types/mpas.js").HashObject; toolNames: string[] };
   operations: Record<string, MpasOperationDescriptor>;
 }
 
@@ -85,6 +86,14 @@ const applicationPluginSchema = {
     "operations",
   ],
   properties: {
+    toolSurface: {
+      type: "object", additionalProperties: false, required: ["hash", "toolNames"],
+      properties: {
+        hash: { type: "object", additionalProperties: false, required: ["alg", "value"],
+          properties: { alg: { const: "sha-256" }, value: { type: "string", pattern: "^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$" } } },
+        toolNames: { type: "array", uniqueItems: true, items: { type: "string", minLength: 1 } },
+      },
+    },
     version: { const: "1" },
     type: { const: "MpasApplicationPlugin" },
     pluginDid: { type: "string", pattern: "^did:[a-z0-9]+:.+" },

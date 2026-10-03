@@ -18,6 +18,7 @@ import { dirname, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
 import {
+  computeToolSurfaceHash,
   ActionPackageBuilder,
   ActionEndpointClient,
   CoordinationServiceClient,
@@ -166,6 +167,7 @@ export class GeneratedBridge {
         actionEndpoint,
         coordinationService,
         proposerDid: keyManager.did,
+        ...(plugin.toolSurface ? { upstreamBinding: { toolSurface: computeToolSurfaceHash(this.tools) } } : {}),
         resultRetentionSeconds: workflow.resultRetentionSeconds ?? 86_400,
         ...(workflow.pollIntervalMs !== undefined ? { pollIntervalMs: workflow.pollIntervalMs } : {}),
         ...(workflow.taskPollIntervalMs !== undefined ? { taskPollIntervalMs: workflow.taskPollIntervalMs } : {}),

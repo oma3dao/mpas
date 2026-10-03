@@ -127,6 +127,7 @@ export async function runGenerate(options: GenerateOptions): Promise<void> {
   // advisory only and never drives membership.
   const governedTools = selectGovernedTools(snapshot.tools, previousPlugin, previousSnapshot, log);
   const plugin = JSON.parse(generatePlugin(governedTools, upstream.protocolVersion)) as GeneratedPlugin;
+  plugin.toolSurface = { hash: snapshot.toolSurface, toolNames: snapshot.tools.map(tool => tool.name) };
   if (previousPlugin) {
     plugin.pluginDid = previousPlugin.pluginDid ?? plugin.pluginDid;
     plugin.pluginVersion = previousPlugin.pluginVersion ?? plugin.pluginVersion;

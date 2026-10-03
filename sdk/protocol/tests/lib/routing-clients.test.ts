@@ -37,6 +37,21 @@ describe("routing clients", () => {
     expect(submitted).toMatchObject({ type: "DeliveryEnvelope", payload: { type: "ActionRequest" } });
   });
 
+  it("attaches configured binding on every bare and enveloped submission", async () => {
+    const requests: any[] = [];
+    const server = await mockServer(async (request, response) => {
+      requests.push(JSON.parse(await body(request)));
+      json(response, actionResponse());
+    });
+    const upstreamBinding = { toolSurface: { alg: "sha-256" as const, value: "T1PNoYwrqgwDVLtfmj7L5e0Sq02OEbqHPC8RFhICuUU" } };
+    const client = new ActionEndpointClient({ url: server.url, upstreamBinding });
+    await client.submitActionRequest(actionRequest());
+    await client.submitActionRequest(buildDeliveryEnvelope({ sender: proposer, recipients: [verifier], payload: actionRequest() }));
+    expect(requests[0].upstreamBinding).toEqual(upstreamBinding);
+    expect(requests[1].payload.upstreamBinding).toEqual(upstreamBinding);
+    expect(requests[0].actionPackage).not.toHaveProperty("upstreamBinding");
+  });
+
   it("submits only an enveloped Action through the Action Relay client", async () => {
     let submitted: unknown;
     const server = await mockServer(async (request, response) => {

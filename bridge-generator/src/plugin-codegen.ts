@@ -1,3 +1,4 @@
+import { computeToolSurfaceHash, sortTools } from "./artifacts.js";
 import type { GeneratedPlugin, McpToolDefinition } from "./types.js";
 
 export function generatePlugin(tools: McpToolDefinition[], protocolVersion: string): string {
@@ -14,6 +15,7 @@ export function generatePlugin(tools: McpToolDefinition[], protocolVersion: stri
       protocolVersion,
     },
     credentialRequirements: [],
+    toolSurface: { hash: computeToolSurfaceHash(tools), toolNames: sortTools(tools).map(tool => tool.name) },
     operations: Object.fromEntries(
       tools.map((tool) => [
         tool.name,

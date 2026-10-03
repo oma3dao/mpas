@@ -49,6 +49,7 @@ export interface BridgeUpstreamTool {
 }
 
 export interface ProposerBridgeOptions {
+  upstreamBinding?: import("../types/mpas.js").UpstreamBinding;
   tools: BridgeUpstreamTool[];
   buildActionPackage: (toolName: string, args: object) => Promise<ActionPackage>;
   buildCoordinationReplacement: BuildCoordinationReplacement;
@@ -142,6 +143,7 @@ export class ProposerBridge {
       ...(options.coordination !== undefined ? { coordination: options.coordination } : {}),
       buildCoordinationReplacement: options.buildCoordinationReplacement,
       proposerDid: options.proposerDid,
+      ...(options.upstreamBinding !== undefined ? { upstreamBinding: options.upstreamBinding } : {}),
       ...(options.workerId !== undefined ? { workerId: options.workerId } : {}),
       submissionTimeoutMs: options.submissionTimeoutMs ?? inferredSubmissionTimeoutMs(options),
       ...(options.claimLeaseMs !== undefined ? { claimLeaseMs: options.claimLeaseMs } : {}),
