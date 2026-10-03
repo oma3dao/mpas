@@ -73,6 +73,16 @@ describe("official MCP Task result builders", () => {
     expect(result._meta?.["org.oma3/mpas"]).not.toHaveProperty("approvalCount");
   });
 
+  it.each([undefined, null, {}, { anyOf: [] }, { surprise: [] },
+    { anyOf: [{ type: "threshold", threshold: 0, eligibleSigners: [PROPOSER_DID] }] },
+    { anyOf: [{ type: "threshold", threshold: 1, eligibleSigners: [] }] },
+    { anyOf: [{ type: "threshold", threshold: 1, eligibleSigners: ["not-a-did"] }] },
+    { overrideSigners: [{ signer: PROPOSER_DID, permissions: [] }] },
+  ])("does not emit malformed transparent requirements: %j", (requirements) => {
+    const record = workflow({ state: "awaitingApprovals", authorizationRequirements: { approvalRequirements: requirements } });
+    expect(() => buildGetTaskResult(record, CONFIG)).toThrow("invalid transparent approval requirements");
+  });
+
   it("passes through the native CallToolResult and extends terminal TTL to retention", () => {
     const nativeResult = { content: [{ type: "text", text: "merged" }], isError: false };
     const record = workflow({

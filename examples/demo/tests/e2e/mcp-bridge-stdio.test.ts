@@ -1,3 +1,4 @@
+import { createServer, type Server } from "node:http";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { execSync } from "node:child_process";
 import { mkdtemp, writeFile } from "node:fs/promises";
@@ -19,6 +20,10 @@ const TASK_META = {
   },
 };
 
+let authorizationClient: JsonRpcStdioClient;
+let authorizationServer: Server;
+const required = { anyOf: [{ type: "threshold", threshold: 1, eligibleSigners: ["did:web:maintainer.example"] }] };
+
 let tasksClient: JsonRpcStdioClient;
 let compatibilityClient: JsonRpcStdioClient;
 
@@ -37,6 +42,43 @@ beforeAll(async () => {
     }),
   );
 
+  authorizationServer = createServer(async (req, res) => {
+    const chunks: Buffer[] = [];
+    for await (const chunk of req) chunks.push(Buffer.from(chunk));
+    const body = JSON.parse(Buffer.concat(chunks).toString());
+    res.setHeader("content-type", "application/json");
+    if (req.url === "/mpas/v1/verifier/action") {
+      res.end(JSON.stringify({
+        version: "1", type: "ActionResponse", result: "additionalApprovalsRequired",
+        verifier: { did: "did:web:verifier.example" },
+        authorizationRequirements: {
+          version: "1", type: "AuthorizationRequirements", result: "additionalApprovalsRequired",
+          verifier: { did: "did:web:verifier.example" },
+          actionEnvelopeHash: body.actionPackage.approvalBundle.actionEnvelopeHash,
+          approvalRequirements: required,
+        },
+      }));
+    } else if (req.url === "/mpas/v1/coordination/workflow") {
+      res.end(JSON.stringify({
+        version: "1", type: "CoordinationActionResponse", state: "pendingApprovals",
+        actionRef: { actionId: body.actionPackage.actionEnvelope.actionId },
+      }));
+    } else { res.statusCode = 404; res.end("{}"); }
+  });
+  await new Promise<void>(resolve => authorizationServer.listen(0, "127.0.0.1", resolve));
+  const address = authorizationServer.address();
+  if (!address || typeof address === "string") throw new Error("Missing fixture address");
+  const url = `http://127.0.0.1:${address.port}`;
+  const authorizationConfig = join(configDir, "authorization-config.json");
+  await writeFile(authorizationConfig, JSON.stringify({
+    plugin: join(demoRoot, "tests/fixtures/plugins/github-mirror-plugin.json"),
+    adapter: { url }, coordination: { url },
+    agent: { keyFile: join(demoRoot, "tests/fixtures/test-keys/proposer.json") },
+    workflow: { pollIntervalMs: 60_000 },
+  }));
+  authorizationClient = new JsonRpcStdioClient(process.execPath,
+    [join(demoRoot, "dist/bridge/github-bridge.js"), "--config", authorizationConfig]);
+
   const bridgeArgs = [join(demoRoot, "dist", "bridge", "github-bridge.js"), "--config", configPath];
   tasksClient = new JsonRpcStdioClient(
     process.execPath,
@@ -46,7 +88,9 @@ beforeAll(async () => {
 }, 120_000);
 
 afterAll(async () => {
-  await Promise.all([tasksClient?.close(), compatibilityClient?.close()]);
+  await Promise.all([tasksClient?.close(), compatibilityClient?.close(), authorizationClient?.close()]);
+  authorizationServer?.closeAllConnections();
+  await new Promise<void>(resolve => authorizationServer ? authorizationServer.close(() => resolve()) : resolve());
 });
 
 describe("MCP 2026 stdio transport smoke test", () => {
@@ -71,6 +115,17 @@ describe("MCP 2026 stdio transport smoke test", () => {
       "merge_pull_request_demo",
     ]);
     expect(tools.find((tool) => tool.name === "merge_pull_request_demo")?.description).toBe("Merge a pull request.");
+  });
+
+  it("exposes authorization-required requirements over real stdio without client signature transport", async () => {
+    const created = await authorizationClient.request("tools/call", {
+      name: "delete_branch_demo", arguments: { owner: "example", repo: "demo", branch: "review" }, _meta: TASK_META,
+    });
+    expect(created).toMatchObject({ resultType: "task", status: "working" });
+    await expect.poll(async () => authorizationClient.request("tasks/get", {
+      taskId: created.taskId, _meta: TASK_META,
+    }), { timeout: 5000 }).toMatchObject({ taskId: created.taskId, status: "working",
+      _meta: { "org.oma3/mpas": { authorizationState: "authorization_required", requirements: required } } });
   });
 
   it("creates and retrieves a flat official Task", async () => {

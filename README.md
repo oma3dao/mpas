@@ -111,6 +111,7 @@ dependencies, build each package, and run the test suites in dependency order:
 ```sh
 npm ci --prefix sdk/protocol
 npm run build --prefix sdk/protocol
+npm run typecheck --prefix sdk/protocol
 npm test --prefix sdk/protocol
 
 npm ci --prefix bridge-generator
@@ -119,8 +120,8 @@ npm test --prefix bridge-generator
 
 npm ci --prefix examples/demo
 npm run build --prefix examples/demo
+npm run typecheck --prefix examples/demo
 npm test --prefix examples/demo
-npm run test:e2e:mcp-bridge --prefix examples/demo
 ```
 
 For the complete local governed-action walkthrough, including proposer,

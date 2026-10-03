@@ -1,3 +1,4 @@
+import { parseApprovalRequirements } from "./approval-requirements-schema.js";
 import type { ActionPackage, ApprovalRequirements, HashObject } from "../types/mpas.js";
 import type { WorkflowRecord } from "./workflow-store.js";
 
@@ -23,7 +24,7 @@ export function buildMpasTaskMeta(record: WorkflowRecord): MpasTaskMeta {
   }
 
   const authorizationState = authorizationStateOf(record);
-  const requirements = approvalRequirementsOf(record);
+  const requirements = authorizationState === "authorization_required" ? approvalRequirementsOf(record) : undefined;
   return {
     version: "2",
     actionId: record.actionId,
@@ -64,11 +65,13 @@ function authorizationStateOf(record: WorkflowRecord): MpasTaskMeta["authorizati
 
 function approvalRequirementsOf(record: WorkflowRecord): ApprovalRequirements | undefined {
   const value = record.authorizationRequirements;
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
-  const requirements = (value as Record<string, unknown>).approvalRequirements;
-  return typeof requirements === "object" && requirements !== null && !Array.isArray(requirements)
-    ? (requirements as unknown as ApprovalRequirements)
-    : undefined;
+  const requirements = typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>).approvalRequirements : undefined;
+  try {
+    return parseApprovalRequirements(requirements);
+  } catch {
+    throw new Error(`Workflow ${record.taskId} has invalid transparent approval requirements.`);
+  }
 }
 
 function actionPackageOf(record: WorkflowRecord): ActionPackage {
