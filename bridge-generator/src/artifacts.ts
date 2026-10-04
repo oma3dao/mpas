@@ -86,6 +86,7 @@ export function sortTools(tools: McpToolDefinition[]): McpToolDefinition[] {
  * proposal) — one definition for snapshot, plugin, harness, and registry.
  */
 export function computeToolSurfaceHash(tools: McpToolDefinition[]): HashObject {
+  if (new Set(tools.map(tool => tool.name)).size !== tools.length) throw new Error("Duplicate tool names");
   const canonical = canonicalize(sortTools(tools));
   return {
     alg: "sha-256",
