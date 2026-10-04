@@ -1,3 +1,4 @@
+import { computeToolSurfaceHash } from "./artifacts.js";
 import type { McpToolDefinition, UpstreamInfo } from "./types.js";
 
 /** Emits a production proposer bridge with Tasks-first MCP protocol detection. */
@@ -5,6 +6,12 @@ export function generateBridge(info: UpstreamInfo): string {
   const upstream = [info.command, ...info.args].join(" ");
   const serverName = `${info.serverName}-mpas-bridge`;
   const serverVersion = info.serverVersion ?? "1.0.0";
+  const pins = [...new Set(info.args.flatMap(arg => {
+    const match = /^[^\s]+@(sha256:[a-fA-F0-9]{64})$/.exec(arg);
+    return match ? [match[1]!.toLowerCase()] : [];
+  }))];
+  if (pins.length > 1) throw new Error("Ambiguous upstream image digest pins");
+  const binding = { toolSurface: computeToolSurfaceHash(info.tools), ...(pins[0] ? { upstreamDigest: pins[0] } : {}) };
 
   return `#!/usr/bin/env node
 /**
@@ -175,6 +182,7 @@ export class GeneratedBridge {
         actionEndpoint,
         coordinationService,
         proposerDid: keyManager.did,
+        upstreamBinding: ${JSON.stringify(binding)},
         resultRetentionSeconds: workflow.resultRetentionSeconds ?? 86_400,
         ...(workflow.pollIntervalMs !== undefined ? { pollIntervalMs: workflow.pollIntervalMs } : {}),
         ...(workflow.taskPollIntervalMs !== undefined ? { taskPollIntervalMs: workflow.taskPollIntervalMs } : {}),

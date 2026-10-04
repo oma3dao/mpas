@@ -19,6 +19,8 @@ import { FileCredentialProvider } from "./credential-provider.js";
 import {
   buildIndeterminateRecoveryResponse,
   createAdapterApiServer,
+  inspectTargetSurface,
+  type ToolSurfaceDrift,
 } from "./adapter-api-server.js";
 import { DispatchLedger, FileDispatchJournal } from "./dispatch-ledger.js";
 import { TraceLogger, TraceWriter } from "../core/trace.js";
@@ -132,9 +134,19 @@ export async function startDaemon(options: DaemonOptions = {}): Promise<StartedD
   const ledger = new DispatchLedger(new FileDispatchJournal(options.journalPath ?? defaultJournalPath()));
   const traceWriter = options.tracePath ? new TraceWriter(options.tracePath) : undefined;
   const traceLogger = new TraceLogger("adapter", traceWriter);
+  const credentialProvider = new FileCredentialProvider(options.credentialDir ?? defaultCredentialDir());
+  const toolSurfaceDrift = new Map<Did, ToolSurfaceDrift>();
+  for (const [did, config] of loaded.configsByApplicationDid) {
+    const report: ToolSurfaceDrift = await inspectTargetSurface(config, credentialProvider).catch(() => ({ status: "unavailable" as const }));
+    toolSurfaceDrift.set(did, report);
+    if (report.status !== "matched" || report.ungovernedTools?.length) {
+      console.warn(JSON.stringify({ level: "warn", event: "tool_surface_drift", applicationDid: did, ...report }));
+    }
+  }
   const app = createAdapterApiServer({
     configsByApplicationDid: loaded.configsByApplicationDid,
-    credentialProvider: new FileCredentialProvider(options.credentialDir ?? defaultCredentialDir()),
+    credentialProvider,
+    toolSurfaceDrift,
     adapterDid: adapterKey.did,
     adapterSigner: KeyManager.fromJwk(adapterKey.privateJwk, { did: adapterKey.did }),
     maxEnvelopeValidityMs: options.maxEnvelopeValidityMs,

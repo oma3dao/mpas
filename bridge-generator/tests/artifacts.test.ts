@@ -27,6 +27,11 @@ const upstream: UpstreamInfo = {
 };
 
 describe("toolSurface hash (spec §3.2)", () => {
+  it.each([false, true])("rejects duplicate names even when definitions differ (%s)", (differentSchema) => {
+    const duplicate = { ...tools[0], ...(differentSchema ? { inputSchema: { type: "string" } } : {}) };
+    expect(() => computeToolSurfaceHash([...tools, duplicate])).toThrow("Duplicate tool names");
+  });
+
   it("is order-independent: any input ordering yields the same hash", () => {
     const shuffled = [tools[2], tools[0], tools[1]];
     expect(computeToolSurfaceHash(shuffled)).toEqual(computeToolSurfaceHash(tools));

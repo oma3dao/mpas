@@ -130,6 +130,7 @@ function fakeCoordination(updates: () => CoordinationActionUpdate[] = () => []):
 
 function makeEngine(opts: {
   adapter?: WorkflowAdapter;
+  upstreamBinding?: import("../../src/index.js").UpstreamBinding;
   actionEndpoint?: WorkflowActionEndpoint;
   coordination?: WorkflowCoordination;
   store?: WorkflowStore;
@@ -145,6 +146,7 @@ function makeEngine(opts: {
       : { adapter: opts.adapter! }),
     coordination: opts.coordination ?? fakeCoordination(),
     proposerDid: PROPOSER_DID,
+    ...(opts.upstreamBinding ? { upstreamBinding: opts.upstreamBinding } : {}),
     buildCoordinationReplacement: async (priorPackage, verifierRequirements) => {
       const prior = priorPackage;
       const actionPackage = {
@@ -273,11 +275,14 @@ describe("propose", () => {
       state: "readyForSubmission",
       actionPackage: completedPackageForTest("completed-replacement-package"),
     }]);
-    const { engine, store } = makeEngine({ actionEndpoint, coordination });
+    const upstreamBinding = { toolSurface: { alg: "sha-256" as const, value: "T1PNoYwrqgwDVLtfmj7L5e0Sq02OEbqHPC8RFhICuUU" } };
+    const { engine, store } = makeEngine({ actionEndpoint, coordination, upstreamBinding });
 
     await engine.propose(proposalInput());
     const replacementKey = store.getWorkflow(TASK_ID)?.actionIdempotencyKey;
     await engine.pollOnce();
+    expect(requests).toHaveLength(2);
+    expect(requests.every(request => JSON.stringify(request.upstreamBinding) === JSON.stringify(upstreamBinding))).toBe(true);
 
     expect(replacementKey).toBeTruthy();
     expect(replacementKey).not.toBe(IDEMPOTENCY_KEY);

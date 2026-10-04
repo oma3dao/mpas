@@ -75,3 +75,5 @@ export * from "./lib/trace.js";
 export * from "./lib/signer.js";
 export { getSignatureSuite, resolveSignatureSuite, validatePublicJwk, normalizePublicJwk, samePublicKey } from "./lib/signature-suites.js";
 export type { SignatureSuiteId, MpasJwsAlgorithm, MpasHttpSignatureAlgorithm, MpasSignatureSuite } from "./lib/signature-suites.js";
+
+export { computeToolSurfaceHash, upstreamDigestFromArgs, upstreamBindingMatches } from "./lib/upstream-binding.js";

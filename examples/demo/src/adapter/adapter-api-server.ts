@@ -1,6 +1,6 @@
 import Fastify, { type FastifyInstance, type FastifyReply, type RouteHandlerMethod } from "fastify";
 import type { JWK } from "jose";
-import { KeyManager, validateSignerIdentity, type MpasJwsSigner, parseActionRequest, parseActionRequestEnvelope, strictJsonParse, validateMcpPayloadStructure } from "@oma3/mpas";
+import { KeyManager, validateSignerIdentity, type MpasJwsSigner, parseActionRequest, parseActionRequestEnvelope, upstreamBindingMatches, upstreamDigestFromArgs, computeToolSurfaceHash, strictJsonParse, validateMcpPayloadStructure } from "@oma3/mpas";
 import { buildAuthorizationRequirements } from "../core/auth-requirements-builder.js";
 import { checkProposerAuthorization, evaluatePolicy, type PolicyConfig } from "../core/policy-engine.js";
 import { validatePayloadAgainstPlugin } from "../core/plugin-loader.js";
@@ -43,6 +43,7 @@ export interface HttpEndpointOptions {
   /** Deterministic clock for testing. Defaults to Date.now(). */
   now?: number;
   traceLogger?: TraceLogger;
+  toolSurfaceDrift?: Map<Did, ToolSurfaceDrift>;
 }
 
 export function createAdapterApiServer(options: HttpEndpointOptions): FastifyInstance {
@@ -92,13 +93,15 @@ export function createAdapterApiServer(options: HttpEndpointOptions): FastifyIns
     loadedConfigs: Array.from(options.configsByApplicationDid.values()).map((entry) => ({
       name: entry.config.name,
       applicationDid: entry.config.target.applicationDid,
+      toolSurfaceDrift: options.toolSurfaceDrift?.get(entry.config.target.applicationDid) ?? { status: "not_checked" },
     })),
   }));
 
   const actionHandler: RouteHandlerMethod = async (request, reply) => {
     const endpoint = request.routeOptions.url;
     // The submission body is an ActionRequest wrapping the Action Package.
-    const actionPackage = unwrapActionPackage(request.body, options.adapterDid);
+    const actionRequest = unwrapActionRequest(request.body, options.adapterDid);
+    const actionPackage = actionRequest.actionPackage;
 
     // Cannot parse far enough to compute actionEnvelopeHash -> 400 MpasHttpError.
     const parseResult = parseActionPackage(actionPackage);
@@ -128,6 +131,20 @@ export function createAdapterApiServer(options: HttpEndpointOptions): FastifyIns
     }
     trace.emit("verification_step", { actionId, step: "structural_validation", passed: true });
 
+    const loadedConfig = options.configsByApplicationDid.get(pkg.actionEnvelope.target.applicationDid);
+    if (!loadedConfig) {
+      trace.emit("dispatch", { actionId, result: "rejected", code: "UNKNOWN_APPLICATION" });
+      return rejection(pkg, options, envelopeHash, "rejected", "UNKNOWN_APPLICATION", "Unknown application.");
+    }
+
+    const target = loadedConfig.config.executionTarget;
+    const digest = target.type === "mcp.stdio" ? upstreamDigestFromArgs(target.args ?? []) : undefined;
+    if (!upstreamBindingMatches(actionRequest.upstreamBinding, loadedConfig.plugin.toolSurface?.hash, digest)) {
+      trace.emit("verification_step", { actionId, step: "upstream_binding", passed: false });
+      return actionResponse(options, { result: "rejected", actionEnvelopeHash: envelopeHash,
+        error: { code: "UPSTREAM_BINDING_MISMATCH", message: "Bridge binding does not match the loaded plugin surface or execution-target digest pin." } });
+    }
+
     // Action Lifecycle: dispatch-ledger check. An actionId already in the ledger is
     // never dispatched again.
     const ledgerCheck = ledger.check(pkg.actionEnvelope.actionId, envelopeHash.value);
@@ -138,12 +155,6 @@ export function createAdapterApiServer(options: HttpEndpointOptions): FastifyIns
     if (ledgerCheck.kind === "reject") {
       trace.emit("dispatch", { actionId, result: "rejected", reason: "ledger_reject", code: ledgerCheck.code });
       return rejection(pkg, options, envelopeHash, "rejected", ledgerCheck.code, ledgerCheck.message);
-    }
-
-    const loadedConfig = options.configsByApplicationDid.get(pkg.actionEnvelope.target.applicationDid);
-    if (!loadedConfig) {
-      trace.emit("dispatch", { actionId, result: "rejected", code: "UNKNOWN_APPLICATION" });
-      return rejection(pkg, options, envelopeHash, "rejected", "UNKNOWN_APPLICATION", "Unknown application.");
     }
 
     // Stateless deterministic rejections (record nothing, repeatable verdict).
@@ -237,7 +248,7 @@ export function createAdapterApiServer(options: HttpEndpointOptions): FastifyIns
 
     const payloadValidation = validatePayloadAgainstPlugin(pkg.executionPayload, loadedConfig.plugin);
     const opName = operationName(pkg);
-    const inPolicy = opName !== undefined && loadedConfig.config.policy.policies?.[opName] !== undefined;
+    const inPolicy = opName !== undefined && Object.hasOwn(loadedConfig.config.policy.policies ?? {}, opName);
     const inPlugin = payloadValidation.ok;
     const isGovernedOperation = inPlugin || payloadValidation.error.code !== "UNKNOWN_OPERATION" || inPolicy;
 
@@ -290,6 +301,10 @@ export function createAdapterApiServer(options: HttpEndpointOptions): FastifyIns
       // adapter's credential on the proposer's signature alone, and
       // defaultRequirement does NOT apply. Power users who want a closed
       // world instead set passThrough: "deny" in the deployment config.
+      if (loadedConfig.plugin.toolSurface && (!opName || !loadedConfig.plugin.toolSurface.toolNames.includes(opName))) {
+        return rejection(pkg, options, envelopeHash, "rejected", "OPERATION_NOT_ATTESTED",
+          "Operation is absent from the publisher-attested tool surface.");
+      }
       if (loadedConfig.config.passThrough === "deny") {
         trace.emit("verification_step", { actionId, step: "routing_decision", passed: false, path: "pass-through", operation: operationName(pkg) });
         return rejection(
@@ -440,6 +455,39 @@ export function classifyDispatch(dispatchResult: McpDispatchResult): {
     default:
       return { result: "failed", error: { code: dispatchResult.error.code, message: dispatchResult.error.message } };
   }
+}
+
+export interface ToolSurfaceDrift {
+  status: "matched" | "drift" | "legacy" | "unavailable" | "not_checked";
+  unknownTools?: string[];
+  missingTools?: string[];
+  ungovernedTools?: string[];
+  schemaDrift?: boolean;
+}
+
+/** Diagnostic-only startup probe: never dispatch tools or alter authorization. */
+export async function inspectTargetSurface(loaded: LoadedDeploymentConfig, credentials: FileCredentialProvider): Promise<ToolSurfaceDrift> {
+  const handle = loaded.config.credentialBindings[0]?.credentialHandle;
+  const managed = loaded.config.executionTarget.type === "mcp.http" && loaded.config.executionTarget.auth?.type === "oauth2";
+  const credential = !managed && handle ? await credentials.getCredential(handle) : undefined;
+  if (!managed && !credential?.ok) return { status: "unavailable" };
+  const prepared = await prepareTarget(loaded, credential?.ok ? credential.value : undefined, credentials.directory);
+  if (!prepared.ok || !prepared.session.listTools) return { status: "unavailable" };
+  try {
+    const tools = await prepared.session.listTools();
+    const actualHash = computeToolSurfaceHash(tools);
+    const actual = new Set(tools.map(tool => tool.name));
+    const surface = loaded.plugin.toolSurface;
+    const expected = new Set(surface?.toolNames ?? Object.keys(loaded.plugin.operations));
+    const unknownTools = [...actual].filter(name => !expected.has(name)).sort();
+    const missingTools = [...expected].filter(name => !actual.has(name)).sort();
+    const ungovernedTools = [...actual].filter(name => !Object.hasOwn(loaded.plugin.operations, name) &&
+      !Object.hasOwn(loaded.config.policy.policies ?? {}, name)).sort();
+    const schemaDrift = surface !== undefined && surface.hash.value !== actualHash.value;
+    return { status: surface ? (unknownTools.length || missingTools.length || schemaDrift ? "drift" : "matched") : "legacy",
+      unknownTools, missingTools, ungovernedTools, schemaDrift };
+  } catch { return { status: "unavailable" }; }
+  finally { await prepared.session.close(); }
 }
 
 async function prepareTarget(
@@ -622,7 +670,7 @@ function mpasHttpError(reply: FastifyReply, status: number, code: string, messag
   });
 }
 
-function unwrapActionPackage(body: unknown, adapterDid: Did): unknown {
+function unwrapActionRequest(body: unknown, adapterDid: Did): import("@oma3/mpas").ActionRequest {
   try {
     if (isRecord(body) && body.type === "DeliveryEnvelope") {
       const envelope = parseActionRequestEnvelope(body);
@@ -632,9 +680,9 @@ function unwrapActionPackage(body: unknown, adapterDid: Did): unknown {
       if (envelope.sender !== envelope.payload.actionPackage.actionEnvelope.proposer.did) {
         throw new Error("DeliveryEnvelope.sender does not match ActionEnvelope.proposer.did.");
       }
-      return envelope.payload.actionPackage;
+      return envelope.payload;
     }
-    return parseActionRequest(body).actionPackage;
+    return parseActionRequest(body);
   } catch (error) {
     const wrapped = error instanceof Error ? error : new Error(String(error));
     (wrapped as Error & { statusCode?: number }).statusCode = 400;

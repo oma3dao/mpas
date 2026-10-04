@@ -451,6 +451,7 @@ export interface PolicySuggestion {
 }
 
 export interface MpasApplicationPlugin {
+  toolSurface?: { hash: HashObject; toolNames: string[] };
   version: MpasVersion;
   type: "MpasApplicationPlugin";
   pluginDid: Did;
@@ -500,7 +501,14 @@ export interface ActionResponseContext {
 }
 
 /** HTTP request wrapper for an MPAS Action Package. */
+/** Bridge-to-adapter synchronization, outside the signed Action Package. */
+export interface UpstreamBinding {
+  toolSurface: HashObject;
+  upstreamDigest?: string;
+}
+
 export interface ActionRequest {
+  upstreamBinding?: UpstreamBinding;
   version: MpasVersion;
   type: "ActionRequest";
   actionPackage: ActionPackage;

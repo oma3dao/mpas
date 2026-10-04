@@ -46,6 +46,7 @@ export interface CredentialRequirement {
 }
 
 export interface GeneratedPlugin {
+  toolSurface?: { hash: { alg: "sha-256"; value: string }; toolNames: string[] };
   version: "1";
   type: "MpasApplicationPlugin";
   pluginDid: string;

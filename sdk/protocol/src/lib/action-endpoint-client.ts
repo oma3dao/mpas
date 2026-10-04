@@ -16,6 +16,8 @@ import { deriveMpasAudience, signMpasRfc9421, type MpasRfc9421Signer } from "./r
 
 /** Configuration for the common MPAS Action endpoint client. */
 export interface ActionEndpointClientConfig {
+  /** Optional fixed binding for native/deprecated submit callers. */
+  upstreamBinding?: ActionRequest["upstreamBinding"];
   /** Base URL of a directly reachable Verifier or an Action Relay. */
   url: string;
   /** Request timeout in milliseconds. Defaults to 30 seconds. */
@@ -28,6 +30,7 @@ export interface ActionEndpointClientConfig {
 
 /** Input for constructing an {@link ActionRequest} around an Action Package. */
 export interface BuildActionRequestInput {
+  upstreamBinding?: ActionRequest["upstreamBinding"];
   /** Complete MPAS Action Package submitted for Verifier processing. */
   actionPackage: ActionPackage;
   /** Body-level key reused across equivalent Action-processing retries. */
@@ -73,6 +76,7 @@ export function buildActionRequest(input: BuildActionRequestInput): ActionReques
     type: "ActionRequest",
     actionPackage: input.actionPackage,
     ...(input.idempotencyKey !== undefined ? { idempotencyKey: input.idempotencyKey } : {}),
+    ...(input.upstreamBinding !== undefined ? { upstreamBinding: input.upstreamBinding } : {}),
     ...(input.context !== undefined ? { context: input.context } : {}),
   });
 }
@@ -85,6 +89,7 @@ export function buildActionRequest(input: BuildActionRequestInput): ActionReques
  * Verifier-authored {@link ActionResponse}; only the accepted outer request form differs.
  */
 export class ActionEndpointClient {
+  private readonly upstreamBinding?: ActionRequest["upstreamBinding"];
   private readonly url: string;
   private readonly audience: string;
   readonly timeoutMs: number;
@@ -93,6 +98,7 @@ export class ActionEndpointClient {
 
   /** Creates a client bound to one Action endpoint origin. */
   constructor(config: ActionEndpointClientConfig) {
+    this.upstreamBinding = config.upstreamBinding === undefined ? undefined : structuredClone(config.upstreamBinding);
     this.url = config.url.replace(/\/+$/, "");
     this.audience = deriveMpasAudience(config.url);
     this.timeoutMs = config.timeoutMs ?? 30_000;
@@ -121,6 +127,15 @@ export class ActionEndpointClient {
     } else {
       canonical = parseActionRequest(request);
       requiredDid = canonical.actionPackage.actionEnvelope.proposer.did;
+    }
+
+    if (this.upstreamBinding !== undefined) {
+      const inner = canonical.type === "DeliveryEnvelope" ? canonical.payload : canonical;
+      if (inner.upstreamBinding !== undefined && (inner.upstreamBinding.toolSurface.alg !== this.upstreamBinding.toolSurface.alg || inner.upstreamBinding.toolSurface.value !== this.upstreamBinding.toolSurface.value || inner.upstreamBinding.upstreamDigest !== this.upstreamBinding.upstreamDigest)) {
+        throw new ActionEndpointClientError("Request binding conflicts with configured upstream binding.");
+      }
+      const bound = parseActionRequest({ ...inner, upstreamBinding: this.upstreamBinding });
+      canonical = canonical.type === "DeliveryEnvelope" ? { ...canonical, payload: bound } : bound;
     }
 
     const signer = this.signer ? await this.signer : undefined;

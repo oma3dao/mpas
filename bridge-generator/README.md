@@ -233,3 +233,19 @@ Keys come from the demo CLI (`mpas key generate`, which mints did:jwk identities
 ## What this tool does not do
 
 It does not deploy anything, hold credentials, set policy, or talk to any network endpoint other than spawning the upstream command you give it. Policy (who approves what) is the operator's job via the Credential Adapter deployment config; trust in the plugin is the publisher's job via OMATrust attestation.
+
+### Attested tool surfaces and bridge bindings
+
+Generation now records the complete discovered tool-definition hash and name set
+in `plugin.toolSurface`, including tools intentionally removed from governed
+`operations`. The bridge bakes the same hash and any explicit image SHA-256 pin
+into every ActionRequest (initial, retry and post-approval). Editing only a plugin
+or upstream pin without regenerating its bridge will fail synchronization.
+
+The adapter rejects unknown ungoverned tools for surface-aware plugins; legacy
+plugins without this field retain prior behavior. Startup tools/list diagnostics
+appear under each loaded config's `toolSurfaceDrift` health entry. Schema drift
+warns; it does not rewrite authorization rules. Regeneration changes plugin bytes,
+so update artifact DIDs, attestations and deployment references as part of rollout.
+No timestamps are added to the hashed surface. Full definitions, including
+cosmetic descriptions, are significant; see Application Plugin Profile §6.3.

@@ -49,6 +49,7 @@ export interface DispatchPrepareError {
 }
 
 export interface DispatchSession {
+  listTools?(): Promise<Array<{ name: string; [key: string]: unknown }>>;
   /** Transmit the request and await the outcome. Called AFTER the ledger write. */
   transmit(toolName: string, args: object): Promise<McpDispatchResult>;
   close(): Promise<void>;
@@ -62,6 +63,26 @@ export class McpClientSession implements DispatchSession {
     private readonly timeoutMs: number,
     private readonly connectionFailureCode: "PROCESS_EXITED" | "TRANSPORT_ERROR",
   ) {}
+
+  async listTools(): Promise<Array<{ name: string; [key: string]: unknown }>> {
+    const tools: Array<{ name: string; [key: string]: unknown }> = [];
+    const cursors = new Set<string>();
+    let cursor: string | undefined;
+    const deadline = Date.now() + this.timeoutMs;
+    do {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) throw new Error("Upstream tool discovery timed out");
+      const page = await this.client.listTools(cursor ? { cursor } : {},
+        { timeout: remaining, maxTotalTimeout: remaining });
+      tools.push(...page.tools);
+      cursor = page.nextCursor;
+      if (tools.length > 10000 || cursors.size >= 100 || (cursor && cursors.has(cursor))) {
+        throw new Error("Upstream tool discovery exceeded bounds or repeated a cursor");
+      }
+      if (cursor) cursors.add(cursor);
+    } while (cursor);
+    return tools;
+  }
 
   async transmit(toolName: string, args: object): Promise<McpDispatchResult> {
     try {

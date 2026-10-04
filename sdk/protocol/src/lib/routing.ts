@@ -129,6 +129,20 @@ export function parseActionRequest(value: unknown): ActionRequest {
   requireLiteral(actionPackage.version, "1", "$.actionPackage.version");
   requireLiteral(actionPackage.type, "ActionPackage", "$.actionPackage.type");
   const idempotencyKey = validateOptionalIdempotencyKey(object.idempotencyKey, "$.idempotencyKey");
+  let upstreamBinding: ActionRequest["upstreamBinding"];
+  if (object.upstreamBinding !== undefined) {
+    const binding = requireRecord(object.upstreamBinding, "$.upstreamBinding", "upstreamBinding must be an object.");
+    const hash = requireRecord(binding.toolSurface, "$.upstreamBinding.toolSurface", "toolSurface must be a hash.");
+    if (Object.keys(binding).some(key => !["toolSurface", "upstreamDigest"].includes(key)) ||
+        Object.keys(hash).some(key => !["alg", "value"].includes(key)) || hash.alg !== "sha-256" ||
+        typeof hash.value !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(hash.value) ||
+        Buffer.from(hash.value, "base64url").toString("base64url") !== hash.value ||
+        (binding.upstreamDigest !== undefined && (typeof binding.upstreamDigest !== "string" || !/^sha256:[a-f0-9]{64}$/.test(binding.upstreamDigest)))) {
+      throw new RoutingValidationError("Invalid upstream binding.", "$.upstreamBinding");
+    }
+    upstreamBinding = { toolSurface: { alg: "sha-256", value: hash.value },
+      ...(binding.upstreamDigest !== undefined ? { upstreamDigest: binding.upstreamDigest as string } : {}) };
+  }
   const audience = object.audience === undefined ? undefined : requireOrigin(object.audience, "$.audience");
   if (object.context !== undefined) {
     requireRecord(object.context, "$.context", "ActionRequest.context must be a JSON object.");
@@ -138,6 +152,7 @@ export function parseActionRequest(value: unknown): ActionRequest {
     version: "1",
     type: "ActionRequest",
     actionPackage: actionPackage as unknown as ActionRequest["actionPackage"],
+    ...(upstreamBinding !== undefined ? { upstreamBinding } : {}),
     ...(idempotencyKey !== undefined ? { idempotencyKey } : {}),
     ...(audience !== undefined ? { audience } : {}),
     ...(object.context !== undefined ? { context: object.context as ActionRequest["context"] } : {}),

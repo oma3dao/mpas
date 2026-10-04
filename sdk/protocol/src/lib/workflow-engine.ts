@@ -75,6 +75,7 @@ export type BuildCoordinationReplacement = (
 ) => Promise<CoordinationReplacement>;
 
 export interface BridgeWorkflowEngineOptions {
+  upstreamBinding?: ActionRequest["upstreamBinding"];
   store: WorkflowStore;
   /**
    * Action endpoint used for initial and completed submission.
@@ -132,6 +133,7 @@ interface SubmissionIdempotencyBinding {
 }
 
 export class BridgeWorkflowEngine {
+  private readonly upstreamBinding?: ActionRequest["upstreamBinding"];
   private readonly store: WorkflowStore;
   private readonly actionEndpoint: WorkflowActionEndpoint;
   private readonly coordinationService: WorkflowCoordinationService;
@@ -154,6 +156,7 @@ export class BridgeWorkflowEngine {
 
   constructor(options: BridgeWorkflowEngineOptions) {
     this.store = options.store;
+    this.upstreamBinding = options.upstreamBinding === undefined ? undefined : structuredClone(options.upstreamBinding);
     if (options.actionEndpoint) {
       this.actionEndpoint = options.actionEndpoint;
     } else if (options.adapter) {
@@ -658,6 +661,7 @@ export class BridgeWorkflowEngine {
     phase: SubmissionPhase,
   ): ActionRequest | undefined {
     const request = actionRequestFor(record, actionPackage);
+    if (this.upstreamBinding !== undefined) request.upstreamBinding = structuredClone(this.upstreamBinding);
     const requestFingerprint = computeIdempotencyFingerprint(request);
     const bindings = record.adapterAttempts.filter(isSubmissionIdempotencyBinding)
       .filter((binding) => binding.stage === phase);
