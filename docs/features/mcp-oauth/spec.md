@@ -391,3 +391,23 @@ must be handled by a narrow CA wrapper, a custom bounded transport policy, or an
 upstream SDK fix. A second general-purpose OAuth library should be introduced
 only for a demonstrated gap; `oauth4webapi` is the preferred low-level fallback
 for the TypeScript reference implementation.
+
+### Unattended scope challenges and ambiguous token requests
+
+The adapter intercepts `insufficient_scope` challenges before MCP SDK automatic
+reauthorization, including during initialization and tool dispatch. A 401/403
+challenge requesting scopes outside the operator-configured set (or the existing
+grant when no set is configured) is also intercepted. It reports
+`OAUTH_SCOPE_CHANGE_REQUIRED`, bounded requested/granted/configured scope lists,
+and the operator login command. A `dispatch` trace with result
+`oauth_scope_challenge` records those lists, never tokens or raw headers.
+The operator must review the trusted deployment scope configuration before login;
+a remote challenge does not update that configuration, replay the tool call, or
+create PKCE state. Ordinary invalid-token refresh behavior is unchanged.
+
+A token/code POST that times out after connection has an unknown remote outcome
+and is not retried automatically. GET/HEAD discovery requests may retry on an
+attempt timeout; replayable requests may retry known pre-connection failures.
+Both managed fetch and Agent use the installed Undici package. Its streaming
+response is adapted to the global Response interface required by the MCP SDK.
+IPv4-origin caching and broader transport telemetry remain separate follow-ups.
