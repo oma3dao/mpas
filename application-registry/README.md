@@ -15,7 +15,7 @@ Files are named `{application}-{github-org}.json`:
 - `{application}` — the target application, lowercase, hyphens for multi-word names
 - `{github-org}` — the GitHub organization or user handle of the publisher
 
-Examples: `github-demo-oma3dao.json`, `github-wivity.json`, `slack-wivity.json`, `kubernetes-acme-corp.json`
+Examples: `github-wivity.json`, `slack-wivity.json`, `kubernetes-acme-corp.json`
 
 Multiple implementations of the same application get separate files because they have different publishers (and different application DIDs if they differ materially).
 

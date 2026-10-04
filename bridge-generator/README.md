@@ -8,7 +8,7 @@ Contracts for everything emitted are specified in [`docs/features/bridge-generat
 
 - Node.js >= 22
 - The upstream MCP server runnable from your shell (any command: `node`, `npx`, `docker run -i`, a binary)
-- For building generated bridges: SDK `0.1.0-alpha.13` or later, either published
+- For building generated bridges: SDK `0.1.0-alpha.14` or later, either published
   to npm or built locally. The candidate release must be published before a
   generated package can install it from the registry.
 

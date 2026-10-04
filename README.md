@@ -157,7 +157,7 @@ integrations/
   skills/                       Agent skill packages (proposer, maintainer)
 ```
 
-Each example in `examples/` is self-contained with its own build tooling. The demo depends on the published `@oma3/mpas@0.1.0-alpha.13` package.
+Each example in `examples/` is self-contained with its own build tooling. The demo depends on the published `@oma3/mpas@0.1.0-alpha.14` package.
 
 ## Documentation
 

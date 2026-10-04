@@ -1,6 +1,6 @@
 {
   "name": "@oma3/mpas",
-  "version": "0.1.0-alpha.13",
+  "version": "0.1.0-alpha.14",
   "description": "MPAS protocol SDK \u2014 types, verification, policy evaluation, receipts, and protocol primitives",
   "license": "Apache-2.0",
   "type": "module",

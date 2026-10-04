@@ -20,7 +20,7 @@
   "plugin": {
     "repository": "https://github.com/oma3dao/mpas-applications/blob/main/applications/coinbase/plugin.json",
     "pluginDid": "did:web:wivity.com:plugins:coinbase-mcp-server",
-    "artifactDid": "did:artifact:bafkreighxigmfpzf6s6pbl7oqip4lpzwajvqr2hlgykvum3y4h67yh2s3y"
+    "artifactDid": "did:artifact:bafkreibpgdgs573gfjh27mmhbjsioqo5rojktxktjxrxpuly2dotvwmjnu"
   },
   "publisher": {
     "name": "Wivity",

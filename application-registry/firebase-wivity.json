@@ -20,7 +20,7 @@
   "plugin": {
     "repository": "https://github.com/oma3dao/mpas-applications/blob/main/applications/firebase/plugin.json",
     "pluginDid": "did:web:wivity.com:plugins:firebase-mcp-server",
-    "artifactDid": "did:artifact:bafkreibzzazzuaggcwicgx6y6yhww3adou3ksfhntvgn2jxe2nzahh44r4"
+    "artifactDid": "did:artifact:bafkreialz2qcapl32qpqksw7dnoax7fmtq3bozfnh7h4uodtdutnupwpzy"
   },
   "publisher": {
     "name": "Wivity",

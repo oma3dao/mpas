@@ -19,7 +19,7 @@
   "plugin": {
     "repository": "https://github.com/oma3dao/mpas-applications/blob/main/applications/github/plugin.json",
     "pluginDid": "did:web:wivity.com:plugins:github-mcp-server",
-    "artifactDid": "did:artifact:bafkreif7zekxqww32yhpn6hicv3bhudousajywv2n5is2lpuhmok6trtye"
+    "artifactDid": "did:artifact:bafkreigiiv43a6faexmp3m7fkej3ppjpt2ik4dhstk7dsbvg2imif6wrkm"
   },
   "publisher": {
     "name": "Wivity",

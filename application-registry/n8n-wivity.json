@@ -20,7 +20,7 @@
   "plugin": {
     "repository": "https://github.com/oma3dao/mpas-applications/blob/main/applications/n8n/plugin.json",
     "pluginDid": "did:web:wivity.com:plugins:n8n-mcp-server",
-    "artifactDid": "did:artifact:bafkreighx3tjjgndffvkndu5dv6mjesx2azgbenwuam2gdh2iqameua3r4"
+    "artifactDid": "did:artifact:bafkreiciprjyodhpl2awlj5usywxe77hdvofznaae4rrh4audst3haaxly"
   },
   "publisher": {
     "name": "Wivity",

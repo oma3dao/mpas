@@ -20,7 +20,7 @@
   "plugin": {
     "repository": "https://github.com/oma3dao/mpas-applications/blob/main/applications/planetscale/plugin.json",
     "pluginDid": "did:web:wivity.com:plugins:planetscale-mcp-server",
-    "artifactDid": "did:artifact:bafkreicml77hf6glb3wkbd4kw6qadzqwynspov6h33puedquwpzv3r37ia"
+    "artifactDid": "did:artifact:bafkreicynqkzqpbm7rpvtyqze5qwq6mtlfadhu44qot4nztfkrx6i67alu"
   },
   "publisher": {
     "name": "Wivity",

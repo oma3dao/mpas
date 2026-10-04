@@ -264,7 +264,7 @@ Setup is generated per run, not per application: ephemeral did:jwk keys, a deplo
 
 - Every mpas-applications implementation has exactly one entry in `oma3/mpas/application-registry/`, named `{application}-{publisher-org}.json`.
 - Entries are updated whenever the referenced plugin's `artifactDid` (or location) changes — the entry pins what it describes.
-- The existing demo entry (`github-demo-oma3dao.json`) predates the current demo layout and is reconciled as part of this work (correct plugin path/DIDs; see plan.md task list).
+- The former demo entry (`github-demo-oma3dao.json`) was removed ([#99](https://github.com/oma3dao/mpas/issues/99)). The demo's mirror and live-demo applications use example DIDs and test-fixture upstreams, so they are not installable registry implementations.
 
 ---
 
