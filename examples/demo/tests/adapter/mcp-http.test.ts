@@ -1,9 +1,10 @@
 import http from "node:http";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { prepareMcpHttp, type McpHttpTarget } from "../../src/adapter/dispatch/mcp-http.js";
 import type { OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
 
 let server: http.Server | undefined;
+let scopeChallengeMethod: string | undefined;
 let initializedProtocolVersion: string | undefined;
 
 afterEach(async () => {
@@ -12,6 +13,7 @@ afterEach(async () => {
     server = undefined;
   }
   initializedProtocolVersion = undefined;
+  scopeChallengeMethod = undefined;
 });
 
 async function startMcpServer(toolDelayMs = 0): Promise<{ url: string }> {
@@ -35,6 +37,11 @@ async function startMcpServer(toolDelayMs = 0): Promise<{ url: string }> {
       const json = JSON.parse(body);
       if (json.method === "notifications/initialized") {
         response.statusCode = 202;
+        response.end();
+        return;
+      }
+      if (json.method === scopeChallengeMethod) {
+        response.writeHead(403, { "www-authenticate": 'Bearer error="insufficient_scope", scope="admin write"' });
         response.end();
         return;
       }
@@ -106,6 +113,40 @@ describe("prepareMcpHttp", () => {
     } finally {
       await prepared.session.close();
     }
+  });
+
+  it.each(["initialize", "tools/call"])("blocks scope escalation during %s without reauthorization", async (method) => {
+    const { url } = await startMcpServer();
+    scopeChallengeMethod = method;
+    const mutate = vi.fn(() => { throw new Error("OAuth mutation must not run"); });
+    const trace = vi.fn();
+    const provider: OAuthClientProvider = {
+      redirectUrl: "http://127.0.0.1/callback",
+      clientMetadata: { redirect_uris: ["http://127.0.0.1/callback"] },
+      clientInformation: () => ({ client_id: "test-client" }),
+      tokens: () => ({ access_token: "secret-token", token_type: "Bearer", scope: "read" }),
+      saveTokens: mutate, saveCodeVerifier: mutate, redirectToAuthorization: mutate,
+      codeVerifier: () => "unused",
+    };
+    const prepared = await prepareMcpHttp(
+      { type: "mcp.http", url, auth: { type: "oauth2", session: "fixture", scopes: ["read"] } },
+      undefined, "2024-11-05", provider, "mpas oauth login --application-did did:web:test", trace,
+    );
+    if (method === "initialize") {
+      expect(prepared).toMatchObject({ ok: false, error: { code: "OAUTH_SCOPE_CHANGE_REQUIRED" } });
+    } else {
+      expect(prepared.ok).toBe(true);
+      if (!prepared.ok) throw new Error("initialization failed");
+      try {
+        expect(await prepared.session.transmit("fixture_tool", {})).toMatchObject({
+          ok: false, error: { code: "OAUTH_SCOPE_CHANGE_REQUIRED" },
+        });
+      } finally { await prepared.session.close(); }
+    }
+    expect(trace).toHaveBeenCalledTimes(1);
+    expect(trace).toHaveBeenCalledWith({ requestedScopes: ["admin", "write"], grantedScopes: ["read"], configuredScopes: ["read"] });
+    expect(mutate).not.toHaveBeenCalled();
+    expect(JSON.stringify(trace.mock.calls)).not.toContain("secret-token");
   });
 
   it("calls an HTTP MCP endpoint and injects credentials", async () => {
