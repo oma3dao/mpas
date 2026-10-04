@@ -1,3 +1,4 @@
+import { OAuthScopeChangeRequiredError } from "../oauth-scope-guard.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import {
@@ -24,7 +25,7 @@ export interface McpDispatchError {
   ok: false;
   error: {
     kind: "McpDispatchError";
-    code: "PROCESS_EXITED" | "INVALID_RESPONSE" | "DISPATCH_TIMEOUT" | "TRANSPORT_ERROR";
+    code: "PROCESS_EXITED" | "INVALID_RESPONSE" | "DISPATCH_TIMEOUT" | "TRANSPORT_ERROR" | "OAUTH_SCOPE_CHANGE_REQUIRED";
     message: string;
   };
 }
@@ -39,6 +40,7 @@ export type McpDispatchResult = McpResult | McpDispatchError;
  */
 export interface DispatchPrepareError {
   code:
+    | "OAUTH_SCOPE_CHANGE_REQUIRED"
     | "TARGET_UNAVAILABLE"
     | "OAUTH_REAUTHORIZATION_REQUIRED"
     | "OAUTH_AUTHENTICATION_FAILED"
@@ -91,6 +93,9 @@ export class McpClientSession implements DispatchSession {
       );
       return { ok: true, result };
     } catch (error) {
+      if (error instanceof OAuthScopeChangeRequiredError) {
+        return { ok: false, error: { kind: "McpDispatchError", code: error.code, message: error.message } };
+      }
       if (error instanceof SdkMcpError && error.code === ErrorCode.RequestTimeout) {
         return {
           ok: false,

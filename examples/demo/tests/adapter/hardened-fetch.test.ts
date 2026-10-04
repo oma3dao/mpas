@@ -75,7 +75,7 @@ describe("hardened fetch", () => {
     })).resolves.toMatchObject({ status: 200 });
   });
 
-  it("retries when a path completes the handshake and then goes silent", async () => {
+  it("retries discovery GET when a path completes the handshake and then goes silent", async () => {
     // The failure Happy Eyeballs cannot cover: address selection has already committed
     // by the time the path stops answering, so only a fresh attempt recovers it.
     let stalledFirstRequest = false;
@@ -95,11 +95,25 @@ describe("hardened fetch", () => {
       testOnlyDispatchers: { primary, retry },
     });
 
-    await expect(send(`http://127.0.0.1:${port}/token`, {
-      method: "POST",
-      body: new URLSearchParams({ grant_type: "refresh_token" }),
-    })).resolves.toMatchObject({ status: 200 });
+    await expect(send(`http://127.0.0.1:${port}/metadata`)).resolves.toMatchObject({ status: 200 });
     expect(stalledFirstRequest).toBe(true);
+  });
+
+  it.each(["authorization_code", "refresh_token"])("does not replay a consumed %s POST after response loss", async (grantType) => {
+    let requests = 0;
+    const port = await startServer((request, response) => {
+      requests += 1;
+      request.resume();
+      if (requests > 1) respondOk(response);
+    });
+    const primary = createDispatcher();
+    const retry = createDispatcher();
+    track(primary, retry);
+    const send = createHardenedFetch({ attemptTimeoutMs: 150, testOnlyDispatchers: { primary, retry } });
+    await expect(send(`http://127.0.0.1:${port}/token`, {
+      method: "POST", body: new URLSearchParams({ grant_type: grantType }),
+    })).rejects.toThrow("timed out");
+    expect(requests).toBe(1);
   });
 
   it("does not replay a request whose body cannot be re-read", async () => {

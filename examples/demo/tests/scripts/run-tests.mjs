@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 
 const passthroughArgs = process.argv.slice(2);
-const vitestArgs = ["run", "--passWithNoTests"];
+const vitestArgs = ["run"];
 
 for (let index = 0; index < passthroughArgs.length; index += 1) {
   const arg = passthroughArgs[index];

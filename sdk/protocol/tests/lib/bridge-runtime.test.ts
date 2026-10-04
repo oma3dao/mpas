@@ -222,7 +222,7 @@ describe("official MCP Tasks bridge runtime", () => {
             result: "additionalApprovalsRequired",
             actionEnvelopeHash: { alg: "sha-256", value: "response-hash" },
             verifier: { did: "did:jwk:verifier" as Did },
-            approvalRequirements: { anyOf: [] },
+            approvalRequirements: { anyOf: [{ type: "threshold", threshold: 1, eligibleSigners: ["did:jwk:maintainer"] }] },
           },
         }),
       ),
