@@ -396,6 +396,8 @@ Repeat `--authorized-recipient-did` to permit informational relay recipients in 
 
 ### Run the Credential Adapter as a hosted Verifier
 
+For production/api-dev switching, use the [operator recipes](guides/credential-adapter.md#credential-adapter-production-vs-api-dev): stop and restart with an explicit relay URL and its origin-specific state file.
+
 Set the hosted Action Relay URL when this Credential Adapter should receive relayed Actions:
 
 ```sh

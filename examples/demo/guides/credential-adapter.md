@@ -412,6 +412,76 @@ The durable cursor and cached response envelopes default to
 The former `MPAS_VERIFIER_COORDINATION_*` names and
 `--verifier-coordination-*` flags remain compatibility aliases.
 
+### Credential Adapter production vs api-dev
+
+Run these recipes from `examples/demo` in the CA account after building it.
+Set `MPAS_HOME` to your adapter directory (normally `export MPAS_HOME="$HOME/.mpas"`)
+and create `$MPAS_HOME/journal` if needed. `adapter start` runs only the CA on
+`:7544`; it does not start Coordination Service. Keep hosted CS/relay remote.
+
+Treat the relay URL and state file as a pair: **one pair per origin**.
+
+| Relay URL | State file |
+| :--- | :--- |
+| `https://api.signerset.com` | `$MPAS_HOME/journal/verifier-relay.json`, or the existing `verifier-coordination.json` if it is still the production bookmark |
+| `https://api-dev.signerset.com` | `$MPAS_HOME/journal/verifier-relay-dev.json` |
+
+Stop the running adapter before changing origins. Restart with the other
+recipe; the running process does not reread the URL. Do not migrate or copy
+cursors between origins—there is nothing to migrate.
+
+**Production:** if `verifier-coordination.json` is your existing production
+bookmark, replace only the state filename below with that legacy filename.
+Keep using that file; do not reset the production bookmark.
+
+```sh
+node dist/cli/index.js adapter start \
+  --config-dir "$MPAS_HOME/config" \
+  --credential-dir "$MPAS_HOME/credentials" \
+  --adapter-key "$MPAS_HOME/keys/adapter-key.json" \
+  --journal-path "$MPAS_HOME/journal/dispatch-ledger.jsonl" \
+  --trace "$MPAS_HOME/journal/adapter-prod-trace.jsonl" \
+  --host 127.0.0.1 --port 7544 \
+  --verifier-relay-url https://api.signerset.com \
+  --verifier-relay-state "$MPAS_HOME/journal/verifier-relay.json"
+```
+
+**api-dev:** use a separate state file; let the adapter create it on first
+persist. Never seed it with the production file.
+
+```sh
+node dist/cli/index.js adapter start \
+  --config-dir "$MPAS_HOME/config" \
+  --credential-dir "$MPAS_HOME/credentials" \
+  --adapter-key "$MPAS_HOME/keys/adapter-key.json" \
+  --journal-path "$MPAS_HOME/journal/dispatch-ledger-dev.jsonl" \
+  --trace "$MPAS_HOME/journal/adapter-dev-trace.jsonl" \
+  --host 127.0.0.1 --port 7544 \
+  --verifier-relay-url https://api-dev.signerset.com \
+  --verifier-relay-state "$MPAS_HOME/journal/verifier-relay-dev.json"
+```
+
+Plugin trust prompts are unchanged: review and answer `y` per plugin.
+Keep using `adapter start`; `daemon start` must continue rejecting hosted
+`--verifier-relay-url` because it is the combined local-service command.
+
+**Wrong-host checklist:**
+
+- Inspect the process argv (`ps -p <adapter-pid> -o command=`); check both
+  `--verifier-relay-url` and `--verifier-relay-state`, not an old shell-history command.
+- Read the started JSON line: require
+  `"verifierRelayUrl":"https://api-dev.signerset.com"` for dev, or
+  `"verifierRelayUrl":"https://api.signerset.com"` for production. If it shows
+  the other host, stop and restart with the correct recipe.
+- Confirm `connected` / `page_processed` events with the intended `relayUrl`.
+  `GET /mpas/v1/health` is local CA health only; it does not prove which relay
+  you joined.
+- Never reuse production state for dev. Omitting `--verifier-relay-state`
+  still selects `~/.mpas/journal/verifier-coordination.json` when that legacy
+  file exists; otherwise the default is `~/.mpas/journal/verifier-relay.json`.
+  An origin mismatch fails the state identity check; a wrong-host command can
+  instead resume the production bookmark.
+
 Malformed envelopes and payload types other than `ActionRequest` fail closed.
 The adapter leaves the cursor on the invalid delivery, stops its recovery timer,
 and logs a `fatal_error`; an operator must remove or quarantine that delivery at
