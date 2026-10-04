@@ -440,8 +440,43 @@ describe("HTTP endpoint", () => {
     const entry = [...configs.configsByApplicationDid.values()][0]!;
     entry.plugin.toolSurface = { hash: computeToolSurfaceHash([]), toolNames: [] };
     const report = await inspectTargetSurface(entry, new FileCredentialProvider(await credentialDir()));
-    expect(report).toMatchObject({ status: "drift", schemaDrift: true });
+    expect(report).toMatchObject({ status: "drift", schemaDrift: false });
     expect(report.unknownTools?.length).toBeGreaterThan(0);
+  });
+
+  it.each([
+    { live: ["a", "b"], changed: false, status: "matched", missing: ["c"], unknown: [], schemaDrift: false },
+    { live: [], changed: false, status: "matched", missing: ["a", "b", "c"], unknown: [], schemaDrift: false },
+    { live: ["a", "b", "c"], changed: false, status: "matched", missing: [], unknown: [], schemaDrift: false },
+    { live: ["a", "b", "c"], changed: true, status: "drift", missing: [], unknown: [], schemaDrift: true },
+    { live: ["a", "b", "x"], changed: false, status: "drift", missing: ["c"], unknown: ["x"], schemaDrift: false },
+  ])("diagnoses live $live (changed schema: $changed) without dispatch", async ({ live, changed, status, missing, unknown, schemaDrift }) => {
+    const configs = await loadDeploymentConfigs(await makeAutoApproveConfigDir(), { confirmPluginUse: async () => true });
+    if (!configs.ok) throw new Error(configs.error.message);
+    const entry = [...configs.configsByApplicationDid.values()][0]!;
+    const tool = (name: string) => ({ name, inputSchema: { type: "object" } });
+    entry.plugin.toolSurface = { hash: computeToolSurfaceHash(["a", "b", "c"].map(tool)), toolNames: ["a", "b", "c"] };
+    const workspace = await mkdtemp(join(tmpdir(), "mpas-surface-probe-"));
+    const marker = join(workspace, "dispatched");
+    entry.config.executionTarget = {
+      type: "mcp.stdio", command: process.execPath,
+      args: [join(fixturesDir, "adapter", "tool-surface-mcp-server.mjs"), JSON.stringify(live.map(name => ({
+        ...tool(name), ...(changed ? { description: "changed" } : {}),
+      }))), marker],
+    };
+    const credentials = new FileCredentialProvider(await credentialDir());
+    const report = await inspectTargetSurface(entry, credentials);
+    expect(report).toMatchObject({ status, missingTools: missing, unknownTools: unknown, schemaDrift });
+    await expect(readFile(marker)).rejects.toMatchObject({ code: "ENOENT" });
+    const adapter = await readJson<KeyFixture>(join(fixturesDir, "test-keys", "adapter.json"));
+    const app = createAdapterApiServer({
+      configsByApplicationDid: configs.configsByApplicationDid, credentialProvider: credentials,
+      adapterDid: adapter.did, adapterSigningKey: adapter.privateJwk,
+      toolSurfaceDrift: new Map([[entry.config.target.applicationDid, report]]),
+    });
+    apps.push(app);
+    const health = await app.inject({ method: "GET", url: "/mpas/v1/health" });
+    expect(health.json().loadedConfigs[0].toolSurfaceDrift).toEqual(report);
   });
 
   it("rejects an ungoverned operation when passThrough is deny", async () => {
