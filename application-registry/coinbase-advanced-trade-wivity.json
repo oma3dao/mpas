@@ -19,7 +19,7 @@
   "plugin": {
     "repository": "https://github.com/oma3dao/mpas-applications/blob/main/applications/coinbase-advanced-trade/plugin.json",
     "pluginDid": "did:web:wivity.com:plugins:coinbase-advanced-trade-mcp-server",
-    "artifactDid": "did:artifact:bafkreib5rqaubelokooz35lwkamlcwdyvlf3rjjfees54mlomm7zifs63i"
+    "artifactDid": "did:artifact:bafkreifyjtetqddzkyegfir67vzmdvsiuzlk4g7qbnisfyuda2vf7ha2g4"
   },
   "publisher": {
     "name": "Wivity",

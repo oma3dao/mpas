@@ -383,7 +383,7 @@ function bridgePackageJson(appName: string): object {
     },
     dependencies: {
       "@modelcontextprotocol/server": "2.0.0",
-      "@oma3/mpas": "0.1.0-alpha.13",
+      "@oma3/mpas": "0.1.0-alpha.14",
     },
     devDependencies: {
       "@types/node": "^22.15.29",
@@ -430,7 +430,7 @@ node dist/index.js --config <path-to-bridge-config.json>
 
 The bridge config format matches the MPAS demo proposer bridge (plugin path, direct Adapter URL or relay Action endpoint plus designated Verifier, agent key, independent Coordination Service URL, and workflow storage). The server auto-detects MCP 2026-07-28 Tasks clients and conventional MCP clients that need the MPAS wait-tool compatibility surface. All application tool calls are routed through MPAS: the bridge signs an initial Action Package and submits it through the configured Action endpoint; nothing is proxied directly to the upstream server. When additional approvals are required, the bridge retires that Action, constructs a replacement Action with a new Action ID and hash, explicitly creates its coordination workflow, and submits the completed replacement Action Package to the Action endpoint for the first time.
 
-The generated package requires SDK \`0.1.0-alpha.13\` or later for dual-suite signing and verification. Use an existing Ed25519 key or generate a new P-256 key with \`mpas key generate <name> --suite P-256\`. The key selects the suite; no algorithm dispatch is generated into the bridge. Register a new DID explicitly and upgrade verification services before using it. The SDK release must be published before installing generated packages from the registry.
+The generated package requires SDK \`0.1.0-alpha.14\` or later for upstream tool-surface binding and dual-suite signing and verification. Use an existing Ed25519 key or generate a new P-256 key with \`mpas key generate <name> --suite P-256\`. The key selects the suite; no algorithm dispatch is generated into the bridge. Register a new DID explicitly and upgrade verification services before using it. The SDK release must be published before installing generated packages from the registry.
 
 One bridge serves exactly one MCP client or agent identity and holds one private key for one proposer DID. Do not share a bridge process or key across independent clients; deploy a separate bridge instance and key for each agent.
 

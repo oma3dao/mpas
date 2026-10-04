@@ -20,7 +20,7 @@
   "plugin": {
     "repository": "https://github.com/oma3dao/mpas-applications/blob/main/applications/stripe/plugin.json",
     "pluginDid": "did:web:wivity.com:plugins:stripe-mcp-server",
-    "artifactDid": "did:artifact:bafkreia2mi66k66qyq3d65dsd3xmkwasndh7xlxu5x7b6ty2vxswc72r7i"
+    "artifactDid": "did:artifact:bafkreieuykjc5rp5byu7max6lmlmmmwkgwuarkndsq5vptjw5fvbrhtrqm"
   },
   "publisher": {
     "name": "Wivity",

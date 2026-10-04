@@ -1,0 +1,32 @@
+{
+  "version": "1",
+  "application": {
+    "name": "Slack MCP MPAS Bridge Server",
+    "description": "MPAS-protected bridge for the Slack MCP Server.",
+    "applicationDid": "did:web:wivity.com:applications:slack-mcp-server"
+  },
+  "native": false,
+  "protocol": "mcp",
+  "upstream": {
+    "name": "Slack MCP Server",
+    "repository": "https://github.com/modelcontextprotocol/servers-archived/tree/main/src/slack",
+    "distributionUrl": "https://www.npmjs.com/package/@modelcontextprotocol/server-slack/v/2025.4.25",
+    "protocolVersion": "2024-11-05",
+    "toolSurface": {
+      "alg": "sha-256",
+      "value": "U3rGFIaR7KneoFkpkWqJrd4lGFg1Ni3Zfkyg1yvWJng"
+    }
+  },
+  "plugin": {
+    "repository": "https://github.com/oma3dao/mpas-applications/blob/main/applications/slack/plugin.json",
+    "artifactDid": "did:artifact:bafkreiha5tmrtfjxmc2ttl2b2vv57itb3p62qjm7wr6rm6cdt7h56kf7ea",
+    "pluginDid": "did:web:wivity.com:plugins:slack-mcp-server"
+  },
+  "publisher": {
+    "name": "Wivity",
+    "githubOrg": "wivity",
+    "publisherDid": "did:web:wivity.com",
+    "repository": "https://github.com/oma3dao/mpas-applications/tree/main/applications/slack"
+  },
+  "status": "beta"
+}

@@ -20,7 +20,7 @@
   "plugin": {
     "repository": "https://github.com/oma3dao/mpas-applications/blob/main/applications/alpaca/plugin.json",
     "pluginDid": "did:web:wivity.com:plugins:alpaca-mcp-server",
-    "artifactDid": "did:artifact:bafkreib7bxsgj2gmvlvzi477lhgzgzv477zxs3xyi4ovypt653sxlxtk6y"
+    "artifactDid": "did:artifact:bafkreibzvpkavrp2q34m6q5yknecfuavx7mzf6mvjq3ppanuozvcwgyol4"
   },
   "publisher": {
     "name": "Wivity",

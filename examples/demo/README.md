@@ -428,7 +428,7 @@ See [tests/README.md](tests/README.md) for the full test guide, including focuse
 
 ## Building and selecting signature suites
 
-The demo installs the published `@oma3/mpas@0.1.0-alpha.13` package from the npm
+The demo installs the published `@oma3/mpas@0.1.0-alpha.14` package from the npm
 registry. Do not point it at a local `file:` SDK path or `node_modules` symlink
 when validating a release:
 

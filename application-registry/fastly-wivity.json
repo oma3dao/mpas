@@ -19,7 +19,7 @@
   },
   "plugin": {
     "repository": "https://github.com/oma3dao/mpas-applications/blob/main/applications/fastly/plugin.json",
-    "artifactDid": "did:artifact:bafkreieeu3774ntzutvyqn5sdujr6aai5sp4fnw2fqiju7ukhzfotmp2me",
+    "artifactDid": "did:artifact:bafkreicpvtg6tjnlfilkvv4xtlasdgqapl2p5kpmdjl4wuqb4mpqlp2fua",
     "pluginDid": "did:web:wivity.com:plugins:fastly-mcp-server"
   },
   "publisher": {
