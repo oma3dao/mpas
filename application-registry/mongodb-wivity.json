@@ -20,7 +20,7 @@
   "plugin": {
     "repository": "https://github.com/oma3dao/mpas-applications/blob/main/applications/mongodb/plugin.json",
     "pluginDid": "did:web:wivity.com:plugins:mongodb-mcp-server",
-    "artifactDid": "did:artifact:bafkreihgjtngefdonfx4uggowkkcxmsf42b6mef7oefbcmriagpv3rchhe"
+    "artifactDid": "did:artifact:bafkreifsobq25sch6ofjl24wrjozqntto4axyxiy6vbm5a3bqcgyfbtrey"
   },
   "publisher": {
     "name": "Wivity",

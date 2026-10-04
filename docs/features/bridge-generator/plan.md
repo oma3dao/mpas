@@ -45,7 +45,7 @@ Generated bridges import `@oma3/mpas` for protocol operations and `@modelcontext
 | 6. Compatibility Test Harness | M3 | Shared harness comparing upstream vs. bridge tool surfaces (config-driven, not generated per app) | ❌ Not started |
 | 7. Approval Test Harness | M4 | Shared harness exercising the four approval scenarios through the generated bridge (extracted from the demo e2e stack) | ❌ Not started |
 | 9. Registry Entry Generation | M5 | Generate `application-registry/*.json` entries, validated against the registry schema | ❌ Not started |
-| — | — | Reconcile the existing `application-registry/github-demo-oma3dao.json` (stale plugin path and DIDs) | ❌ Not started |
+| — | — | Reconcile the existing `application-registry/github-demo-oma3dao.json` (stale plugin path and DIDs) | ✅ Removed ([#99](https://github.com/oma3dao/mpas/issues/99)) |
 
 Build order is M0 → M1 → M2 → M3 → M4 → M5: the snapshot (M1) is the keystone artifact the folder layout (M2) packages and both harnesses (M3/M4) consume; the registry entry (M5) is generated last so it attests to a tested artifact. M0 comes first because every later milestone teaches the generator new outputs, and the generator currently has no tests of its own.
 

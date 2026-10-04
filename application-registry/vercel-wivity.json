@@ -19,7 +19,7 @@
   "plugin": {
     "repository": "https://github.com/oma3dao/mpas-applications/blob/main/applications/vercel/plugin.json",
     "pluginDid": "did:web:wivity.com:plugins:vercel-mcp-server",
-    "artifactDid": "did:artifact:bafkreih2ao24rzvmzp7ofke2irihfc6hmvesuv5vfhb7wlpb6oqvuidzmi"
+    "artifactDid": "did:artifact:bafkreihx2jmzfitiqmuofa2m2cjehl5z5ibiwtshtpqpupojq3zofejqke"
   },
   "publisher": {
     "name": "Wivity",

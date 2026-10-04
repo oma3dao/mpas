@@ -20,7 +20,7 @@
   "plugin": {
     "repository": "https://github.com/oma3dao/mpas-applications/blob/main/applications/railway/plugin.json",
     "pluginDid": "did:web:wivity.com:plugins:railway-mcp-server",
-    "artifactDid": "did:artifact:bafkreibeskh2l5jqb63bpfj4isbkwg72lkyrko7jgk7hjv7aaszfbgh2hy"
+    "artifactDid": "did:artifact:bafkreig45op5g5khxldtuqvt7mdfckgfi55hpplpzxmmbnqufpwtz6eknu"
   },
   "publisher": {
     "name": "Wivity",
