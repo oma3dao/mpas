@@ -3,7 +3,7 @@
 **Target demo machine:** Intel or Apple Silicon Mac running macOS 11 Big Sur or newer  
 **Tested target:** MacBook Pro 15-inch 2017, Intel Core i7, 16 GB RAM, macOS Ventura 13.7.x  
 **Purpose:** Run the local MPAS demo stack with autonomous agents  
-**Last updated:** 2026-08-17
+**Last updated:** 2026-10-03  
 **Specifications:** ../../specs/ (local)
 
 | Document                             | Description                                                      |
@@ -165,27 +165,17 @@ The only path to write operations should be through the MPAS bridge → Credenti
 
 ### Step 7: Build MPAS
 
-Install, build, and test the demo. Its package lock installs the published MPAS protocol SDK:
+Follow the canonical [Build and Verify sequence](../../../README.md#build-and-verify)
+from the repository root. Build the local SDK before installing the demo: the demo
+currently consumes a copied local SDK package, not a published registry version.
+The sequence includes SDK, generator, demo, typechecks, and the demo E2E tests.
+Both test runners fail if no tests are discovered.
 
-```sh
-cd "$HOME/Projects/mpas/examples/demo"
-npm ci
-npm run build
-npm test
-```
+### Step 8: Optional E2E-only rerun
 
-Expected: the demo test suite passes with no failures.
-
-### Step 8: Run the E2E Test
-
-This verifies the full stack end-to-end (proposer → coordination → maintainer → adapter → dispatch):
-
-```sh
-cd "$HOME/Projects/mpas/examples/demo"
-npm run test:e2e:mcp-bridge
-```
-
-Expected: the local MCP bridge E2E tests pass.
+`npm test` already includes the MCP bridge E2E tests. To rerun that suite explicitly
+while diagnosing transport issues, use `npm run test:e2e:mcp-bridge` in
+`examples/demo`; it is not an additional required verification step.
 
 ## 1.2 Install Your Agent Harness
 
@@ -1272,13 +1262,7 @@ git checkout main
 
 7. **Build and test** (§1.1 Step 7 and 8):
 
-```sh
-cd "$HOME/Projects/mpas/examples/demo"
-npm ci
-npm run build
-npm test
-npm run test:e2e:mcp-bridge
-```
+Follow the canonical [Build and Verify sequence](../../../README.md#build-and-verify) from the repository root.
 
 8. **Install agent harness** (§1.2) — install OpenClaw, Codex CLI, or your preferred harness. Do NOT configure MPAS bridges yet — that happens in §5.5.
 
@@ -1518,9 +1502,9 @@ The operator retains: adapter key, deployment config, credentials, plugin, journ
 | ----------------------------------------------------- | ---------------------------------------------------- | ----------------------------------------------------------------------- |
 | `node --version` shows less than `v22.x`              | Shell is using another Node                          | Run `nvm install --lts`; check `which node`; reopen the terminal.       |
 | Node install says your macOS is too old               | Newer Node versions may not support your OS          | Install Node 22 with `nvm install 22`; if macOS is older than 11, upgrade macOS or use another machine. |
-| `npm install` fails immediately                       | Wrong directory or missing package.json              | Run it inside `mpas/examples/demo` or `mpas/sdk/protocol`.              |
+| `npm ci` fails immediately                       | Wrong directory or missing package.json              | Run it inside `mpas/examples/demo` or `mpas/sdk/protocol`.              |
 | `npm run build` fails with modern JS/TS syntax errors | Wrong Node version                                   | Verify `node --version` is `v22.x` or later.                            |
-| `generate-fixtures.ts` fails                          | Missing dependencies                                 | Run `npm install` first.                                                |
+| `generate-fixtures.ts` fails                          | Missing dependencies                                 | Run `npm ci` first.                                                |
 | `EACCES` on keys or credentials                       | File permissions or wrong path                       | Run `chmod 600 "$MPAS_HOME"/keys/*.json "$MPAS_HOME"/credentials/*.json`. |
 | `ECONNREFUSED` on `:7544`                             | Adapter is not running                               | Start per §2.2.                                                         |
 | `ECONNREFUSED` on `:7545`                             | Coordination is not running                          | Start per §2.2 (unified daemon starts both).                            |
@@ -1607,3 +1591,7 @@ generation refuses to overwrite an existing file. Verifiers support both suites
 regardless of their own receipt-signing choice. Deploy dual-suite services before
 using P-256 identities. For the local SDK build order and mixed-suite checks, see
 [the demo signature-suite guide](../README.md#building-and-selecting-signature-suites).
+
+If `npm ci` reports a lockfile mismatch, check out matching package and lock files.
+Only run `npm install` to intentionally update dependencies; review and commit the
+resulting lockfile rather than bypassing a failed reproducible install.
