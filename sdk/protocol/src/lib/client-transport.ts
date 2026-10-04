@@ -8,12 +8,15 @@ import {
 
 /** Minimal socket surface shared by the independent MPAS notification clients. */
 export interface MpasWebSocket {
+  readonly readyState?: number;
   close(code?: number, reason?: string): void;
   addEventListener(type: "message" | "close" | "error", listener: (event: unknown) => void): void;
   removeEventListener?(type: "message" | "close" | "error", listener: (event: unknown) => void): void;
 }
 
-/** Adapter for a WebSocket upgrade carrying a returned single-use bearer ticket. */
+/** Adapter for a WebSocket upgrade carrying a returned single-use bearer ticket.
+ * Async factories must guard the socket before yielding or resolving it.
+ */
 export type MpasWebSocketFactory = (options: {
   url: string;
   ticket: string;
@@ -172,4 +175,41 @@ function parseMpasHttpError(text: string): MpasHttpError | undefined {
   } catch {
     return undefined;
   }
+}
+
+// Retain failures that occur before a consumer subscribes to socket termination.
+const notificationFailures = new WeakMap<MpasWebSocket, Error>();
+const guardedSockets = new WeakSet<MpasWebSocket>();
+
+/** Install immediately after construction, before yielding a server-side socket. */
+export function guardNotificationSocket<T extends MpasWebSocket>(socket: T): T {
+  if (guardedSockets.has(socket)) return socket;
+  guardedSockets.add(socket);
+  socket.addEventListener("error", (event) => {
+    const value = event as { message?: unknown; error?: { message?: unknown } } | null;
+    const message = value?.message ?? value?.error?.message;
+    const status = typeof message === "string"
+      ? /Unexpected server response: (\d{3})\b/.exec(message)?.[1]
+      : undefined;
+    // Never copy URLs, tickets, headers, or arbitrary server text into logs.
+    notificationFailures.set(socket, new Error(status
+      ? `WebSocket upgrade failed: Unexpected server response: ${status}`
+      : "WebSocket notification connection failed."));
+  });
+  return socket;
+}
+
+/** Sanitized failure retained by the synchronous notification guard. */
+export function notificationSocketError(socket: MpasWebSocket): Error | undefined {
+  return notificationFailures.get(socket);
+}
+
+/** Guard synchronous factories without introducing an await/listener race. */
+export function openNotificationSocket(
+  factory: MpasWebSocketFactory,
+  options: Parameters<MpasWebSocketFactory>[0],
+): MpasWebSocket | PromiseLike<MpasWebSocket> {
+  const socket = factory(options);
+  if ("addEventListener" in socket) return guardNotificationSocket(socket);
+  return Promise.resolve(socket).then(guardNotificationSocket);
 }
