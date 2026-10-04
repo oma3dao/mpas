@@ -15,6 +15,7 @@ import {
   type DeliveryEnvelope,
   type Did,
 } from "@oma3/mpas";
+import * as adapterApi from "../../src/adapter/adapter-api-server.js";
 import { startDaemon } from "../../src/adapter/daemon.js";
 import type {
   VerifierRelayClient,
@@ -29,6 +30,36 @@ const fixtures = fileURLToPath(new URL("../fixtures/", import.meta.url));
 const relayUrl = "https://relay.example";
 
 describe("Credential Adapter hosted-Verifier integration", () => {
+  it.each(["matched", "drift", "legacy", "unavailable"] as const)("warns only for real startup drift (%s)", async status => {
+    const workspace = await mkdtemp(join(tmpdir(), "mpas-daemon-surface-"));
+    const configDir = join(workspace, "config");
+    await mkdir(configDir);
+    const config = JSON.parse(await readFile(join(fixtures, "configs", "policy-fixtures", "github-auto-approve.json"), "utf8"));
+    config.plugin.path = join(fixtures, "plugins", "github-mirror-plugin.json");
+    await writeFile(join(configDir, "github.json"), JSON.stringify(config));
+    const report: adapterApi.ToolSurfaceDrift = { status, missingTools: ["get_teams"], unknownTools: [],
+      ungovernedTools: ["a"], schemaDrift: status === "drift" };
+    const probe = vi.spyOn(adapterApi, "inspectTargetSurface").mockResolvedValue(report);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    let daemon: Awaited<ReturnType<typeof startDaemon>> | undefined;
+    try {
+      daemon = await startDaemon({ configDir, credentialDir: join(workspace, "credentials"),
+        adapterKeyPath: join(fixtures, "test-keys", "adapter.json"),
+        journalPath: join(workspace, "journal.jsonl"), port: 0, trustContext: null,
+        confirmPluginUse: async () => true,
+      });
+      const warnings = warn.mock.calls.map(call => String(call[0])).filter(message => message.includes('"event":"tool_surface_drift"'));
+      expect(warnings).toHaveLength(status === "drift" ? 1 : 0);
+      if (status !== "drift") expect(info).toHaveBeenCalledWith(expect.stringContaining('"event":"tool_surface_diagnostic"'));
+      const health = await daemon.app.inject({ method: "GET", url: "/mpas/v1/health" });
+      expect(health.json().loadedConfigs[0].toolSurfaceDrift).toEqual(report);
+    } finally {
+      await daemon?.app.close();
+      probe.mockRestore(); warn.mockRestore(); info.mockRestore();
+    }
+  });
+
   it("polls, processes through Fastify, journals, and delivers the Verifier response", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "mpas-daemon-verifier-"));
     const configDir = join(workspace, "config");

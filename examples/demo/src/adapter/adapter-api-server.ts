@@ -460,6 +460,7 @@ export function classifyDispatch(dispatchResult: McpDispatchResult): {
 export interface ToolSurfaceDrift {
   status: "matched" | "drift" | "legacy" | "unavailable" | "not_checked";
   unknownTools?: string[];
+  /** Absent attested names; may reflect credential filtering, not image drift. */
   missingTools?: string[];
   ungovernedTools?: string[];
   schemaDrift?: boolean;
@@ -475,7 +476,6 @@ export async function inspectTargetSurface(loaded: LoadedDeploymentConfig, crede
   if (!prepared.ok || !prepared.session.listTools) return { status: "unavailable" };
   try {
     const tools = await prepared.session.listTools();
-    const actualHash = computeToolSurfaceHash(tools);
     const actual = new Set(tools.map(tool => tool.name));
     const surface = loaded.plugin.toolSurface;
     const expected = new Set(surface?.toolNames ?? Object.keys(loaded.plugin.operations));
@@ -483,8 +483,12 @@ export async function inspectTargetSurface(loaded: LoadedDeploymentConfig, crede
     const missingTools = [...expected].filter(name => !actual.has(name)).sort();
     const ungovernedTools = [...actual].filter(name => !Object.hasOwn(loaded.plugin.operations, name) &&
       !Object.hasOwn(loaded.config.policy.policies ?? {}, name)).sort();
-    const schemaDrift = surface !== undefined && surface.hash.value !== actualHash.value;
-    return { status: surface ? (unknownTools.length || missingTools.length || schemaDrift ? "drift" : "matched") : "legacy",
+    // A full-surface hash is comparable only when the name sets are equal.
+    // A strict subset may be credential-filtered; it cannot prove schema equality
+    // (or a schema mismatch) against the publisher's full attestation.
+    const schemaDrift = surface !== undefined && unknownTools.length === 0 && missingTools.length === 0 &&
+      surface.hash.value !== computeToolSurfaceHash(tools).value;
+    return { status: surface ? (unknownTools.length || schemaDrift ? "drift" : "matched") : "legacy",
       unknownTools, missingTools, ungovernedTools, schemaDrift };
   } catch { return { status: "unavailable" }; }
   finally { await prepared.session.close(); }

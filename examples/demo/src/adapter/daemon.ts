@@ -139,8 +139,10 @@ export async function startDaemon(options: DaemonOptions = {}): Promise<StartedD
   for (const [did, config] of loaded.configsByApplicationDid) {
     const report: ToolSurfaceDrift = await inspectTargetSurface(config, credentialProvider).catch(() => ({ status: "unavailable" as const }));
     toolSurfaceDrift.set(did, report);
-    if (report.status !== "matched" || report.ungovernedTools?.length) {
+    if (report.status === "drift") {
       console.warn(JSON.stringify({ level: "warn", event: "tool_surface_drift", applicationDid: did, ...report }));
+    } else if (report.status !== "matched" || report.missingTools?.length || report.ungovernedTools?.length) {
+      console.info(JSON.stringify({ level: "info", event: "tool_surface_diagnostic", applicationDid: did, ...report }));
     }
   }
   const app = createAdapterApiServer({
