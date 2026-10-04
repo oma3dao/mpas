@@ -7,7 +7,7 @@ const signatureSuiteConformance = fileURLToPath(
 );
 
 await requireSuccess(
-  runNode(vitest, ["run", "--passWithNoTests", ...process.argv.slice(2)], "Vitest"),
+  runNode(vitest, ["run", ...process.argv.slice(2)], "Vitest"),
 );
 
 console.log("\nRunning independent signature-suite conformance verification...");

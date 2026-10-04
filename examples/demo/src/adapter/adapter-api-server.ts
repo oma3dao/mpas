@@ -329,6 +329,7 @@ export function createAdapterApiServer(options: HttpEndpointOptions): FastifyIns
       loadedConfig,
       credential?.ok ? credential.value : undefined,
       options.credentialProvider.directory,
+      (challenge) => trace.emit("dispatch", { actionId, result: "oauth_scope_challenge", ...challenge }),
     );
     if (!prepared.ok) {
       trace.emit("dispatch", { actionId, result: "rejected", code: prepared.error.code, reason: "target_prepare_failed" });
@@ -434,6 +435,7 @@ export function classifyDispatch(dispatchResult: McpDispatchResult): {
     case "DISPATCH_TIMEOUT":
     case "PROCESS_EXITED":
     case "TRANSPORT_ERROR":
+    case "OAUTH_SCOPE_CHANGE_REQUIRED":
       return { result: "indeterminate", error: { code: dispatchResult.error.code, message: dispatchResult.error.message } };
     default:
       return { result: "failed", error: { code: dispatchResult.error.code, message: dispatchResult.error.message } };
@@ -444,6 +446,7 @@ async function prepareTarget(
   loadedConfig: LoadedDeploymentConfig,
   credential: string | undefined,
   credentialDir?: string,
+  onScopeChallenge?: (challenge: import("./oauth-scope-guard.js").OAuthScopeChallenge) => void,
 ): Promise<DispatchPrepareResult> {
   const protocolVersion = loadedConfig.plugin.executionProfile.protocolVersion;
   if (loadedConfig.config.executionTarget.type === "mcp.http") {
@@ -484,6 +487,7 @@ async function prepareTarget(
         protocolVersion,
         preparedOAuth.provider,
         operatorCommand,
+        onScopeChallenge,
       );
     }
     return prepareMcpHttp(loadedConfig.config.executionTarget, credential, protocolVersion);
@@ -572,6 +576,8 @@ function diagnosticMessage(code: string): string {
       return "The upstream MCP server rejected OAuth authentication. This is not a target outage.";
     case "OAUTH_INVALID_GRANT":
       return "The stored OAuth refresh grant is invalid or revoked. Operator reauthorization is required.";
+    case "OAUTH_SCOPE_CHANGE_REQUIRED":
+      return "The target requested OAuth authority requiring explicit operator review and reauthorization.";
     case "OAUTH_SCOPE_NOT_SUPPORTED":
       return "A configured OAuth scope is not advertised by the authorization server.";
     case "OAUTH_REFRESH_TOKEN_NOT_ISSUED":

@@ -507,7 +507,7 @@ Each module is available as a direct import for consumers that want to avoid pul
 ## Building
 
 ```sh
-npm install
+npm ci
 npm run build    # tsc → dist/
 npm run test     # vitest
 ```

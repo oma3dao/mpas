@@ -21,6 +21,8 @@ import { assertExactAuthorizationServerIssuer } from "./oauth-discovery.js";
 import { createDeadline } from "./hardened-fetch.js";
 import { createOAuthFetchPolicy, DEFAULT_OAUTH_CALL_BUDGET_MS } from "./oauth-fetch-policy.js";
 
+import { OAuthScopeChangeRequiredError } from "./oauth-scope-guard.js";
+
 export const DEFAULT_OAUTH_REFRESH_SCOPE = "offline_access";
 export const DEFAULT_OAUTH_REFRESH_SAFETY_WINDOW_MS = 60_000;
 export const DEFAULT_OAUTH_REFRESH_JITTER_MAX_MS = 30_000;
@@ -654,7 +656,7 @@ export async function prepareOAuthForDispatch(
   expected: OAuthPrepareOptions = {},
 ): Promise<
   | { ok: true; provider: OAuthClientProvider }
-  | { ok: false; error: { code: "OAUTH_REAUTHORIZATION_REQUIRED" | "OAUTH_AUTHENTICATION_FAILED" | "OAUTH_INVALID_GRANT" | "TARGET_UNAVAILABLE"; message: string } }
+  | { ok: false; error: { code: "OAUTH_SCOPE_CHANGE_REQUIRED" | "OAUTH_REAUTHORIZATION_REQUIRED" | "OAUTH_AUTHENTICATION_FAILED" | "OAUTH_INVALID_GRANT" | "TARGET_UNAVAILABLE"; message: string } }
 > {
   const operatorCommand = oauthLoginCommand({ applicationDid, resourceUrl, session: sessionName, credentialHandle });
   const loaded = await readBoundOAuthSession(sessionName, credentialHandle, applicationDid, resourceUrl, credentialDir);
@@ -752,7 +754,8 @@ export async function prepareOAuthForDispatch(
 export function classifyOAuthPrepareError(
   error: unknown,
   operatorCommand: string,
-): { code: "OAUTH_REAUTHORIZATION_REQUIRED" | "OAUTH_AUTHENTICATION_FAILED" | "OAUTH_INVALID_GRANT" | "TARGET_UNAVAILABLE"; message: string } {
+): { code: "OAUTH_SCOPE_CHANGE_REQUIRED" | "OAUTH_REAUTHORIZATION_REQUIRED" | "OAUTH_AUTHENTICATION_FAILED" | "OAUTH_INVALID_GRANT" | "TARGET_UNAVAILABLE"; message: string } {
+  if (error instanceof OAuthScopeChangeRequiredError) return { code: error.code, message: error.message };
   if (error instanceof OAuthReauthorizationRequiredError) {
     return { code: error.code, message: error.message };
   }
