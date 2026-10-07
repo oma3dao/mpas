@@ -29,6 +29,7 @@ import {
   MpasHttpTransport,
   waitForPollInterval,
   websocketMessageData,
+  openNotificationSocket,
   type MpasWebSocket,
   type MpasWebSocketFactory,
 } from "./client-transport.js";
@@ -343,7 +344,7 @@ export class CoordinationServiceClient {
     if (Date.parse(session.expiresAt) <= Date.now()) {
       throw new CoordinationResponseError("Coordination session ticket is already expired.");
     }
-    const socket = await this.webSocketFactory({
+    const socket = await openNotificationSocket(this.webSocketFactory, {
       url: session.websocketUrl,
       ticket: session.ticket,
       headers: { Authorization: `Bearer ${session.ticket}` },

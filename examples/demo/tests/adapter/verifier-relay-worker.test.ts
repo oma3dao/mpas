@@ -1,3 +1,5 @@
+import { EventEmitter } from "node:events";
+import { guardNotificationSocket } from "@oma3/mpas";
 import { mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -32,6 +34,37 @@ const verifier = "did:jwk:verifier" as Did;
 const maintainer = "did:jwk:maintainer" as Did;
 
 describe("VerifierRelayWorker", () => {
+  it.each([500, 502, 503, 504, undefined])("reconnects after early failure/close %s while fallback polling stays alive", async (status) => {
+    const client = new FakeCoordinationClient();
+    const events: Array<{ event: string; retryAfterMs?: number; message?: string }> = [];
+    vi.spyOn(client, "connectWorkNotifications").mockImplementation(async () => {
+      const emitter = new EventEmitter();
+      const socket = guardNotificationSocket({
+        readyState: 3,
+        close: () => {},
+        addEventListener: (type, listener) => { emitter.on(type, listener); },
+        removeEventListener: (type, listener) => { emitter.off(type, listener); },
+      });
+      if (status) emitter.emit("error", new Error(`Unexpected server response: ${status} secret`));
+      emitter.emit("close");
+      return { socket, relayUrl, audience: relayUrl, did: verifier };
+    });
+    const worker = await VerifierRelayWorker.create({
+      relayUrl, verifierDid: verifier, client, stateStore: new MemoryStateStore(),
+      processAction: vi.fn(), fallbackPollIntervalMs: 5,
+      reconnectInitialMs: 20, reconnectMaxMs: 40,
+      onEvent: event => events.push(event),
+    });
+    worker.start();
+    try {
+      await vi.waitFor(() => expect(events.filter(e => e.event === "retry_scheduled").length).toBeGreaterThanOrEqual(2));
+      expect(events.filter(e => e.event === "retry_scheduled").slice(0, 2).map(e => e.retryAfterMs)).toEqual([20, 40]);
+      expect(client.pollCount).toBeGreaterThan(vi.mocked(client.connectWorkNotifications).mock.calls.length);
+      expect(events.some(e => e.event === "fatal_error")).toBe(false);
+      if (status) expect(events.find(e => e.event === "retry_scheduled")?.message).toBe(`WebSocket upgrade failed: Unexpected server response: ${status}`);
+    } finally { await worker.stop(); }
+  });
+
   it("persists its cursor and response cache in a private state file", async () => {
     const path = join(await mkdtemp(join(tmpdir(), "mpas-verifier-state-")), "state.json");
     const store = new FileVerifierRelayStateStore(path);

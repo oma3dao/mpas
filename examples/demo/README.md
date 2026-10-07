@@ -460,3 +460,22 @@ See [mixed-suite conformance](../../conformance/signature-suites/README.md) for
 fixture-backed workflow, replay, receipt, and generated-bridge tests. New HTTP
 senders include `alg`; absent HTTP `alg` means Ed25519 without adding bytes to
 the signature base. JWS requires protected `alg` and authorized `kid` in both suites.
+
+### Testing unreleased SDK changes
+
+The demo dependency remains pinned to the published SDK. When building this
+checkout with unreleased protocol changes (including notification handshake
+recovery), build and use the SDK from the same checkout instead:
+
+```bash
+(cd sdk/protocol && npm ci && npm run build)
+(cd examples/demo && npm ci && npm install --no-save --package-lock=false ../../sdk/protocol && npm run build && npm test)
+```
+
+Run these commands from the repository root. This local install does not
+change the dependency pin or publish a package. CI uses the same checkout SDK
+so source changes can merge before the next SDK release. A subsequent
+`npm ci` restores the published dependency; reinstall the checkout SDK when
+continuing source development. Packaged deployments must wait for a release
+containing these helpers and update their SDK dependency before adopting the
+adapter's notification recovery changes.

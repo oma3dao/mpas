@@ -77,3 +77,5 @@ export { getSignatureSuite, resolveSignatureSuite, validatePublicJwk, normalizeP
 export type { SignatureSuiteId, MpasJwsAlgorithm, MpasHttpSignatureAlgorithm, MpasSignatureSuite } from "./lib/signature-suites.js";
 
 export { computeToolSurfaceHash, upstreamDigestFromArgs, upstreamBindingMatches } from "./lib/upstream-binding.js";
+
+export { guardNotificationSocket, notificationSocketError } from "./lib/client-transport.js";
