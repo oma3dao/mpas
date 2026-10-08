@@ -460,3 +460,26 @@ See [mixed-suite conformance](../../conformance/signature-suites/README.md) for
 fixture-backed workflow, replay, receipt, and generated-bridge tests. New HTTP
 senders include `alg`; absent HTTP `alg` means Ed25519 without adding bytes to
 the signature base. JWS requires protected `alg` and authorized `kid` in both suites.
+
+### CA notification handshake recovery
+
+The adapter installs its own early WebSocket error guard and retains sanitized
+failure details for the relay worker. Rejected upgrades (including HTTP
+500/502/503/504) trigger bounded exponential reconnect backoff rather than an
+unhandled error or a wait on an already-closed socket. Authenticated fallback
+polling continues during reconnects; execution and replay protections are unchanged.
+
+This CA-local fix works with the pinned published `@oma3/mpas` dependency;
+no SDK publish or local SDK substitution is required. From the repository root:
+
+```bash
+cd examples/demo
+npm ci
+npm run build
+npm test
+```
+
+After merging, rebuild on the CA host and restart the adapter using its existing
+configuration. Do not clear its state or dispatch ledger. This prevents the
+adapter crash; it does not repair a server returning HTTP 500. Process supervision
+and log rotation are separate host configuration, not installed by this change.

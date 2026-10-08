@@ -1,3 +1,4 @@
+import { notificationSocketError, notificationSocketState } from "./notification-socket.js";
 import { randomUUID } from "node:crypto";
 import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
@@ -209,7 +210,7 @@ export class VerifierRelayWorker {
         });
         this.socket = connection.socket;
         this.status = "connected";
-        reconnectMs = this.reconnectInitialMs;
+        if (notificationSocketState(connection.socket) === 1) reconnectMs = this.reconnectInitialMs;
         this.emit({ level: "info", event: "connected" });
 
         try {
@@ -220,7 +221,9 @@ export class VerifierRelayWorker {
         }
 
         await waitForSocketEnd(connection.socket, this.abortController.signal);
+        const socketError = notificationSocketError(connection.socket);
         this.socket = undefined;
+        if (socketError) throw socketError;
         if (this.abortController.signal.aborted) break;
         if (this.fatalError) throw this.fatalError;
         this.emit({ level: "warn", event: "disconnected" });
@@ -523,7 +526,7 @@ export { FileVerifierRelayStateStore as FileVerifierCoordinationStateStore };
 export { VerifierRelayWorker as VerifierCoordinationWorker };
 
 function waitForSocketEnd(socket: ActionRelayWebSocket, signal: AbortSignal): Promise<void> {
-  if (signal.aborted) return Promise.resolve();
+  if (signal.aborted || notificationSocketState(socket) === 3 || notificationSocketError(socket)) return Promise.resolve();
   return new Promise((resolve) => {
     const done = () => {
       socket.removeEventListener?.("close", done);
@@ -538,6 +541,7 @@ function waitForSocketEnd(socket: ActionRelayWebSocket, signal: AbortSignal): Pr
     socket.addEventListener("close", done);
     socket.addEventListener("error", done);
     signal.addEventListener("abort", abort, { once: true });
+    if (signal.aborted || notificationSocketState(socket) === 3 || notificationSocketError(socket)) done();
   });
 }
 
