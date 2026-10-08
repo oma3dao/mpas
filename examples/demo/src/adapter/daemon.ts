@@ -1,3 +1,4 @@
+import { guardNotificationSocket } from "./notification-socket.js";
 import { trustContextFromEnvironment } from "./trust-environment.js";
 import { readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
@@ -169,9 +170,9 @@ export async function startDaemon(options: DaemonOptions = {}): Promise<StartedD
     const relayClient = options.verifierRelayClient ?? options.verifierCoordinationClient ?? new ActionRelayClient({
       url: verifierRelayUrl,
       signer: keyManager,
-      webSocketFactory: ({ url, headers }) => new WebSocket(url, {
+      webSocketFactory: ({ url, headers }) => guardNotificationSocket(new WebSocket(url, {
         headers: { Authorization: headers.Authorization },
-      }) as unknown as ActionRelayWebSocket,
+      }) as unknown as ActionRelayWebSocket),
     });
     const stateStore = options.verifierRelayStateStore ?? options.verifierCoordinationStateStore ??
       new FileVerifierRelayStateStore(
