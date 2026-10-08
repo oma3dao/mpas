@@ -16,7 +16,7 @@
     "test:e2e:mcp-bridge": "node tests/scripts/run-mcp-bridge-e2e.mjs"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "1.30.0",
+    "@modelcontextprotocol/sdk": "1.32.1",
     "@modelcontextprotocol/server": "2.0.0",
     "@oma3/mpas": "0.1.0-alpha.14",
     "@oma3/omatrust": "^0.1.0-alpha.14",
@@ -33,7 +33,7 @@
     "@types/node": "^22.15.29",
     "ts-node": "^10.9.2",
     "typescript": "^5.8.3",
-    "vitest": "^3.2.2"
+    "vitest": "5.0.3"
   },
   "engines": {
     "node": ">=22"
