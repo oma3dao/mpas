@@ -1,7 +1,7 @@
 ---
 name: mpas-proposer
 description: Allow any combination of agents, humans, or software to approve MCP tool calls that you flag.  Prevent your agent from deleting your production database or violating compliance.  Use this skill for agents that PROPOSE calls, not agents that approve calls.
-version: 1.0.3
+version: 1.0.4
 homepage: https://github.com/oma3dao/mpas
 metadata:
   openclaw:
@@ -81,11 +81,17 @@ it is absent, do not attempt to call it; the harness manages MCP Tasks.
   match the user's intent before calling the tool.
 - Do not request or obtain protected application credentials.
 - Do not bypass the bridge with a direct API, CLI, UI, or alternate MCP server.
-- Call the application tool once. Every accepted call creates a new MPAS Action
-  and returns either an MCP Task or a deferred Action reference. A Task's
-  `taskId` and a deferred result's `actionRef.actionId.value` are the MPAS
-  Action ID.
-- Record the Action ID and the bridge that returned it. Actions are scoped to
+- Call the application tool once. Every accepted call creates a new MPAS
+  Action. If the Action completes during the call, the result is a normal tool
+  result. Otherwise the call returns an MCP Task or, when
+  `mpas_wait_for_action_result` is present, a deferred Action reference.
+- The MPAS Action ID is `_meta["org.oma3/mpas"].actionId` on a Task and
+  `actionRef.actionId.value` on a deferred result. A Task's `taskId` is not an
+  Action ID: use it only for Task operations, and never give it to a
+  Maintainer. The Action ID can change while authorization is collected, so
+  always use the one from the latest response.
+- Record the Action ID, the `taskId` when there is one, and the bridge that
+  returned it. Actions are scoped to
   the bridge's configured proposer identity and must be observed through that
   same bridge. Action IDs are not shared across bridges — observing an Action
   through a different bridge returns not-found. Distinct applications served
