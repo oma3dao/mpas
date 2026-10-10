@@ -60,6 +60,7 @@ pnpm-store/
 
 # Test build artifacts
 .signer-test-build-*/
+.installer-launch-build-*/
 
 # macOS / Xcode
 .DS_Store

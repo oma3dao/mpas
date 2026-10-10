@@ -12,6 +12,25 @@ and reviewing actions either from the human CLI or an agent harness.
 For the full single-machine demo walkthrough, see the
 [macOS demo setup guide](setup-macos.md).
 
+## Quick setup with the mpas CLI
+
+```sh
+npm install -g @oma3/mpas-cli@alpha
+mpas init maintainer --coordination <url> --harness <claude-code|claude-desktop|codex|cursor|hermes|openclaw|none>
+# Send the printed DID to the Verifier's operator.
+```
+
+`init` writes the signer config, registers `mpas-coordination` in the harness,
+installs the `mpas-maintainer` skill where the harness has a skills folder, and
+prints the role preamble for step 6 below. With `--harness none`, review from
+the terminal with `mpas action review` (section 4); `mpas mcp add --harness
+<name>` registers the signer later. Before the first `@oma3/mpas-cli` release,
+build the command from `examples/demo` with `npm ci && npm run build && npm link`.
+If you set this account up by hand, keep its DID with
+`mpas init maintainer --use-key ~/.mpas/keys/maintainer-key.json` (plus the flags above).
+
+The rest of this guide is the manual setup.
+
 ---
 
 ## 1. Prerequisites

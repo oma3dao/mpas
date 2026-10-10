@@ -4,13 +4,37 @@
 
 **Created:** 2026-10-07
 
-**Updated:** 2026-10-08
+**Updated:** 2026-10-09
 
-**Status:** Draft
+**Status:** Implemented. See Implementation status.
 
 Behavior is defined in the spec. This plan is the build order and the tests. Tests use a temporary `--home`, an injectable prompt, an injectable `process.execPath`, and injectable harness, registry, manifest, download, and npm-lookup runners. They do not call the network, listen on a port, or print a private JWK.
 
 Each phase starts by writing that phase's tests from the list below and running them red. Implementation of the phase then turns that file green. Do not write a separate commit per test. A later phase may add tests, and it does not rewrite an earlier phase's tests to match the code.
+
+## Implementation status
+
+As of 2026-10-09, Phases 0 through 5 are implemented on `feat/install-script` and not yet committed. The phase lists below include every change from the review rounds, and each behavior is recorded in the spec. All 110 installer tests and the 553 existing tests pass (663 in total), and `npm run typecheck` is clean.
+
+| Phase | Status | Tests in `examples/demo/tests/installer/` |
+|---|---|---|
+| 0. Package and bundled inputs | Done | `package.test.ts` (6) |
+| 1. `mpas init` | Done | `init.test.ts` (19) |
+| 2. `config`, `config validate`, `key rotate`, `signer` | Done | `config.test.ts` (12), `validate.test.ts` (7), `key-rotate.test.ts` (5), `signer.test.ts` (8), `txn.test.ts` (7), `layout.test.ts` (7), `printed.test.ts` (3) |
+| 3. `mpas mcp add` | Done | `mcp-add.test.ts` (17), `harness.test.ts` (11) |
+| 4. End-to-end and launch check | Done | `e2e.test.ts` (1), `launch.test.ts` (2) |
+| 5. Help text and operator docs | Done | `docs.test.ts` (5) |
+
+Code is in `examples/demo/src/cli/installer/`, with the build step in `examples/demo/scripts/bundle-assets.mjs` and test fixtures in `examples/demo/tests/fixtures/installer/`. Run the tests with `npx vitest run tests/installer` from `examples/demo`.
+
+Process note: Phases 0 and 1, and every change from the review rounds, had their tests run red before the code was written. The first pass of Phases 2 to 5 had its tests written first but not run red.
+
+Not done yet:
+
+- Release gate (spec §19). No application in `mpas-applications` has an install manifest or a published bridge, so `mpas mcp add` has run only against fixtures, and the Proposer bridge entry has not been launched.
+- Real harness registration. The `codex`, `claude`, and `openclaw` command forms were checked against their documentation, and tests use injected runners. One real registration per harness is still needed.
+- Publishing. A person publishes `@oma3/mpas-cli` by following the Release section. The one-shot `npx` form has been checked against a packed tarball.
+- `mpas-applications` work: install manifests, a README and template per application, and the issue about `humanApprovers` in the Netlify example.
 
 ---
 
@@ -18,7 +42,7 @@ Each phase starts by writing that phase's tests from the list below and running 
 
 Exit criterion: every test in this phase passes, and the existing CLI tests and `examples/demo` typecheck still pass.
 
-- `examples/demo/package.json` is named `@oma3/mpas-cli`, is not private, keeps the `mpas` bin, and lists `dist/`, the registry snapshot, and the skills in `files`. It has `publishConfig` with `"access": "public"` and the npm registry, `repository.directory` set to `examples/demo`, and a `prepack` script that runs the build, matching `sdk/protocol/package.json`.
+- `examples/demo/package.json` is named `@oma3/mpas-cli`, is not private, keeps the `mpas` and `mpas-demo` bins and adds `mpas-cli` pointing at the same file as `mpas`. Its `files` list is `dist`, `README.md`, `LICENSE`, and `NOTICE`; the registry snapshot and skills are bundled under `dist/bundled/`. It has `publishConfig` with `"access": "public"` and the npm registry, `repository.directory` set to `examples/demo`, and a `prepack` script that runs the build, matching `sdk/protocol/package.json`.
 - `npm pack --dry-run --json` lists only `dist/`, the registry snapshot, the skills, `package.json`, `README.md`, `LICENSE`, and `NOTICE`. It lists nothing under `tests/`, because the test fixtures include committed private keys.
 - The build copies `application-registry/*.json` and `integrations/skills/mpas-proposer/` and `mpas-maintainer/` into the package, byte-identical to the sources.
 - The bundled registry loads. An entry with `install` has `manifestUrl` and a `sha-256` `manifestDigest`. `application-registry/README.md` documents `install`.
@@ -31,8 +55,8 @@ Exit criterion: every test in this phase passes.
 - Proposer, terminal, no flags: prompts for coordination, action, and verifier DID. Does not prompt for home, suite, app, or harness. Empty URL answers store `http://127.0.0.1:7545` and `http://127.0.0.1:7544`. Empty verifier DID leaves it unset. No bridge file.
 - Proposer, non-interactive, missing `--coordination` or `--action`: exit nonzero, no files. Both present without `--verifier-did`: succeeds with the DID unset.
 - Proposer, flags supplied: stores those values, including `https://api.signerset.com`, and does not prompt.
-- Verifier, terminal: prompts for action only. Does not prompt for coordination, harness, or any DID. No application config file.
-- Verifier, non-interactive, missing `--action`: exit nonzero, no files. `--action local` alone succeeds. `--proposer-did` and `--maintainer-did` exit nonzero.
+- Verifier, terminal: prompts for action only. Does not prompt for mode, coordination, harness, or any DID. No application config file.
+- Verifier, non-interactive, missing `--action`: exit nonzero, no files. `--action local` succeeds with no mode saved, and `--mode direct` or `--mode relay` saves it. An unknown mode exits nonzero. `--proposer-did` and `--maintainer-did` exit nonzero.
 - Maintainer, terminal: prompts for coordination and harness. Empty harness answer is rejected. `none` is accepted. Empty coordination answer stores the localhost default. No proposer bridge.
 - Maintainer, non-interactive, missing `--coordination` or `--harness`: exit nonzero, no files.
 - Maintainer, `--harness none`: writes the signer config, calls no harness runner, prints no preamble, and prints `mpas action pending --config <absolute signer config>`. The `--harness cursor` case is in Phase 3, with the harness writers.
@@ -43,6 +67,9 @@ Exit criterion: every test in this phase passes.
 - Second init of the same role, with different URL, DID, and `--suite` flags: exit 0, no prompt, key bytes and saved values unchanged. Stdout says the home is already initialized and names `mpas config` and `mpas key rotate`.
 - Init of a second role on the same account, terminal: the confirmation defaults to No, and No changes nothing. Yes adds the role, keeps the key bytes, and asks only the rows not already saved. Non-interactive: `--add-role` is required. No second key file is ever created. `--suite` with a new role exits nonzero. Adding Verifier to a Proposer account, or the reverse, prints the credential warning.
 - A home with key files and no `account.json`: exit nonzero, names the files, changes nothing.
+- `--use-key <home>/keys/signing-key.json` on a home whose key is already at the standard path completes setup in place: same DID, key bytes unchanged. `init maintainer` leaves an existing signer config byte-identical and says so.
+- `--use-key` rejects a key file whose private key does not derive its DID (a file that mixes two keys), with no files changed and no key material printed.
+- `--use-key` on a first init adopts a manual key file: the DID is kept, `keys/signing-key.json` is a mode-`0600` copy, the original file and any other key files are unchanged, and the other key files are listed. It works in the same home as the manual key. A malformed key file, `--use-key` with `--suite`, and `--use-key` for a role the account already has exit nonzero and change nothing.
 - Proposer and Verifier stdout have the public DID and no prime directive. No `init` creates or edits an instruction file.
 - Stdout and stderr contain no private JWK. The command exits without listening.
 
@@ -58,15 +85,27 @@ Exit criterion: every test in this phase passes. Requires a home created by Phas
 - No change flags, terminal: prompts only the Yes rows for the account's roles. Return keeps a saved value. No change flags, non-interactive: prints the saved settings, exits 0, home unchanged. One or more flags: those flags change, and the other rows are not prompted.
 - Proposer: a new `--verifier-did` replaces the stored one and rewrites `actionEndpoint.verifierDid` in an existing bridge file. The same DID is a no-op. `--coordination` and `--action` replace saved URLs and rewrite an existing bridge file.
 - Maintainer: `--coordination` rewrites the signer config URL and does not edit the harness.
-- Verifier: a changed `--action` renames `journal/verifier-relay.json` with a timestamp. An unchanged URL leaves it.
+- Verifier: `--mode` replaces the saved mode. A changed `--action` or `--mode` leaves every relay state file in place and prints the restart guidance with the regenerated `mpas adapter start` command, whose `--verifier-relay-state` names a file for the new URL. Without flags and without a terminal, the output includes the current `mpas adapter start` command.
+- A changed URL prints which processes to restart for the account's roles, and says to let pending work finish first when the change moves the account to a different service or Verifier. A mode change alone does not print that note. The terminal flow never asks for the mode.
+- A malformed bridge config stops `mpas config --coordination` before any file changes.
+- A bridge or signer config whose `agent.keyFile` is not `keys/signing-key.json`, or whose `agent.did` is not the account's, makes `mpas config` and `mpas key rotate` exit nonzero with the home byte-identical. The error names each such file and prints the migration steps. After the config is pointed at the managed key, the same command succeeds.
 - The command does not edit a harness, does not listen, and rejects a credential or token flag.
+
+Multi-file updates (`init`, `config`, `key rotate`, `mcp add`), using an injected failpoint:
+
+- A failure injected while staging, while keeping copies, or after the first or a later commit rename leaves every file in the home byte-identical to before, and leaves no staged, copy, or marker file behind.
+- A failure injected while writing the first marker, or while recording the finished commit, leaves the home byte-identical with no leftovers. A marker that is not valid JSON stops the command, which names the kept copies.
+- A home left with `update-in-progress.json`, staged files, and copies, as an interrupted process would leave it, is rolled back by the next command, which says so. A marker that records a finished commit is rolled forward instead.
+- A lock held by a running process: the command exits nonzero, says another `mpas` command is updating the home, and leaves every file, including a pending update marker, unchanged. A lock left by a process that is no longer running is cleared, and the pending update is recovered. No command leaves `update.lock` behind.
 
 `mpas config validate`:
 
 - A new account of each role passes.
-- Each failure names its file: key mode not `0600`, an `agent.did` that differs from the key, a bridge config with `adapter`, and a plugin copy that does not match the registry `artifactDid`.
+- Each failure names its file: key mode not `0600`, an active key whose private key does not derive its DID, an `agent.did` that differs from the key, a bridge config with `adapter` or with a different `actionEndpoint.verifierDid`, and a plugin copy that does not match the registry `artifactDid`.
 - A Verifier draft with placeholders fails and names each placeholder field. A filled draft passes and prints the move command.
 - Live deployment configs get the existing checks, and the existing `config validate <name> --config-dir` tests still pass.
+- Precedence: with `$MPAS_CONFIG_DIR` set, `config validate <name>` takes the original path even when the home has `account.json`. On an account, a deployment config is selected by its `name` field and by its file name as well as by `<app>`. A name that matches nothing exits nonzero.
+- A Proposer plugin is checked against the `artifactDid` in `installed/<app>.json`. With a different bundled registry, as after a CLI upgrade, validation still passes and prints the newer registry entry as information. A bridge with no install record falls back to the bundled registry.
 - The home is byte-identical after validation, and no network call is made.
 
 `mpas key rotate`:
@@ -74,9 +113,9 @@ Exit criterion: every test in this phase passes. Requires a home created by Phas
 - No account: exit nonzero.
 - The old key's bytes are in `keys/signing-key.retired-<timestamp>.json` at mode `0600`. The new key is at `keys/signing-key.json`. `agent.did` is rewritten in the signer config and every bridge config. No harness runner is called.
 - The default suite is the current key's suite. `--suite P-256` changes it.
-- `--use <file>` moves a key made by `mpas key generate` into place. A file with the current DID, a malformed file, or `--use` together with `--suite` exits nonzero with the home unchanged.
-- On a Verifier account, the relay state is renamed with a timestamp.
-- Stdout has both DIDs and who must record the new one. Stdout and stderr contain no private JWK.
+- `--use-key <file>` moves a key made by `mpas key generate` into place. A file with the current DID, a malformed file, a file mixing two keys, or `--use-key` together with `--suite` exits nonzero with the home unchanged.
+- On a Verifier account, no relay state file is moved, and the printed `mpas adapter start` names a relay state file for the new DID.
+- Stdout has both DIDs, who must record the new one, and the stop, rotate, and restart procedure for the account's roles. Stdout and stderr contain no private JWK.
 
 `mpas signer` (fixture drafts and live configs are written directly by the test, since `mcp add` is Phase 3):
 
@@ -89,6 +128,11 @@ Exit criterion: every test in this phase passes. Requires a home created by Phas
 - `list` prints groups, DIDs, labels, and placeholders, and the file is byte-identical afterwards.
 - With a draft and a live config for the same application, the draft changes and the live config is byte-identical. With only a live config, the live config changes and stdout says the adapter must restart.
 - Every field other than the signer groups and `signerKeys` is unchanged after `add` and `remove`.
+
+Printed commands, shared by every command:
+
+- With a custom home and a different default home present, every printed command that acts on the account includes `--home <custom home>`. With the default home and `$MPAS_HOME` unset, none does. With `$MPAS_HOME` set, including when `--home ~/.mpas` is selected explicitly, every such command names the home. Commands for other participants never include it.
+- With a home path containing a space, a single quote, and `$`, each printed command, including the adapter start command and the draft `mv` command, is split by `/bin/sh` into exactly the intended arguments.
 
 ## Phase 3: `mpas mcp add`
 
@@ -116,10 +160,12 @@ Proposer:
 Verifier:
 
 - `--harness`: exit nonzero, no file.
-- Writes the plugin and `config/drafts/<app>-adapter-config.json`, deep-equal to the template except `plugin.path`. Nothing is written in `config/`.
+- Writes the plugin as `plugins/<app>-plugin-<cid>.json`, `installed/<app>.json`, and `config/drafts/<app>-adapter-config.json`, deep-equal to the template except `plugin.path`. Nothing is written in `config/`.
 - A manifest without a template: plugin kept, no draft, exit nonzero with the README link.
-- Loopback Action URL (`localhost`, `127.0.0.1`, `[::1]`): stdout prints the README link, the `mpas signer add` commands for the application, `mpas config validate <app>`, and `mpas adapter start` without `--verifier-relay-url`. Any other Action URL: the same command plus `--verifier-relay-url` and `--verifier-relay-state`. Every printed path is under the home. The process is not spawned and no harness file is written.
+- No mode saved: stdout prints both `mpas adapter start` commands, one for direct and one for relay, says which situation each is for, and names `mpas config --mode`.
+- Direct mode, with a loopback or a remote Action URL: stdout prints the README link, the `mpas signer add` commands for the application, `mpas config validate <app>`, and `mpas adapter start` without `--verifier-relay-url`. Relay mode, with a remote or a loopback Action URL: the same command plus `--verifier-relay-url` and `--verifier-relay-state`. Every printed path is under the home. The process is not spawned and no harness file is written.
 - Existing draft or live config without `--replace-config`: exit nonzero. With it: a new draft, the earlier draft renamed with a timestamp, and the live config and key unchanged. A second application is a second invocation.
+- A replacement draft from a registry with a newer plugin writes a second plugin file. The plugin file the live config names is byte-identical afterwards, and the live config still loads.
 - `--plugin` is still checked against `artifactDid`. `--config-template` skips the digest check.
 
 Harness, shared by maintainer init and proposer add:
@@ -140,12 +186,18 @@ Harness, shared by maintainer init and proposer add:
 
 Exit criterion: the test passes. Three temporary homes, one fixture application, non-interactive, no network.
 
-- `init maintainer --harness cursor` into a temporary Cursor home, `init verifier --action local`, and `init proposer --coordination local --action local`. No DIDs are passed.
+- `init maintainer --harness cursor` into a temporary Cursor home, `init verifier --action local --mode direct`, and `init proposer --coordination local --action local`. No DIDs are passed.
 - `mpas config --verifier-did` on the Proposer, then Proposer `mcp add` and Verifier `mcp add`.
 - On the Verifier, `mpas signer add --proposer` and `mpas signer add --maintainer` add the two DIDs to the draft. The test moves the draft into `config/`, standing in for the operator.
 - `mpas config validate` passes on all three homes, and the Credential Adapter's `loadDeploymentConfigs` loads the Verifier's `config/`.
 - `mpas key rotate` on the Proposer, then `mpas signer remove` of the old DID and `mpas signer add` of the new one on the Verifier: `mpas config validate` still passes on both homes, and the old DID is gone from the Verifier's config.
 - No process was started and no port was opened.
+
+Launch check, from a build of the package compiled into a temporary folder:
+
+- The Maintainer's generated harness entry, run exactly as written to the harness config (`command`, `args`, `env`), starts the signer server and answers an MCP `tools/list` with the four signer tools.
+- The Credential Adapter starts on a free port from the config, credential, adapter-key, and journal paths in the printed `mpas adapter start` command, with the Verifier's config loaded, and then stops.
+- The Proposer bridge entry is not launched here, because no bridge is published yet. The release gate in spec §19 covers it.
 
 ## Phase 5: Help text and operator docs
 
@@ -188,7 +240,10 @@ tmp=$(mktemp -d)
 npm install -g --prefix "$tmp" ./oma3-mpas-cli-0.1.0-alpha.N.tgz
 "$tmp/bin/mpas" --help
 "$tmp/bin/mpas" init proposer --home "$tmp/home" --coordination local --action local
+npm_config_cache="$tmp/cache" npx -y ./oma3-mpas-cli-0.1.0-alpha.N.tgz --help
 ```
+
+The last line checks the one-shot form users run with `npx -y @oma3/mpas-cli@alpha`. It works because the package has a `mpas-cli` command named after the package.
 
 Commit the version and lockfile changes, complete review, and publish from the reviewed commit:
 
@@ -213,3 +268,4 @@ npx -y @oma3/mpas-cli@alpha --help
 - `sdk/protocol/` has no diff. If `generateMpasKey` or `isDidJwk` cannot do the job, stop before adding an SDK export.
 - Do not publish `@oma3/mpas-cli` while implementing this plan. A person publishes it by following the Release section.
 - The `mpas-applications` work in spec §19 is tracked in that repository. Until a real application has a manifest, `mcp add` is exercised only with fixtures.
+- The docs keep `mpas mcp add` beside the manual steps until the release gate in spec §19 passes against the packed package.

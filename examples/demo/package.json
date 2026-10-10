@@ -1,19 +1,35 @@
 {
-  "name": "mpas-demo",
+  "name": "@oma3/mpas-cli",
   "version": "0.0.0",
-  "description": "MPAS local services — Credential Adapter daemon and Coordination Service",
+  "description": "MPAS participant CLI: account setup, harness registration, Credential Adapter, and Coordination Service",
   "type": "module",
-  "private": true,
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/oma3dao/mpas.git",
+    "directory": "examples/demo"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "NOTICE"
+  ],
   "bin": {
     "mpas": "./dist/cli/index.js",
+    "mpas-cli": "./dist/cli/index.js",
     "mpas-demo": "./dist/index.js"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "build": "tsc -p tsconfig.build.json && node scripts/bundle-assets.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node tests/scripts/run-tests.mjs",
-    "test:e2e:mcp-bridge": "node tests/scripts/run-mcp-bridge-e2e.mjs"
+    "test:e2e:mcp-bridge": "node tests/scripts/run-mcp-bridge-e2e.mjs",
+    "prepack": "npm run build"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.32.1",
@@ -27,7 +43,8 @@
     "json-canonicalize": "2.0.0",
     "multiformats": "^14.0.0",
     "undici": "7.30.0",
-    "ws": "^8.21.0"
+    "ws": "^8.21.0",
+    "yaml": "2.8.1"
   },
   "devDependencies": {
     "@types/node": "^22.15.29",

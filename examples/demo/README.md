@@ -1,6 +1,6 @@
-# mpas-demo
+# @oma3/mpas-cli
 
-Local MPAS (Multi-Party Action Security) services — Credential Adapter daemon, Coordination Service, and Signer Server.
+The reference `mpas` command: participant account setup, plus the local MPAS (Multi-Party Action Security) services — Credential Adapter daemon, Coordination Service, and Signer Server.
 
 MPAS is a protocol for multi-party approval of AI agent actions. Instead of giving agents direct access to privileged APIs (GitHub, cloud providers, databases), MPAS routes actions through a Credential Adapter that enforces policy-based approval workflows before execution.
 
@@ -10,6 +10,100 @@ covers the adapter trust boundary, commands, and managed OAuth status.
 Proposers and maintainers should start with their respective guides:
 [proposer setup guide](guides/proposer.md) and
 [maintainer setup guide](guides/maintainer.md).
+
+## Install and set up
+
+Install the `mpas` command:
+
+```sh
+npm install -g @oma3/mpas-cli@alpha
+mpas --help
+```
+
+Before the first `@oma3/mpas-cli` release, build it from this folder instead:
+`npm ci && npm run build && npm link`.
+
+Each participant has their own account: one MPAS home (`~/.mpas`, or
+`--home <dir>`) with one signing key. Every command works without a terminal,
+for example when an agent runs it, as long as the flags are given; `local`
+stands for the loopback default URL. Prompts appear only on a terminal.
+
+### Proposer
+
+```sh
+mpas init proposer --coordination <url> --action <url>
+mpas config --verifier-did <verifier did>
+mpas mcp add --app <app> --harness <claude-code|claude-desktop|codex|cursor|hermes|openclaw>
+```
+
+`init` prints your DID; send it to the Verifier's operator. `mpas mcp add`
+downloads and verifies the application's plugin, writes the bridge config,
+registers `<app>-mpas` in the harness, installs the `mpas-proposer` skill where
+the harness has a skills folder, and prints the role preamble to paste into the
+harness's instruction file. It never edits an instruction file.
+
+### Maintainer
+
+```sh
+mpas init maintainer --coordination <url> --harness <name>
+```
+
+`init` registers the signer server `mpas-coordination` in the harness. With
+`--harness none`, a person reviews from the terminal with `mpas action review`;
+`mpas mcp add --harness <name>` registers the signer later.
+
+### Verifier (Credential Adapter operator)
+
+```sh
+mpas init verifier --action <url> [--mode direct|relay]
+mpas mcp add --app <app>
+mpas signer add --app <app> --proposer <did>
+mpas signer add --app <app> --maintainer <did> --label <name>
+mpas config validate <app>
+```
+
+`--mode direct` means Proposers submit to this adapter at the Action URL;
+`--mode relay` means the adapter polls a relay there. Without a mode, the
+printed instructions show both `mpas adapter start` commands. `mpas mcp add` downloads
+and verifies the application's plugin and deployment config template, and
+writes a draft under `config/drafts/`. Follow the
+application's README for upstream setup such as credentials or OAuth.
+`mpas signer list` shows each signer group and any placeholders left, and
+`mpas signer remove` takes a DID out. When `mpas config validate` passes, move
+the draft into `config/` and run the `mpas adapter start` command that
+`mcp add` printed. Thresholds and approval rules are still edited by hand; see
+oma3dao/mpas#6.
+
+### Changing settings and keys
+
+- `mpas config` shows the saved settings. `--coordination`, `--action`, and
+  `--verifier-did` change them and rewrite the configs that use them.
+- `mpas key rotate` replaces the signing key immediately and keeps the old
+  file. Running bridges, signer servers, and adapters keep the key they loaded,
+  so let pending work finish and stop them first, rotate, then start them again;
+  the command prints these steps for the account's roles. To avoid a gap,
+  create the key first with `mpas key generate`, register its DID with each
+  Verifier and the coordination operator, then run
+  `mpas key rotate --use-key <file>`.
+- Changing a URL or mode with `mpas config` takes effect when the processes
+  that read it restart; the command says which ones.
+- A manual setup keeps its DID with `--use-key`: for example
+  `mpas init proposer --use-key ~/.mpas/keys/proposer-key.json`. The original
+  key file stays where it is; `mpas mcp add --replace-config` writes generated
+  configs. Until every bridge and signer config points at
+  `keys/signing-key.json`, `mpas config` and `mpas key rotate` change nothing
+  and print the steps to finish the move. If the key is already at
+  `keys/signing-key.json`, pass that path to `--use-key`.
+- Run one `mpas` command at a time per home. A second command started while
+  another is updating the home stops without changing anything.
+- `mpas init <role> --add-role` adds a role to an account. All roles on an
+  account share its key and DID, so that DID cannot approve its own proposals.
+  Each agent still has exactly one role.
+
+`mpas mcp add` needs install data that an application publishes in the
+registry. Where an application has none yet, use the manual steps in the
+guides. The design record is
+[docs/features/install-script/spec.md](../../docs/features/install-script/spec.md).
 
 ## Specifications
 
@@ -90,6 +184,19 @@ For the full protocol design, start with the base specification:
 ### Why workspace separation matters
 
 MPAS guarantees that no single agent can both propose and approve the same action. But that guarantee is only as strong as the isolation between keys. If a proposer agent can read the maintainer's key file, it can forge approvals. Workspace separation (separate macOS user accounts, containers, or machines) prevents this by making each agent's key unreachable to the others.
+
+Running the Proposer, the Maintainer, and the Credential Adapter under one user account, as the quick single-account demo does, gives up most of what MPAS provides. File permissions do not separate processes that run as the same user, and separate MPAS homes give separate DIDs, not isolation. An agent with file or shell access in that account can:
+
+- read the Maintainer's key and sign approvals for its own Actions, so multi-party approval no longer holds;
+- read the adapter's key and forge Execution Receipts;
+- read the upstream credentials and call the application directly, bypassing MPAS entirely;
+- edit the adapter's deployment config or policy, or its own bridge config.
+
+When both agents share one harness, such as one OpenClaw gateway, the Proposer can also call the Maintainer's approval tools. The signer server then signs with the Maintainer's key, and the protocol cannot tell. The roles are kept apart only by the agents' instructions.
+
+It also costs reliability. The adapter, the Coordination Service, and both agents share one account's processes, ports, and harness configuration, so one misbehaving agent, a crash, or a config change made for one role can stop or alter the others.
+
+Use the single-account setup only to learn the flow, with test credentials. Before using real credentials, give each role its own user account, container, or machine.
 
 ### Production topology
 

@@ -11,6 +11,27 @@ connecting to an agent harness.
 For the full single-machine demo walkthrough, see the
 [macOS demo setup guide](setup-macos.md).
 
+## Quick setup with the mpas CLI
+
+```sh
+npm install -g @oma3/mpas-cli@alpha
+mpas init proposer --coordination <url> --action <url>
+# Send the printed DID to the Verifier's operator, and get the Verifier's DID.
+mpas config --verifier-did <verifier did>
+mpas mcp add --app <app> --harness <claude-code|claude-desktop|codex|cursor|hermes|openclaw>
+```
+
+`mpas mcp add` writes the bridge config, registers `<app>-mpas` in the harness,
+installs the `mpas-proposer` skill where the harness has a skills folder, and
+prints the role preamble for step 6 below. Check the result with
+`mpas config validate <app>`. Before the first `@oma3/mpas-cli` release, build
+the command from `examples/demo` with `npm ci && npm run build && npm link`.
+If you set this account up by hand, keep its DID with
+`mpas init proposer --use-key ~/.mpas/keys/proposer-key.json` (plus the flags above).
+
+`mpas mcp add` needs install data that the application publishes in the
+registry. For an application without it, follow the manual steps below.
+
 ---
 
 ## 1. Prerequisites

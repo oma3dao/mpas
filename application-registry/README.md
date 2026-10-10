@@ -35,6 +35,7 @@ Each JSON file has the following structure:
 | `plugin`         | Yes      | Where to find the `MpasApplicationPlugin` for this application.             |
 | `publisher`      | Yes      | Who publishes and maintains this implementation.                            |
 | `status`         | Yes      | Implementation status: `"active"`, `"beta"`, `"planned"`, or `"deprecated"`. |
+| `install`        | No       | Where `mpas mcp add` finds this implementation's install manifest. Present only when the implementation can be installed by the CLI. |
 
 ### `application` Object
 
@@ -78,6 +79,15 @@ Future protocols (OpenAPI, EVM, A2A) will define their own upstream object forma
 | `githubOrg`    | Yes      | GitHub organization or user handle.              |
 | `publisherDid` | No       | Publisher's DID.                                 |
 | `repository`   | No       | Publisher's primary repository for this implementation. |
+
+### `install` Object
+
+| Field            | Required | Description                                                        |
+| :--------------- | :------: | :----------------------------------------------------------------- |
+| `manifestUrl`    | Yes      | `https` URL of the implementation's `install.json` manifest.        |
+| `manifestDigest` | Yes      | `{ "alg": "sha-256", "value": "<base64url>" }` over the manifest's exact bytes. |
+
+The manifest lives in the implementation's own repository and names the bridge package and exact version, the plugin URL, the deployment config template URL with its digest, and the README URL. `mpas mcp add` checks the manifest against `manifestDigest`, the plugin against `plugin.artifactDid`, and the template against the manifest's digest before writing anything. The CLI ships a snapshot of this folder, so a change here reaches users with the next CLI release. Recompute `manifestDigest` in the same change that edits the manifest.
 
 ## Integration Types
 

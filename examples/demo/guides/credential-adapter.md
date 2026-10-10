@@ -1,5 +1,33 @@
 # Credential Adapter operator guide
 
+## Quick setup with the mpas CLI
+
+```sh
+npm install -g @oma3/mpas-cli@alpha
+mpas init verifier --action <url> [--mode direct|relay]
+mpas mcp add --app <app>
+mpas signer add --app <app> --proposer <did>
+mpas signer add --app <app> --maintainer <did> --label <name>
+mpas config validate <app>
+```
+
+Use `--mode direct` when Proposers submit to this adapter at the Action URL,
+and `--mode relay` when the adapter polls a relay there. Without a mode, the
+printed instructions show both `mpas adapter start` commands. `mpas mcp add`
+downloads and verifies the application's plugin and deployment config template,
+writes a draft under `~/.mpas/config/drafts/`, and prints the
+`mpas adapter start` command for this home. Follow the application's README for
+upstream setup such as `mpas credential set` or `mpas oauth login`. Signer DIDs
+can arrive in any order; add each one with `mpas signer add`. When
+`mpas config validate` passes, move the draft into `~/.mpas/config/` and start
+the adapter. Before the first `@oma3/mpas-cli` release, build the command from
+`examples/demo` with `npm ci && npm run build && npm link`.
+
+`mpas mcp add` needs install data that the application publishes in the
+registry. For an application without it, follow the manual setup below.
+
+## Manual setup
+
 > **Complete signer account setup before starting this guide.**
 > The deployment config requires the `did:jwk` of every proposer and maintainer.
 > Those DIDs are only known after each signer has generated their key in their

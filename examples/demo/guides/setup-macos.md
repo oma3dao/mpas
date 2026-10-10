@@ -243,7 +243,48 @@ After installation it reads MCP config from `~/Library/Application Support/Claud
 
 This part sets up the entire MPAS demo on a single account: all signing keys, deployment config, bridge configs, credentials, and the daemon. It assumes you completed Part 1 (the repo is cloned, built, and tests pass).
 
-> **Single-user vs. multi-user:** In this flow, one account generates all keys (adapter + proposer + maintainer), creates all bridge configs, holds the credential, runs the daemon, AND runs the agents. For workspace separation across multiple macOS accounts (recommended for security), go through this flow first to understand the process and then see Part 5.
+> **Demo only: one account for every role is a major security and reliability compromise.** In this flow, one account generates all keys (adapter + proposer + maintainer), creates all bridge configs, holds the credential, runs the daemon, AND runs the agents. Everything runs as the same macOS user, so file permissions separate nothing. An agent with file or shell access can read the maintainer's key and approve its own actions, read the adapter's key and forge receipts, read the upstream credential and bypass MPAS, or edit the policy. Agents that share a harness can call each other's MPAS tools. One crash, misbehaving agent, or config change can also stop or alter the other roles. The roles are kept apart only by the agents' instructions.
+>
+> Use this flow to learn how MPAS works, with test credentials only. We strongly recommend separate macOS accounts (Part 5), containers, or machines for anything else. See [why separation matters](../README.md#why-workspace-separation-matters).
+
+## 2.0 Set up with the mpas CLI (one home per participant)
+
+The `mpas` CLI gives each participant an account: one home with one signing
+key. On a single machine, use one `--home` per participant so the three roles
+keep three separate DIDs. Roles that share a home share a DID, and MPAS will
+not let a DID approve its own proposals. Separate homes under one macOS user
+are still not isolated from each other; the warning above applies.
+
+```sh
+mpas init verifier --home ~/.mpas-verifier --action local --mode direct
+mpas init maintainer --home ~/.mpas-maintainer --coordination local --harness codex
+mpas init proposer --home ~/.mpas-proposer --coordination local --action local
+mpas config --home ~/.mpas-proposer --verifier-did <verifier DID>
+mpas mcp add --home ~/.mpas-proposer --app <app> --harness codex
+mpas mcp add --home ~/.mpas-verifier --app <app>
+mpas signer add --home ~/.mpas-verifier --app <app> --proposer <proposer DID>
+mpas signer add --home ~/.mpas-verifier --app <app> --maintainer <maintainer DID>
+mpas config validate --home ~/.mpas-verifier <app>
+```
+
+Codex keeps the two agents apart with `~/.codex-proposer` and
+`~/.codex-maintainer`. Cursor and Claude Desktop have one config per macOS
+user, so the CLI refuses to register both roles there; use Codex, or separate
+macOS users as in Part 5. When validation passes, move the draft from
+`~/.mpas-verifier/config/drafts/` into `~/.mpas-verifier/config/` and start the
+local services with every path given:
+
+```sh
+mpas daemon start \
+  --config-dir ~/.mpas-verifier/config \
+  --credential-dir ~/.mpas-verifier/credentials \
+  --adapter-key ~/.mpas-verifier/keys/signing-key.json \
+  --journal-path ~/.mpas-verifier/journal/dispatch-ledger.jsonl
+```
+
+`mpas mcp add` needs install data that the application publishes in the
+registry. The GitHub mirror application this guide uses has none, so the rest
+of Part 2 sets it up by hand in a single home.
 
 ## 2.1 Prepare a Demo MPAS Home
 
@@ -558,7 +599,8 @@ mechanics.
 | OpenClaw                     | Workspace `AGENTS.md` (e.g. `~/.openclaw/workspace/AGENTS.md`)          | `<workspace>/skills/mpas-proposer/` or `mpas-maintainer/`                |
 | Codex CLI                    | `AGENTS.md` in the working directory or session instruction file         | `$CODEX_HOME/skills/mpas-proposer/` or `mpas-maintainer/`                |
 | Claude Code                  | `CLAUDE.md`                                                              | `.claude/skills/mpas-proposer/` or `mpas-maintainer/`                    |
-| Claude Desktop               | Project or user instructions                                             | No skills loader — append the `SKILL.md` body after the preamble.        |
+| Claude Desktop               | Project or user instructions                                             | Upload the skill zip in Settings > Capabilities > Skills (`mpas mcp add` writes the zip). |
+| Cursor                       | `AGENTS.md`                                                              | `~/.cursor/skills/mpas-proposer/` or `mpas-maintainer/`                  |
 | Hermes                       | `AGENTS.md` for the preamble; `SOUL.md` for persona only                 | `~/.hermes/skills/mpas-proposer/` or `mpas-maintainer/`                  |
 
 **Returning vs new users:** If the instruction file already exists, **append** the preamble. For a fresh maintainer role, the preamble can be the start of the file. Install the skill into the skill directory; do not paste `SKILL.md` into `AGENTS.md` when the harness can load skills.
@@ -762,7 +804,7 @@ OpenClaw’s onboarding already created `main` with workspace `~/.openclaw/works
 mkdir -p ~/.openclaw/agents/maintainer/workspace
 ```
 
-> **Shared tool visibility is fine here.** In this single-account demo both agents can see both MPAS bridges. Each agent still has one role: the preamble and skill decide what it does, and each agent has a distinct MPAS signing key. MPAS also enforces at the protocol level that one identity cannot both propose and approve the same action. When you move the maintainer to its own macOS account (Part 5), it gets its own isolation.
+> **Shared tool visibility is a demo-only compromise.** In this single-account demo both agents can see both MPAS bridges. If the proposer calls the maintainer's `mpas_approve`, the signer server signs with the maintainer's key, which is a different DID from the proposer's, so the protocol accepts it. Only the preamble and skill keep each agent to its role. When you move the maintainer to its own macOS account (Part 5), each account registers only its own bridge and the separation is enforced.
 
 **Role instructions** — from **§3.1** (preamble + skill + GitHub demo addendum for this guide):
 
@@ -773,7 +815,7 @@ mkdir -p ~/.openclaw/agents/maintainer/workspace
 
 > **Absolute vs. `~` paths:** Use **absolute** paths for MCP server `command` and `args` — the bridge is launched without a shell, so `~` is passed through literally and the spawn fails. Paths that OpenClaw resolves itself (like agent `workspace` values) accept `~`.
 
-Add both MPAS bridges. `openclaw config set` merges the value into your existing `~/.openclaw/openclaw.json` — it won't overwrite other settings. In this single-account demo both agents see both bridges; each agent still follows one role from its preamble and skill. Role separation also comes from signing keys and protocol-level enforcement.
+Add both MPAS bridges. `openclaw config set` merges the value into your existing `~/.openclaw/openclaw.json` — it won't overwrite other settings. In this single-account demo both agents see both bridges, and only their preambles and skills keep them to one role each (see the warning in Part 2).
 
 > **Multi-user setups (Part 5):** each account configures only the single bridge matching its role — see §5.5 for details.
 
@@ -848,7 +890,7 @@ openclaw tui
 
 > what MCP tools do you have available?
 
-The proposer should report `create_issue_mirror`, `delete_branch_mirror`, and `merge_pull_request_mirror` (from `github-mpas-mirror`). In this single-account demo it may also see the `mpas_*` approval tools; do not use them — approval is the maintainer’s job.
+The proposer should report `create_issue_mirror`, `delete_branch_mirror`, and `merge_pull_request_mirror` (from `github-mpas-mirror`). In this single-account demo it may also see the `mpas_*` approval tools; do not use them — approval is the maintainer’s job. Nothing but the agent's instructions prevents it in this setup.
 
 ### Interacting with the agents
 

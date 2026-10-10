@@ -1,0 +1,27 @@
+{
+  "version": "1",
+  "application": {
+    "name": "Mirror Fixture Bridge",
+    "description": "Test fixture for mpas mcp add.",
+    "applicationDid": "did:web:github-mirror.example"
+  },
+  "native": false,
+  "protocol": "mcp",
+  "plugin": {
+    "repository": "https://fixtures.example.test/mirror/plugin.json",
+    "pluginDid": "did:web:plugins.oma3.org:github-mirror-plugin",
+    "artifactDid": "did:artifact:bafkreiboiym5t7serxxvynew6qzrjjo65lqiqv6jnjunkwmyp3hrvgh7qq"
+  },
+  "publisher": {
+    "name": "Fixture Org",
+    "githubOrg": "fixtureorg"
+  },
+  "status": "beta",
+  "install": {
+    "manifestUrl": "https://fixtures.example.test/mirror/install.json",
+    "manifestDigest": {
+      "alg": "sha-256",
+      "value": "_9Lr6vqNT20wiREdQqXVsOZJPeq8z78TGIRLwwJu6d4"
+    }
+  }
+}

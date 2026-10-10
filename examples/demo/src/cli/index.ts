@@ -34,6 +34,7 @@ import {
   type ReviewDecision,
   type SignerToolClient,
 } from "./signer-tools.js";
+import { runInstallerCommand, type InstallerDependencies } from "./installer/index.js";
 
 export interface CliIo {
   stdout: Pick<typeof process.stdout, "write">;
@@ -79,6 +80,7 @@ export interface CliDependencies {
   resolveOAuthDeployment?: ResolveOAuthDeployment;
   signerToolClient?: SignerToolClient;
   promptReviewDecision?: () => Promise<ReviewDecision>;
+  installer?: Partial<InstallerDependencies>;
 }
 
 const defaultIo: CliIo = {
@@ -91,6 +93,14 @@ export async function runCli(
   io: CliIo = defaultIo,
   dependencies: CliDependencies = {},
 ): Promise<CliResult> {
+  if (args[0] === "--help" || args[0] === "-h" || args[0] === "help") {
+    io.stdout.write(`${usage()}\n`);
+    return { exitCode: 0 };
+  }
+
+  const installerResult = await runInstallerCommand(args, io, dependencies.installer);
+  if (installerResult) return installerResult;
+
   let parsed: ReturnType<typeof parseArgs>;
   try {
     parsed = parseArgs(args);
@@ -856,6 +866,23 @@ function usage(): string {
   const verifierRelayFlags = "[--verifier-relay-url <url>] [--verifier-relay-state <file>] [--verifier-poll-interval-ms <milliseconds>]";
   return [
     "Usage:",
+    "  Account setup (all commands accept --home <dir>; the default is $MPAS_HOME or ~/.mpas):",
+    "  mpas init proposer [--coordination <url>] [--action <url>] [--verifier-did <did>] [--add-role] [--suite Ed25519|P-256 | --use-key <key-file>]",
+    "  mpas init maintainer [--coordination <url>] [--harness <name>|none] [--harness-home <dir>] [--skill install|print] [--add-role] [--suite Ed25519|P-256 | --use-key <key-file>]",
+    "  mpas init verifier [--action <url>] [--mode direct|relay] [--add-role] [--suite Ed25519|P-256 | --use-key <key-file>]",
+    "  mpas config [--coordination <url>] [--action <url>] [--mode direct|relay] [--verifier-did <did>]",
+    "  mpas config validate [<app>]",
+    "  mpas key rotate [--suite Ed25519|P-256 | --use-key <key-file>]",
+    "  mpas mcp add [--role proposer] [--app <app>] [--harness <name>] [--harness-home <dir>] [--skill install|print] [--plugin <file>] [--replace-config]",
+    "  mpas mcp add [--role verifier] [--app <app>] [--plugin <file>] [--config-template <file>] [--replace-config]",
+    "  mpas mcp add [--role maintainer] [--harness <name>] [--harness-home <dir>] [--skill install|print]",
+    "  mpas signer add --app <app> --proposer <did> [--label <text>]",
+    "  mpas signer add --app <app> --maintainer <did> [--group <name>] [--label <text>]",
+    "  mpas signer remove --app <app> <did>",
+    "  mpas signer list --app <app>",
+    "  Harnesses: claude-code, claude-desktop, codex, cursor, hermes, openclaw",
+    "",
+    "  Services and tools:",
     `  mpas adapter start [--config-dir <dir>] [--credential-dir <dir>] [--adapter-key <file>] [--journal-path <file>] [--trace <file>] [--host <host>] [--port <port>] ${verifierRelayFlags}`,
     `  mpas daemon start [--config-dir <dir>] [--credential-dir <dir>] [--adapter-key <file>] [--journal-path <file>] [--trace <file>] [--host <host>] [--port <port>] [--coordination-port <port>] ${coordinationAuthFlags} ${routingFlags}`,
     "  mpas adapter status [--config-dir <dir>] [--host <host>] [--port <port>]",
@@ -875,7 +902,7 @@ function usage(): string {
     "  mpas oauth login --application-did <did> [--no-browser] [--config-dir <dir>]",
     "  mpas oauth status --application-did <did> [--config-dir <dir>]",
     "  mpas oauth logout --application-did <did> [--config-dir <dir>]",
-    "  mpas config validate <name> [--config-dir <dir>] [--credential-dir <dir>]",
+    "  mpas config validate <name> [--config-dir <dir>] [--credential-dir <dir>] [--bridge-dir <dir>]",
     "  mpas trace inspect <file>",
   ].join("\n");
 }
