@@ -1,6 +1,6 @@
 {
   "name": "@oma3/mpas-cli",
-  "version": "0.0.0",
+  "version": "0.1.0-alpha.1",
   "description": "MPAS participant CLI: account setup, harness registration, Credential Adapter, and Coordination Service",
   "type": "module",
   "license": "Apache-2.0",

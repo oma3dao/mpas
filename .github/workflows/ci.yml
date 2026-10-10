@@ -86,7 +86,7 @@ jobs:
         working-directory: sdk/protocol
         run: npm test
 
-      - name: Build SDK for demo
+      - name: Build SDK for CLI
         working-directory: sdk/protocol
         run: npm run build
 
