@@ -5,7 +5,7 @@ bridge E2E uses the checked-in generated bridge at `src/bridge/github-bridge.ts`
 
 ## Quick Start
 
-From the `examples/demo` package root:
+From the `cli` package root:
 
 ```sh
 npm run build
@@ -86,7 +86,7 @@ Run it with:
 npm run test:e2e:mcp-bridge
 ```
 
-The E2E runner builds `examples/demo` against its installed `@oma3/mpas` dependency, then runs only
+The E2E runner builds `cli` against its installed `@oma3/mpas` dependency, then runs only
 `tests/e2e/mcp-bridge-stack.test.ts`.
 
 Like the coordination daemon tests, this E2E binds localhost ports and may require sandbox approval in restricted

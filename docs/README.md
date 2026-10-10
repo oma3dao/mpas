@@ -33,7 +33,7 @@ consumer.
 
 ### setup/ (planned)
 
-Getting started guides, build instructions, environment setup, and migration guides. Not yet populated — see `examples/demo/guides/` for the current setup guide.
+Getting started guides, build instructions, environment setup, and migration guides. Not yet populated — see `cli/guides/` for the current setup guide.
 
 Audience: developers setting up MPAS locally or deploying components.
 

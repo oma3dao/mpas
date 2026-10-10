@@ -165,7 +165,7 @@ The only path to write operations should be through the MPAS bridge → Credenti
 
 ### Step 7: Build MPAS
 
-Follow the canonical [Build and Verify sequence](../../../README.md#build-and-verify)
+Follow the canonical [Build and Verify sequence](../../README.md#build-and-verify)
 from the repository root. Build the local SDK before installing the demo: the demo
 currently consumes a copied local SDK package, not a published registry version.
 The sequence includes SDK, generator, demo, typechecks, and the demo E2E tests.
@@ -175,7 +175,7 @@ Both test runners fail if no tests are discovered.
 
 `npm test` already includes the MCP bridge E2E tests. To rerun that suite explicitly
 while diagnosing transport issues, use `npm run test:e2e:mcp-bridge` in
-`examples/demo`; it is not an additional required verification step.
+`cli`; it is not an additional required verification step.
 
 ## 1.2 Install Your Agent Harness
 
@@ -298,7 +298,7 @@ mkdir -p "$MPAS_HOME/config" "$MPAS_HOME/plugins" "$MPAS_HOME/credentials" "$MPA
 The plugin and config give you a template you can customize for your MPAS implementation.
 
 ```sh
-cd "$HOME/Projects/mpas/examples/demo"
+cd "$HOME/Projects/mpas/cli"
 cp plugins/github-mirror-plugin.json "$MPAS_HOME/plugins/github-mirror-plugin.json"
 cp configs/github-mirror-adapter-config.json "$MPAS_HOME/config/github-mirror-adapter-config.json"
 ```
@@ -318,7 +318,7 @@ You need three keys:
 Generate them directly into `$MPAS_HOME/keys`:
 
 ```sh
-cd "$HOME/Projects/mpas/examples/demo"
+cd "$HOME/Projects/mpas/cli"
 node dist/cli/index.js key generate adapter-key --key-dir "$MPAS_HOME/keys"
 node dist/cli/index.js key generate proposer-key --key-dir "$MPAS_HOME/keys"
 node dist/cli/index.js key generate maintainer-key --key-dir "$MPAS_HOME/keys"
@@ -355,7 +355,7 @@ cat > $MPAS_HOME/mcp-server-configs/github-mirror-mcp-bridge-config.json <<EOF
 {
   "mode": "proposer",
   "plugin": "$MPAS_HOME/plugins/github-mirror-plugin.json",
-  "tools": "$HOME/Projects/mpas/examples/demo/bridge-tools/github-mirror-tools.json",
+  "tools": "$HOME/Projects/mpas/cli/bridge-tools/github-mirror-tools.json",
   "adapter": {
     "url": "http://127.0.0.1:7544"
   },
@@ -448,7 +448,7 @@ To create fine-grained PATs, see: https://docs.github.com/en/authentication/keep
 After editing the configs and storing the credential, run validate to check for paste errors:
 
 ```sh
-cd "$HOME/Projects/mpas/examples/demo"
+cd "$HOME/Projects/mpas/cli"
 node dist/cli/index.js config validate github-mirror-adapter-config \
   --config-dir "$MPAS_HOME/config" --credential-dir "$MPAS_HOME/credentials" \
   --bridge-dir "$MPAS_HOME/mcp-server-configs"
@@ -496,7 +496,7 @@ In a dedicated terminal:
 
 ```sh
 export MPAS_HOME="$HOME/.mpas"
-cd "$HOME/Projects/mpas/examples/demo"
+cd "$HOME/Projects/mpas/cli"
 node dist/cli/index.js daemon start \
   --config-dir "$MPAS_HOME/config" \
   --credential-dir "$MPAS_HOME/credentials" \
@@ -680,7 +680,7 @@ Create `~/.codex-proposer/config.toml`:
 [mcp_servers.github-mpas]
 command = "node"
 args = [
-  "/Users/YOU/Projects/mpas/examples/demo/dist/bridge/github-bridge.js",
+  "/Users/YOU/Projects/mpas/cli/dist/bridge/github-bridge.js",
   "--config",
   "/Users/YOU/.mpas/mcp-server-configs/github-mirror-mcp-bridge-config.json"
 ]
@@ -697,7 +697,7 @@ Create `~/.codex-maintainer/config.toml`:
 [mcp_servers.mpas-coordination]
 command = "node"
 args = [
-  "/Users/YOU/Projects/mpas/examples/demo/dist/signer-server/index.js",
+  "/Users/YOU/Projects/mpas/cli/dist/signer-server/index.js",
   "--config",
   "/Users/YOU/.mpas/mcp-server-configs/maintainer-signer-config.json"
 ]
@@ -825,7 +825,7 @@ openclaw config set mcp.servers "$(cat <<'JSON'
   "github-mpas-mirror": {
     "command": "/ABSOLUTE/PATH/TO/node",
     "args": [
-      "/Users/YOU/Projects/mpas/examples/demo/dist/bridge/github-bridge.js",
+      "/Users/YOU/Projects/mpas/cli/dist/bridge/github-bridge.js",
       "--config",
       "/Users/YOU/.mpas/mcp-server-configs/github-mirror-mcp-bridge-config.json"
     ]
@@ -833,7 +833,7 @@ openclaw config set mcp.servers "$(cat <<'JSON'
   "mpas-coordination": {
     "command": "/ABSOLUTE/PATH/TO/node",
     "args": [
-      "/Users/YOU/Projects/mpas/examples/demo/dist/signer-server/index.js",
+      "/Users/YOU/Projects/mpas/cli/dist/signer-server/index.js",
       "--config",
       "/Users/YOU/.mpas/mcp-server-configs/maintainer-signer-config.json"
     ]
@@ -952,7 +952,7 @@ Use this account for **one** role only. Edit `~/Library/Application Support/Clau
     "github-mpas-mirror": {
       "command": "node",
       "args": [
-        "/Users/YOU/Projects/mpas/examples/demo/dist/bridge/github-bridge.js",
+        "/Users/YOU/Projects/mpas/cli/dist/bridge/github-bridge.js",
         "--config",
         "/Users/YOU/.mpas/mcp-server-configs/github-mirror-mcp-bridge-config.json"
       ]
@@ -1095,7 +1095,7 @@ Copy the `signerKeys` array and `policy.signerGroups` from your mirror config in
 "executionTarget": {
   "type": "mcp.stdio",
   "command": "<absolute-path-to-node>",
-  "args": ["/Users/YOU/Projects/mpas/examples/demo/tests/fixtures/adapter/github-mcp-server.mjs"],
+  "args": ["/Users/YOU/Projects/mpas/cli/tests/fixtures/adapter/github-mcp-server.mjs"],
   "env": {
     "GITHUB_PERSONAL_ACCESS_TOKEN": "{{credential:github-live-demo-token}}"
   }
@@ -1124,7 +1124,7 @@ cat > $MPAS_HOME/mcp-server-configs/github-live-demo-mcp-bridge-config.json <<EO
 {
   "mode": "proposer",
   "plugin": "$MPAS_HOME/plugins/github-live-demo-plugin.json",
-  "tools": "$HOME/Projects/mpas/examples/demo/bridge-tools/github-live-demo-tools.json",
+  "tools": "$HOME/Projects/mpas/cli/bridge-tools/github-live-demo-tools.json",
   "adapter": { "url": "http://127.0.0.1:7544" },
   "agent": {
     "did": "REPLACE_ME_WITH_PROPOSER_DID",
@@ -1146,7 +1146,7 @@ openclaw config set mcp.servers.github-mpas-live-demo "$(cat <<'JSON'
 {
   "command": "/ABSOLUTE/PATH/TO/node",
   "args": [
-    "/Users/YOU/Projects/mpas/examples/demo/dist/bridge/github-bridge.js",
+    "/Users/YOU/Projects/mpas/cli/dist/bridge/github-bridge.js",
     "--config",
     "/Users/YOU/.mpas/mcp-server-configs/github-live-demo-mcp-bridge-config.json"
   ]
@@ -1304,7 +1304,7 @@ git checkout main
 
 7. **Build and test** (§1.1 Step 7 and 8):
 
-Follow the canonical [Build and Verify sequence](../../../README.md#build-and-verify) from the repository root.
+Follow the canonical [Build and Verify sequence](../../README.md#build-and-verify) from the repository root.
 
 8. **Install agent harness** (§1.2) — install OpenClaw, Codex CLI, or your preferred harness. Do NOT configure MPAS bridges yet — that happens in §5.5.
 
@@ -1362,7 +1362,7 @@ Do NOT copy keys from the operator. Each account generates its own key so only t
 **On `agent-a`:**
 
 ```sh
-cd "$HOME/Projects/mpas/examples/demo"
+cd "$HOME/Projects/mpas/cli"
 node dist/cli/index.js key generate proposer-key --key-dir ~/.mpas/keys
 chmod 600 ~/.mpas/keys/*.json
 ```
@@ -1370,7 +1370,7 @@ chmod 600 ~/.mpas/keys/*.json
 **On `agent-b`:**
 
 ```sh
-cd "$HOME/Projects/mpas/examples/demo"
+cd "$HOME/Projects/mpas/cli"
 node dist/cli/index.js key generate maintainer-key --key-dir ~/.mpas/keys
 chmod 600 ~/.mpas/keys/*.json
 ```
@@ -1385,7 +1385,7 @@ Each command prints a DID and public JWK. Save the DID — because these are
 Copy the application plugin (the proposer bridge uses it for application identity and execution profile):
 
 ```sh
-cp "$HOME/Projects/mpas/examples/demo/plugins/github-mirror-plugin.json" ~/.mpas/plugins/github-mirror-plugin.json
+cp "$HOME/Projects/mpas/cli/plugins/github-mirror-plugin.json" ~/.mpas/plugins/github-mirror-plugin.json
 ```
 
 Create the bridge config:
@@ -1395,7 +1395,7 @@ cat > ~/.mpas/mcp-server-configs/github-mirror-mcp-bridge-config.json <<EOF
 {
   "mode": "proposer",
   "plugin": "$HOME/.mpas/plugins/github-mirror-plugin.json",
-  "tools": "$HOME/Projects/mpas/examples/demo/bridge-tools/github-mirror-tools.json",
+  "tools": "$HOME/Projects/mpas/cli/bridge-tools/github-mirror-tools.json",
   "adapter": {
     "url": "http://127.0.0.1:7544"
   },
@@ -1544,7 +1544,7 @@ The operator retains: adapter key, deployment config, credentials, plugin, journ
 | ----------------------------------------------------- | ---------------------------------------------------- | ----------------------------------------------------------------------- |
 | `node --version` shows less than `v22.x`              | Shell is using another Node                          | Run `nvm install --lts`; check `which node`; reopen the terminal.       |
 | Node install says your macOS is too old               | Newer Node versions may not support your OS          | Install Node 22 with `nvm install 22`; if macOS is older than 11, upgrade macOS or use another machine. |
-| `npm ci` fails immediately                       | Wrong directory or missing package.json              | Run it inside `mpas/examples/demo` or `mpas/sdk/protocol`.              |
+| `npm ci` fails immediately                       | Wrong directory or missing package.json              | Run it inside `mpas/cli` or `mpas/sdk/protocol`.              |
 | `npm run build` fails with modern JS/TS syntax errors | Wrong Node version                                   | Verify `node --version` is `v22.x` or later.                            |
 | `generate-fixtures.ts` fails                          | Missing dependencies                                 | Run `npm ci` first.                                                |
 | `EACCES` on keys or credentials                       | File permissions or wrong path                       | Run `chmod 600 "$MPAS_HOME"/keys/*.json "$MPAS_HOME"/credentials/*.json`. |
@@ -1570,7 +1570,7 @@ The operator retains: adapter key, deployment config, credentials, plugin, journ
 
 - [ ] macOS 11+
 - [ ] `node --version` → `v22.x` or later
-- [ ] `mpas/examples/demo`: install + generate fixtures + build + test pass
+- [ ] `mpas/cli`: install + generate fixtures + build + test pass
 - [ ] E2E test: 8 tests pass
 - [ ] Agent harness installed and responding
 

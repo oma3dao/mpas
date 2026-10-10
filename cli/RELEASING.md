@@ -1,8 +1,8 @@
 # Releasing `@oma3/mpas-cli`
 
-`@oma3/mpas-cli` is published from `examples/demo`. A person publishes it,
+`@oma3/mpas-cli` is published from `cli`. A person publishes it,
 because publishing needs an npm account with 2FA in the `oma3` organization.
-This process follows [`sdk/protocol/RELEASING.md`](../../sdk/protocol/RELEASING.md),
+This process follows [`sdk/protocol/RELEASING.md`](../sdk/protocol/RELEASING.md),
 which also covers organization access and account rules.
 
 ## First release only
@@ -19,7 +19,7 @@ From the directory containing the `mpas` repository, run the following,
 replacing `N` with the next alpha number:
 
 ```sh
-cd examples/demo
+cd cli
 npm ci
 npm version 0.1.0-alpha.N --no-git-tag-version
 npm run typecheck

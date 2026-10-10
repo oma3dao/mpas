@@ -9,7 +9,7 @@ import { loadRegistry } from "../../src/cli/installer/registry.js";
 import { extractPreamble } from "../../src/cli/installer/skills.js";
 
 const demoDir = fileURLToPath(new URL("../../", import.meta.url));
-const repoRoot = fileURLToPath(new URL("../../../../", import.meta.url));
+const repoRoot = fileURLToPath(new URL("../../../", import.meta.url));
 
 async function listFiles(dir: string): Promise<string[]> {
   const entries = await readdir(dir, { withFileTypes: true, recursive: true });
@@ -33,7 +33,7 @@ describe("Phase 0: package and bundled inputs", () => {
     // The registry snapshot and skills are bundled under dist/bundled, so "dist" covers them.
     expect(pkg.files).toEqual(["dist", "README.md", "LICENSE", "NOTICE"]);
     expect(pkg.publishConfig).toEqual(sdk.publishConfig);
-    expect(pkg.repository).toEqual({ ...sdk.repository, directory: "examples/demo" });
+    expect(pkg.repository).toEqual({ ...sdk.repository, directory: "cli" });
     expect(pkg.scripts.prepack).toBe("npm run build");
     expect(pkg.scripts.build).toContain("scripts/bundle-assets.mjs");
   });

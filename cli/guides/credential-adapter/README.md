@@ -6,7 +6,7 @@ operations, and signs Execution Receipts. Agents and MCP bridges must not have
 access to its credential stores or operator controls.
 
 This guide is the operator-facing home for the demo Credential Adapter. The
-feature specifications under [`docs/features`](../../../../docs/features/) are
+feature specifications under [`docs/features`](../../../docs/features/) are
 the design authority; this guide explains how to operate the reference demo.
 
 ## Commands
@@ -74,5 +74,5 @@ codes, PKCE material, cookies, and callback query strings must never be printed.
 ## Related documentation
 
 - [Demo setup for macOS](../setup-macos.md)
-- [Managed MCP OAuth specification](../../../../docs/features/mcp-oauth/spec.md)
-- [Managed MCP OAuth implementation plan](../../../../docs/features/mcp-oauth/plan.md)
+- [Managed MCP OAuth specification](../../../docs/features/mcp-oauth/spec.md)
+- [Managed MCP OAuth implementation plan](../../../docs/features/mcp-oauth/plan.md)

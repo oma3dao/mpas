@@ -9,7 +9,7 @@ import { generateMpasKey } from "../../src/core/did-jwk.js";
 import { runCli } from "../../src/cli/index.js";
 import type { InstallerDependencies } from "../../src/cli/installer/deps.js";
 
-export const repoRoot = fileURLToPath(new URL("../../../../", import.meta.url));
+export const repoRoot = fileURLToPath(new URL("../../../", import.meta.url));
 export const installerFixtures = fileURLToPath(new URL("../fixtures/installer/", import.meta.url));
 
 class MemoryWriter {

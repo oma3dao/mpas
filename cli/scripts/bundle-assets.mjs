@@ -27,7 +27,7 @@ export async function bundleAssets({ repoRoot, outDir }) {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   await bundleAssets({
-    repoRoot: fileURLToPath(new URL("../../../", import.meta.url)),
+    repoRoot: fileURLToPath(new URL("../../", import.meta.url)),
     outDir: fileURLToPath(new URL("../dist/bundled/", import.meta.url)),
   });
 }

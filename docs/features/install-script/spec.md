@@ -6,7 +6,7 @@
 
 **Updated:** 2026-10-08
 
-**Affects:** `examples/demo/src/cli/`, `examples/demo/package.json`, `examples/demo/README.md`, participant guides in `examples/demo/guides/`, the registry schema in `application-registry/`
+**Affects:** `cli/src/cli/`, `cli/package.json`, `cli/README.md`, participant guides in `cli/guides/`, the registry schema in `application-registry/`
 
 **Companion:** [plan.md](./plan.md)
 
@@ -68,9 +68,9 @@ Participants use different service URLs. A local demo uses loopback. SignerSet u
 
 ## 5. Placement
 
-The installer is participant tooling. It belongs in `oma3dao/mpas`, as commands on the reference `mpas` CLI under `examples/demo/src/cli/`.
+The installer is participant tooling. It belongs in `oma3dao/mpas`, as commands on the reference `mpas` CLI under `cli/src/cli/`.
 
-It does not belong in `mpas-applications`, `mpas-coordination-server`, or a SignerSet-specific CLI. A hosted service is just a URL the user types. This feature does not treat any vendor host as a shortcut. The long-term package directory is `cli/`; moving the current tree is tracked separately and is not part of this feature.
+It does not belong in `mpas-applications`, `mpas-coordination-server`, or a SignerSet-specific CLI. A hosted service is just a URL the user types. This feature does not treat any vendor host as a shortcut. The package lives in `cli/` at the repository root.
 
 ## 6. Installing `mpas`
 
@@ -81,7 +81,7 @@ npm install -g @oma3/mpas-cli@alpha
 mpas --help
 ```
 
-`@oma3/mpas-cli` is the package this feature publishes, created from `examples/demo`. `@oma3/mpas` remains the protocol SDK and is not the command users install. The build copies a snapshot of `application-registry/` (§19) and the `integrations/skills/mpas-proposer/` and `mpas-maintainer/` folders (§14) into the package.
+`@oma3/mpas-cli` is the package this feature publishes, created from `cli`. `@oma3/mpas` remains the protocol SDK and is not the command users install. The build copies a snapshot of `application-registry/` (§19) and the `integrations/skills/mpas-proposer/` and `mpas-maintainer/` folders (§14) into the package.
 
 A one-shot `npx -y @oma3/mpas-cli@alpha` may run `init`. The package keeps its `mpas` and `mpas-demo` commands and adds `mpas-cli`, the same program as `mpas`, because npm's one-shot form runs the command named after the package. Harness config written by these commands must not depend on a transient `npx` cache path or on the harness's `PATH` (§13). It records the absolute path of the `mpas` script that handled the command when that script is a real install. When the command itself was started through `npx`, the harness entry uses `npx` with the same pinned package version, in the form `npx -y --package @oma3/mpas-cli@<version> mpas ...`, because the package has more than one command.
 
@@ -482,11 +482,11 @@ These commands do not start an OpenClaw gateway or any other agent harness.
 - No `init`, `config`, `key`, `mcp`, or `signer` command listens on a port.
 - The help text still documents `mpas adapter start`, `mpas coordination start`, `mpas daemon start`, and every other existing command, and does not document `mpas process start`.
 - Tests use fixture registry entries, manifests, and temporary homes. They do not print or commit private keys.
-- `examples/demo/README.md` opens with an operator section showing npm install, `mpas init`, `mpas config`, `mpas key rotate`, `mpas mcp add`, and `mpas signer` for a human or an agent that has not read this spec.
+- `cli/README.md` opens with an operator section showing npm install, `mpas init`, `mpas config`, `mpas key rotate`, `mpas mcp add`, and `mpas signer` for a human or an agent that has not read this spec.
 
 ## 18. CLI README
 
-The operator document is the opening section of `examples/demo/README.md`, ahead of the existing architecture material. It is the README npm shows for `@oma3/mpas-cli`, and it moves with the package to `cli/`. It is written for a person and for an agent that is asked to run the CLI. It lists the install command, the three roles, `mpas init`, `mpas config` and `mpas config validate`, `mpas key rotate`, Proposer `mpas mcp add`, Maintainer signer registration at init, Verifier `mpas mcp add` as the command that installs the plugin and a deployment config draft, and `mpas signer` for adding and removing signer DIDs. It points to each application's README for upstream setup, and points policy-rule editing at oma3dao/mpas#6. It does not restate the HTTP profile. This feature spec stays the design record. The README is the usage record.
+The operator document is the opening section of `cli/README.md`, ahead of the existing architecture material. It is the README npm shows for `@oma3/mpas-cli`. It is written for a person and for an agent that is asked to run the CLI. It lists the install command, the three roles, `mpas init`, `mpas config` and `mpas config validate`, `mpas key rotate`, Proposer `mpas mcp add`, Maintainer signer registration at init, Verifier `mpas mcp add` as the command that installs the plugin and a deployment config draft, and `mpas signer` for adding and removing signer DIDs. It points to each application's README for upstream setup, and points policy-rule editing at oma3dao/mpas#6. It does not restate the HTTP profile. This feature spec stays the design record. The README is the usage record.
 
 ## 19. Application Install Data
 

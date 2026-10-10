@@ -435,7 +435,7 @@ export function generateToolsJson(tools: McpToolDefinition[]): string {
  * bridge. The SDK ships only the WorkflowStore contract and an in-memory
  * reference; durable persistence is deployment code, and this file is the
  * reference implementation. Keep in sync with
- * examples/demo/src/bridge/sqlite-workflow-store.ts.
+ * cli/src/bridge/sqlite-workflow-store.ts.
  */
 export function generateWorkflowStore(): string {
   return `import { mkdirSync } from "node:fs";

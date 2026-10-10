@@ -1,9 +1,12 @@
 # mpas
 
 > [!WARNING]
-> **Experimental alpha.** MPAS is not production-ready or independently
-> audited. Breaking changes are expected. The current reference integration is
-> GitHub; other integrations are planned.
+> **Alpha.** MPAS has not been independently audited. Breaking changes are
+> expected, so anyone running it needs to follow releases and upgrade
+> deliberately, and it will keep hardening through real-world use. The
+> reference Coordination Service keeps pending approvals in memory, so a
+> restart loses them. For the status of each application bridge, see the
+> [mpas-applications roadmap](https://github.com/oma3dao/mpas-applications/blob/main/ROADMAP.md).
 
 Canonical repository for the MPAS (Multi-Party Action Security) standard and reference implementation.
 
@@ -118,15 +121,15 @@ npm ci --prefix bridge-generator
 npm run build --prefix bridge-generator
 npm test --prefix bridge-generator
 
-npm ci --prefix examples/demo
-npm run build --prefix examples/demo
-npm run typecheck --prefix examples/demo
-npm test --prefix examples/demo
+npm ci --prefix cli
+npm run build --prefix cli
+npm run typecheck --prefix cli
+npm test --prefix cli
 ```
 
 For the complete local governed-action walkthrough, including proposer,
 maintainer, Credential Adapter, policy, and agent-harness configuration, follow
-the [macOS demo setup guide](examples/demo/guides/setup-macos.md).
+the [macOS demo setup guide](cli/guides/setup-macos.md).
 
 ## Repository Layout
 
@@ -137,15 +140,17 @@ sdk/
   protocol/                     @oma3/mpas — protocol SDK (types, verification,
                                 policy engine, receipts, proposer primitives,
                                 protocol clients)
-examples/
-  demo/                         Runnable reference implementation of the full MPAS flow
-    src/
-      adapter/                  Credential Adapter daemon (Fastify HTTP server)
-      coordination/             Coordination Service (in-memory, Fastify)
-      signer-server/            MPAS Signer MCP Server (standalone, per-agent)
-      core/                     Re-exports from @oma3/mpas (thin barrel files)
-      cli/                      Operator commands and human Maintainer review CLI
-    tests/                      330+ tests (unit, integration, e2e)
+cli/                            @oma3/mpas-cli — the mpas command and the
+                                participant stack it runs
+  src/
+    adapter/                    Credential Adapter daemon (Fastify HTTP server)
+    coordination/               Coordination Service (in-memory, Fastify)
+    signer-server/              MPAS Signer MCP Server (standalone, per-agent)
+    core/                       Re-exports from @oma3/mpas (thin barrel files)
+    cli/                        Account setup, operator commands, and human
+                                Maintainer review CLI
+  guides/                       Participant and demo setup guides
+  tests/                        660+ tests (unit, integration, e2e)
 application-registry/
   *.json                        One JSON file per application
 conformance/
@@ -157,17 +162,17 @@ integrations/
   skills/                       Agent skill packages (proposer, maintainer)
 ```
 
-Each example in `examples/` is self-contained with its own build tooling. The demo depends on the published `@oma3/mpas@0.1.0-alpha.14` package.
+`cli/` has its own build tooling and depends on the published `@oma3/mpas@0.1.0-alpha.14` package.
 
 ## Documentation
 
 - Higher-level overview: [oma3-projects/mpas.md](https://github.com/oma3dao/oma3-projects/blob/main/mpas.md)
 - Specifications: `specs/`
 - Feature documentation: `docs/features/`
-- Demo setup guide: `examples/demo/guides/`
-- Human Maintainer CLI: [`examples/demo/guides/maintainer.md`](examples/demo/guides/maintainer.md#human-maintainer-cli)
+- Demo setup guide: `cli/guides/`
+- Human Maintainer CLI: [`cli/guides/maintainer.md`](cli/guides/maintainer.md#human-maintainer-cli)
 - Agent skills: `integrations/skills/`
-- Credential Adapter operator guide: [`examples/demo/guides/credential-adapter.md`](examples/demo/guides/credential-adapter.md)
+- Credential Adapter operator guide: [`cli/guides/credential-adapter.md`](cli/guides/credential-adapter.md)
 - Application registry: `application-registry/`
 - Application plugins and bridges: [oma3dao/mpas-applications](https://github.com/oma3dao/mpas-applications)
 

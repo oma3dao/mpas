@@ -16,7 +16,7 @@ Each phase starts by writing that phase's tests from the list below and running 
 
 As of 2026-10-09, Phases 0 through 5 are implemented on `feat/install-script` and not yet committed. The phase lists below include every change from the review rounds, and each behavior is recorded in the spec. All 110 installer tests and the 553 existing tests pass (663 in total), and `npm run typecheck` is clean.
 
-| Phase | Status | Tests in `examples/demo/tests/installer/` |
+| Phase | Status | Tests in `cli/tests/installer/` |
 |---|---|---|
 | 0. Package and bundled inputs | Done | `package.test.ts` (6) |
 | 1. `mpas init` | Done | `init.test.ts` (19) |
@@ -25,7 +25,7 @@ As of 2026-10-09, Phases 0 through 5 are implemented on `feat/install-script` an
 | 4. End-to-end and launch check | Done | `e2e.test.ts` (1), `launch.test.ts` (2) |
 | 5. Help text and operator docs | Done | `docs.test.ts` (5) |
 
-Code is in `examples/demo/src/cli/installer/`, with the build step in `examples/demo/scripts/bundle-assets.mjs` and test fixtures in `examples/demo/tests/fixtures/installer/`. Run the tests with `npx vitest run tests/installer` from `examples/demo`.
+Code is in `cli/src/cli/installer/`, with the build step in `cli/scripts/bundle-assets.mjs` and test fixtures in `cli/tests/fixtures/installer/`. Run the tests with `npx vitest run tests/installer` from `cli`.
 
 Process note: Phases 0 and 1, and every change from the review rounds, had their tests run red before the code was written. The first pass of Phases 2 to 5 had its tests written first but not run red.
 
@@ -40,9 +40,9 @@ Not done yet:
 
 ## Phase 0: Package and bundled inputs
 
-Exit criterion: every test in this phase passes, and the existing CLI tests and `examples/demo` typecheck still pass.
+Exit criterion: every test in this phase passes, and the existing CLI tests and `cli` typecheck still pass.
 
-- `examples/demo/package.json` is named `@oma3/mpas-cli`, is not private, keeps the `mpas` and `mpas-demo` bins and adds `mpas-cli` pointing at the same file as `mpas`. Its `files` list is `dist`, `README.md`, `LICENSE`, and `NOTICE`; the registry snapshot and skills are bundled under `dist/bundled/`. It has `publishConfig` with `"access": "public"` and the npm registry, `repository.directory` set to `examples/demo`, and a `prepack` script that runs the build, matching `sdk/protocol/package.json`.
+- `cli/package.json` is named `@oma3/mpas-cli`, is not private, keeps the `mpas` and `mpas-demo` bins and adds `mpas-cli` pointing at the same file as `mpas`. Its `files` list is `dist`, `README.md`, `LICENSE`, and `NOTICE`; the registry snapshot and skills are bundled under `dist/bundled/`. It has `publishConfig` with `"access": "public"` and the npm registry, `repository.directory` set to `cli`, and a `prepack` script that runs the build, matching `sdk/protocol/package.json`.
 - `npm pack --dry-run --json` lists only `dist/`, the registry snapshot, the skills, `package.json`, `README.md`, `LICENSE`, and `NOTICE`. It lists nothing under `tests/`, because the test fixtures include committed private keys.
 - The build copies `application-registry/*.json` and `integrations/skills/mpas-proposer/` and `mpas-maintainer/` into the package, byte-identical to the sources.
 - The bundled registry loads. An entry with `install` has `manifestUrl` and a `sha-256` `manifestDigest`. `application-registry/README.md` documents `install`.
@@ -205,9 +205,9 @@ Exit criterion: every test in this phase passes.
 
 - `mpas --help` lists `adapter start`, `coordination start`, `daemon start`, the new commands, and every other existing command, including `config validate` and `key generate`.
 - `mpas --help` does not list `process start` or a bare `start`.
-- The opening section of `examples/demo/README.md` tells a person or an agent the npm install, `init`, `config` and `config validate`, `key rotate`, proposer `mcp add`, maintainer registration at init, verifier `mcp add`, `signer add`, `remove`, and `list`, and oma3dao/mpas#6 for approval rules.
-- `examples/demo/guides/proposer.md`, `maintainer.md`, and `credential-adapter.md` lead with those commands. `setup-macos.md` uses one `--home` per participant for the single-machine demo.
-- `examples/demo/RELEASING.md` exists, modeled on `sdk/protocol/RELEASING.md`, and contains the steps in the Release section below.
+- The opening section of `cli/README.md` tells a person or an agent the npm install, `init`, `config` and `config validate`, `key rotate`, proposer `mcp add`, maintainer registration at init, verifier `mcp add`, `signer add`, `remove`, and `list`, and oma3dao/mpas#6 for approval rules.
+- `cli/guides/proposer.md`, `maintainer.md`, and `credential-adapter.md` lead with those commands. `setup-macos.md` uses one `--home` per participant for the single-machine demo.
+- `cli/RELEASING.md` exists, modeled on `sdk/protocol/RELEASING.md`, and contains the steps in the Release section below.
 
 ## Release (performed by a person)
 
@@ -221,7 +221,7 @@ First release only:
 Each alpha release, replacing `N` with the next alpha number:
 
 ```sh
-cd examples/demo
+cd cli
 npm ci
 npm version 0.1.0-alpha.N --no-git-tag-version
 npm run typecheck
@@ -264,7 +264,7 @@ npx -y @oma3/mpas-cli@alpha --help
 
 ## Done
 
-- The tests above pass, and the existing CLI tests and `examples/demo` typecheck pass.
+- The tests above pass, and the existing CLI tests and `cli` typecheck pass.
 - `sdk/protocol/` has no diff. If `generateMpasKey` or `isDidJwk` cannot do the job, stop before adding an SDK export.
 - Do not publish `@oma3/mpas-cli` while implementing this plan. A person publishes it by following the Release section.
 - The `mpas-applications` work in spec §19 is tracked in that repository. Until a real application has a manifest, `mcp add` is exercised only with fixtures.

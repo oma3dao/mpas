@@ -21,7 +21,7 @@ upstream setup such as `mpas credential set` or `mpas oauth login`. Signer DIDs
 can arrive in any order; add each one with `mpas signer add`. When
 `mpas config validate` passes, move the draft into `~/.mpas/config/` and start
 the adapter. Before the first `@oma3/mpas-cli` release, build the command from
-`examples/demo` with `npm ci && npm run build && npm link`.
+`cli` with `npm ci && npm run build && npm link`.
 
 `mpas mcp add` needs install data that the application publishes in the
 registry. For an application without it, follow the manual setup below.
@@ -134,7 +134,7 @@ The only key generated in this account is the adapter's signing key for
 Execution Receipts:
 
 ```sh
-cd "$HOME/Projects/mpas/examples/demo"
+cd "$HOME/Projects/mpas/cli"
 node dist/cli/index.js key generate adapter-key --key-dir "$MPAS_HOME/keys"
 chmod 600 "$MPAS_HOME/keys/adapter-key.json"
 ```
@@ -356,7 +356,7 @@ Before starting the daemon, run the config validator to catch DID paste errors,
 missing credentials, and path problems:
 
 ```sh
-cd "$HOME/Projects/mpas/examples/demo"
+cd "$HOME/Projects/mpas/cli"
 node dist/cli/index.js config validate <config-name> \
   --config-dir "$MPAS_HOME/config" \
   --credential-dir "$MPAS_HOME/credentials" \
@@ -381,7 +381,7 @@ In a dedicated terminal:
 
 ```sh
 export MPAS_HOME="$HOME/.mpas"
-cd "$HOME/Projects/mpas/examples/demo"
+cd "$HOME/Projects/mpas/cli"
 node dist/cli/index.js daemon start \
   --config-dir "$MPAS_HOME/config" \
   --credential-dir "$MPAS_HOME/credentials" \
@@ -501,9 +501,9 @@ strings are never printed.
 - [macOS demo setup guide](setup-macos.md) — full single-machine walkthrough
 - [proposer setup guide](proposer.md)
 - [maintainer setup guide](maintainer.md)
-- [Managed MCP OAuth specification](../../../docs/features/mcp-oauth/spec.md)
-- [JSON Verifier Policy Profile](../../../specs/mpas-profile-policy-json.md) — policy match conditions, requirement types, signer groups
-- [Application Plugin Profile](../../../specs/mpas-profile-application-plugin.md) — plugin schema reference
+- [Managed MCP OAuth specification](../../docs/features/mcp-oauth/spec.md)
+- [JSON Verifier Policy Profile](../../specs/mpas-profile-policy-json.md) — policy match conditions, requirement types, signer groups
+- [Application Plugin Profile](../../specs/mpas-profile-application-plugin.md) — plugin schema reference
 - [mpas-applications repository](https://github.com/oma3dao/mpas-applications) — contributed application plugins, bridges, and adapter-config templates
 
 
@@ -515,4 +515,4 @@ both suites for eligible participant identities. Register a newly generated DID
 explicitly; it does not replace an Ed25519 DID automatically. Programmatic
 adapters may supply `adapterSigner` instead of `adapterSigningKey` for a shared
 non-exporting signer. The two inputs are mutually exclusive. See the [SDK signer
-contract](../../../sdk/protocol/README.md#signature-suites-and-signer-providers).
+contract](../../sdk/protocol/README.md#signature-suites-and-signer-providers).

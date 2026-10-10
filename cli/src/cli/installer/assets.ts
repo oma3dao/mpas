@@ -16,7 +16,7 @@ export function bundledAssets(): BundledAssets {
   if (existsSync(join(bundled, "registry"))) {
     return { registryDir: join(bundled, "registry"), skillsDir: join(bundled, "skills") };
   }
-  const repoRoot = fileURLToPath(new URL("../../../../../", import.meta.url));
+  const repoRoot = fileURLToPath(new URL("../../../../", import.meta.url));
   return {
     registryDir: join(repoRoot, "application-registry"),
     skillsDir: join(repoRoot, "integrations", "skills"),

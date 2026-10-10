@@ -25,7 +25,7 @@ installs the `mpas-maintainer` skill where the harness has a skills folder, and
 prints the role preamble for step 6 below. With `--harness none`, review from
 the terminal with `mpas action review` (section 4); `mpas mcp add --harness
 <name>` registers the signer later. Before the first `@oma3/mpas-cli` release,
-build the command from `examples/demo` with `npm ci && npm run build && npm link`.
+build the command from `cli` with `npm ci && npm run build && npm link`.
 If you set this account up by hand, keep its DID with
 `mpas init maintainer --use-key ~/.mpas/keys/maintainer-key.json` (plus the flags above).
 
@@ -54,7 +54,7 @@ Generate your signing key in this account (Ed25519 by default):
 export MPAS_HOME="$HOME/.mpas"
 mkdir -p "$MPAS_HOME/keys" "$MPAS_HOME/mcp-server-configs"
 
-cd "$HOME/Projects/mpas/examples/demo"
+cd "$HOME/Projects/mpas/cli"
 node dist/cli/index.js key generate maintainer-key --key-dir "$MPAS_HOME/keys"
 chmod 600 "$MPAS_HOME/keys/maintainer-key.json"
 ```
@@ -110,7 +110,7 @@ directly, cache Action Packages, or implement a second approval path.
 Build the reference implementation, then use the signer config created above:
 
 ```sh
-cd "$HOME/Projects/mpas/examples/demo"
+cd "$HOME/Projects/mpas/cli"
 npm run build
 
 node dist/cli/index.js action pending \
@@ -171,7 +171,7 @@ Add to `~/.codex-maintainer/config.toml` (create the directory if needed):
 [mcp_servers.mpas-coordination]
 command = "node"
 args = [
-  "/Users/YOU/Projects/mpas/examples/demo/dist/signer-server/index.js",
+  "/Users/YOU/Projects/mpas/cli/dist/signer-server/index.js",
   "--config",
   "/Users/YOU/.mpas/mcp-server-configs/maintainer-signer-config.json"
 ]
@@ -191,7 +191,7 @@ openclaw config set mcp.servers.mpas-coordination "$(cat <<'JSON'
 {
   "command": "/ABSOLUTE/PATH/TO/node",
   "args": [
-    "/Users/YOU/Projects/mpas/examples/demo/dist/signer-server/index.js",
+    "/Users/YOU/Projects/mpas/cli/dist/signer-server/index.js",
     "--config",
     "/Users/YOU/.mpas/mcp-server-configs/maintainer-signer-config.json"
   ]
@@ -216,7 +216,7 @@ Edit `~/Library/Application Support/Claude/claude_desktop_config.json`:
     "mpas-coordination": {
       "command": "node",
       "args": [
-        "/Users/YOU/Projects/mpas/examples/demo/dist/signer-server/index.js",
+        "/Users/YOU/Projects/mpas/cli/dist/signer-server/index.js",
         "--config",
         "/Users/YOU/.mpas/mcp-server-configs/maintainer-signer-config.json"
       ]

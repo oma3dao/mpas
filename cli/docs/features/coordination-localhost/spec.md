@@ -3,7 +3,7 @@
 **Status:** Draft  
 **Feature:** Localhost Coordination Service  
 **Target Platform:** macOS local development daemon  
-**Depends on:** [MPAS HTTP Profile v0.2](../../../../oma3/mpas-docs/specification/mpas-profile-http.md), [MPAS Core Specification v0.2](../../../../oma3/mpas-docs/specification/mpas-specification.md), [Credential Adapter MVP](../mvp/spec.md)
+**Depends on:** [MPAS HTTP Profile v0.2](../../../oma3/mpas-docs/specification/mpas-profile-http.md), [MPAS Core Specification v0.2](../../../oma3/mpas-docs/specification/mpas-specification.md), [Credential Adapter MVP](../mvp/spec.md)
 
 ---
 

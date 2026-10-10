@@ -25,7 +25,7 @@ mpas mcp add --app <app> --harness <claude-code|claude-desktop|codex|cursor|herm
 installs the `mpas-proposer` skill where the harness has a skills folder, and
 prints the role preamble for step 6 below. Check the result with
 `mpas config validate <app>`. Before the first `@oma3/mpas-cli` release, build
-the command from `examples/demo` with `npm ci && npm run build && npm link`.
+the command from `cli` with `npm ci && npm run build && npm link`.
 If you set this account up by hand, keep its DID with
 `mpas init proposer --use-key ~/.mpas/keys/proposer-key.json` (plus the flags above).
 
@@ -55,7 +55,7 @@ Generate your signing key in this account (Ed25519 by default):
 export MPAS_HOME="$HOME/.mpas"
 mkdir -p "$MPAS_HOME/keys" "$MPAS_HOME/mcp-server-configs" "$MPAS_HOME/plugins" "$MPAS_HOME/workflows"
 
-cd "$HOME/Projects/mpas/examples/demo"
+cd "$HOME/Projects/mpas/cli"
 node dist/cli/index.js key generate proposer-key --key-dir "$MPAS_HOME/keys"
 chmod 600 "$MPAS_HOME/keys/proposer-key.json"
 ```

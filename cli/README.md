@@ -103,23 +103,23 @@ oma3dao/mpas#6.
 `mpas mcp add` needs install data that an application publishes in the
 registry. Where an application has none yet, use the manual steps in the
 guides. The design record is
-[docs/features/install-script/spec.md](../../docs/features/install-script/spec.md).
+[docs/features/install-script/spec.md](../docs/features/install-script/spec.md).
 
 ## Specifications
 
 For the full protocol design, start with the base specification:
 
-- [mpas-specification.md](../../specs/mpas-specification.md) — **Core protocol: Action Lifecycle, dispatch ledger, artifact model, trust architecture**
-- [mpas-profile-http.md](../../specs/mpas-profile-http.md) — HTTP Profile: wire format, ActionRequest/Response, coordination
-- [mpas-profile-mcp.md](../../specs/mpas-profile-mcp.md) — MCP Profile: execution payload format for MCP tool calls
-- [mpas-profile-application-plugin.md](../../specs/mpas-profile-application-plugin.md) — Application Plugin Profile: plugin schema and operation defs
-- [mpas-profile-policy-json.md](../../specs/mpas-profile-policy-json.md) — JSON Verifier Policy Profile: policy matching and evaluation
+- [mpas-specification.md](../specs/mpas-specification.md) — **Core protocol: Action Lifecycle, dispatch ledger, artifact model, trust architecture**
+- [mpas-profile-http.md](../specs/mpas-profile-http.md) — HTTP Profile: wire format, ActionRequest/Response, coordination
+- [mpas-profile-mcp.md](../specs/mpas-profile-mcp.md) — MCP Profile: execution payload format for MCP tool calls
+- [mpas-profile-application-plugin.md](../specs/mpas-profile-application-plugin.md) — Application Plugin Profile: plugin schema and operation defs
+- [mpas-profile-policy-json.md](../specs/mpas-profile-policy-json.md) — JSON Verifier Policy Profile: policy matching and evaluation
 
 ## Related Packages
 
 | Location                                                                 | Description                                           |
 | ------------------------------------------------------------------------ | ----------------------------------------------------- |
-| [`sdk/protocol`](../../sdk/protocol)                                     | @oma3/mpas protocol SDK                               |
+| [`sdk/protocol`](../sdk/protocol)                                     | @oma3/mpas protocol SDK                               |
 
 ## Architecture
 
@@ -267,7 +267,7 @@ The signer server is application-agnostic — it handles approval requests for a
   "mcpServers": {
     "mpas-signer": {
       "command": "npx",
-      "args": ["tsx", "examples/demo/src/signer-server/index.ts", "--config", "./signer-config.json"]
+      "args": ["tsx", "cli/src/signer-server/index.ts", "--config", "./signer-config.json"]
     }
   }
 }
@@ -373,7 +373,7 @@ configuration in v1. Support for authenticated premium endpoints can be added
 later as a separate configuration contract.
 
 For evaluation semantics and the internal endpoint context, see the
-[OMATrust plugin verification feature specification](../../docs/features/omatrust/spec.md).
+[OMATrust plugin verification feature specification](../docs/features/omatrust/spec.md).
 
 ### Deployment Config
 
@@ -540,11 +540,11 @@ registry. Do not point it at a local `file:` SDK path or `node_modules` symlink
 when validating a release:
 
 ```sh
-npm --prefix examples/demo ci
-npm --prefix examples/demo run build
+npm --prefix cli ci
+npm --prefix cli run build
 ```
 
-Run those commands from the repository root. From `examples/demo`, generate an
+Run those commands from the repository root. From `cli`, generate an
 explicit P-256 identity with:
 
 ```sh
@@ -563,7 +563,7 @@ replacement. Update services to SDK `0.1.0-alpha.13` or later before using P-256
 identities. That candidate version must be published before external generated
 bridges install it from the registry; repository builds need no publication.
 
-See [mixed-suite conformance](../../conformance/signature-suites/README.md) for
+See [mixed-suite conformance](../conformance/signature-suites/README.md) for
 fixture-backed workflow, replay, receipt, and generated-bridge tests. New HTTP
 senders include `alg`; absent HTTP `alg` means Ed25519 without adding bytes to
 the signature base. JWS requires protected `alg` and authorized `kid` in both suites.
@@ -580,7 +580,7 @@ This CA-local fix works with the pinned published `@oma3/mpas` dependency;
 no SDK publish or local SDK substitution is required. From the repository root:
 
 ```bash
-cd examples/demo
+cd cli
 npm ci
 npm run build
 npm test
