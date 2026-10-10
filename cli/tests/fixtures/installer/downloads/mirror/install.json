@@ -1,0 +1,20 @@
+{
+  "version": "1",
+  "type": "MpasInstallManifest",
+  "applicationDid": "did:web:github-mirror.example",
+  "bridge": {
+    "package": "@fixture/mpas-bridge-mirror",
+    "version": "1.2.3"
+  },
+  "plugin": {
+    "url": "https://fixtures.example.test/mirror/plugin.json"
+  },
+  "adapterConfigTemplate": {
+    "url": "https://fixtures.example.test/mirror/adapter-config.example.json",
+    "digest": {
+      "alg": "sha-256",
+      "value": "Loo-y5hT0a7UWYHwpNh2u2O5h5Ty2B-PFMGwpJeg-KM"
+    }
+  },
+  "readme": "https://fixtures.example.test/mirror/README.md"
+}

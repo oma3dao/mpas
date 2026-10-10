@@ -50,5 +50,5 @@ How you install depends on your agent harness:
 ## Links
 
 - [MPAS Specification](../../specs/mpas-specification.md)
-- [Demo Setup Guide](../../examples/demo/guides/setup-macos.md)
+- [Demo Setup Guide](../../cli/guides/setup-macos.md)
 - [OMA3 DAO](https://www.oma3.org/)

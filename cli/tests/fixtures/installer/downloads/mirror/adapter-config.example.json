@@ -1,0 +1,89 @@
+{
+  "version": "1",
+  "type": "MpasAdapterDeploymentConfig",
+  "name": "mirror",
+  "target": {
+    "applicationDid": "did:web:github-mirror.example"
+  },
+  "plugin": {
+    "pluginDid": "did:web:plugins.oma3.org:github-mirror-plugin",
+    "pluginVersion": "0.1.0",
+    "artifactDid": "did:artifact:bafkreiboiym5t7serxxvynew6qzrjjo65lqiqv6jnjunkwmyp3hrvgh7qq",
+    "path": "/absolute/path/to/mpas-applications/applications/mirror/plugin.json"
+  },
+  "credentialBindings": [
+    {
+      "credentialHandle": "github-mirror-token",
+      "provider": "file"
+    }
+  ],
+  "executionTarget": {
+    "type": "mcp.stdio",
+    "command": "node",
+    "args": [
+      "tests/fixtures/adapter/echo-mcp-server.mjs"
+    ],
+    "env": {
+      "GITHUB_PERSONAL_ACCESS_TOKEN": "{{credential:github-mirror-token}}"
+    }
+  },
+  "policy": {
+    "version": "1",
+    "type": "MpasApplicationPolicy",
+    "policyProfileUrl": "https://github.com/oma3dao/mpas/blob/main/specs/mpas-profile-policy-json.md",
+    "applicationDid": "did:web:github-mirror.example",
+    "executionProfile": {
+      "id": "did:web:profiles.oma3.org:mcp",
+      "format": "mcp.toolsCall"
+    },
+    "defaultRequirement": {
+      "type": "threshold",
+      "threshold": 1,
+      "eligibleSignerGroup": "approvers",
+      "decision": "approve"
+    },
+    "signerGroups": {
+      "all": [
+        "REPLACE_WITH_PROPOSER_DID",
+        "REPLACE_WITH_APPROVER_DID"
+      ],
+      "proposers": [
+        "REPLACE_WITH_PROPOSER_DID"
+      ],
+      "approvers": [
+        "REPLACE_WITH_APPROVER_DID"
+      ]
+    },
+    "policies": {
+      "create_issue_mirror": [
+        {
+          "description": "Issue creation is recoverable. Proposer only.",
+          "requirements": {
+            "type": "proposerOnly"
+          }
+        }
+      ],
+      "delete_branch_mirror": [
+        {
+          "description": "Deleting a branch is irreversible.",
+          "requirements": {
+            "type": "threshold",
+            "threshold": 1,
+            "eligibleSignerGroup": "approvers",
+            "decision": "approve"
+          }
+        }
+      ]
+    }
+  },
+  "signerKeys": [
+    {
+      "did": "REPLACE_WITH_PROPOSER_DID",
+      "label": "Proposer Signer"
+    },
+    {
+      "did": "REPLACE_WITH_APPROVER_DID",
+      "label": "Approver Signer"
+    }
+  ]
+}

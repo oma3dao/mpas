@@ -220,7 +220,7 @@ Coordination Service client separate. If the Verifier returns
 coordination returns a completed Action Package, the bridge explicitly submits
 it to the Action endpoint again.
 
-Keys come from the demo CLI (`mpas key generate`, which mints did:jwk identities); the Credential Adapter and Coordination Service come from `examples/demo`. See `examples/demo/guides/setup-macos.md` for the full local stack walkthrough.
+Keys come from the demo CLI (`mpas key generate`, which mints did:jwk identities); the Credential Adapter and Coordination Service come from `cli`. See `cli/guides/setup-macos.md` for the full local stack walkthrough.
 
 ## Behavior notes
 

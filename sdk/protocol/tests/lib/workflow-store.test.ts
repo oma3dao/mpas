@@ -9,7 +9,7 @@ import {
 /**
  * WorkflowStore contract, exercised against the SDK's in-memory reference
  * implementation (feature spec §8–§9, plan §5.2). Durable implementations —
- * for example the SQLite reference store in examples/demo — must additionally
+ * for example the SQLite reference store in cli — must additionally
  * survive restarts; those tests live with that implementation.
  */
 

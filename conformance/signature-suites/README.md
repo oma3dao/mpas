@@ -50,7 +50,7 @@ network service, hardware, or production key material.
 - `sdk/protocol/tests/lib/rfc9421.test.ts` and `rfc9421-vectors.test.ts`: existing
   Ed25519 fixture and RFC 9421 B.2.6, selection, digests, audiences, freshness,
   nonce storage, and negative authentication cases.
-- `examples/demo/tests/e2e/signature-suites.test.ts`: authenticated mixed-suite
+- `cli/tests/e2e/signature-suites.test.ts`: authenticated mixed-suite
   Approval workflow, configured-key comparison including `y`, verifier-side
   allow-list rejection, execution, receipt verification, replay rejection, and CLI.
 - `bridge-generator/tests/signature-suites.test.ts`: build generated TypeScript

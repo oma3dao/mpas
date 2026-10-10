@@ -26,7 +26,7 @@ jobs:
           cache-dependency-path: |
             sdk/protocol/package-lock.json
             bridge-generator/package-lock.json
-            examples/demo/package-lock.json
+            cli/package-lock.json
 
       - name: Install SDK
         working-directory: sdk/protocol
@@ -48,16 +48,16 @@ jobs:
         working-directory: bridge-generator
         run: npm run build
 
-      - name: Install demo
-        working-directory: examples/demo
+      - name: Install CLI
+        working-directory: cli
         run: npm ci
 
-      - name: Typecheck demo
-        working-directory: examples/demo
+      - name: Typecheck CLI
+        working-directory: cli
         run: npm run typecheck
 
-      - name: Build demo
-        working-directory: examples/demo
+      - name: Build CLI
+        working-directory: cli
         run: npm run build
 
   test:
@@ -76,7 +76,7 @@ jobs:
           cache-dependency-path: |
             sdk/protocol/package-lock.json
             bridge-generator/package-lock.json
-            examples/demo/package-lock.json
+            cli/package-lock.json
 
       - name: Install SDK
         working-directory: sdk/protocol
@@ -86,7 +86,7 @@ jobs:
         working-directory: sdk/protocol
         run: npm test
 
-      - name: Build SDK for demo
+      - name: Build SDK for CLI
         working-directory: sdk/protocol
         run: npm run build
 
@@ -98,10 +98,10 @@ jobs:
         working-directory: bridge-generator
         run: npm test
 
-      - name: Install demo
-        working-directory: examples/demo
+      - name: Install CLI
+        working-directory: cli
         run: npm ci
 
-      - name: Test demo
-        working-directory: examples/demo
+      - name: Test CLI
+        working-directory: cli
         run: npm test

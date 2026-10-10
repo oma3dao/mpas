@@ -79,6 +79,7 @@ clawhub skill publish ./mpas-proposer \
   --slug mpas-proposer \
   --name "MPAS Proposer for multi-party approvals" \
   --owner oma3 \
+  --categories "security,automation,agents" \
   --changelog "Initial release" \
   --dry-run
 ```
@@ -90,6 +91,7 @@ clawhub skill publish ./mpas-maintainer \
   --slug mpas-maintainer \
   --name "MPAS Maintainer for multi-party approvals" \
   --owner oma3 \
+  --categories "security,automation,agents" \
   --changelog "Initial release" \
   --dry-run
 ```

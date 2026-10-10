@@ -31,7 +31,7 @@ export * from "./lib/bridge-compatibility.js";
 // Workflow contract + engine are spec-compliance behavior with no storage
 // dependency: the SDK ships the WorkflowStore interface and an in-memory
 // reference. Durable stores (e.g. SQLite) are implementation-specific and
-// live in the repository (examples/demo), not in this package.
+// live in the repository (cli), not in this package.
 export * from "./lib/workflow-store.js";
 export * from "./lib/workflow-engine.js";
 export * from "./lib/bridge-runtime.js";

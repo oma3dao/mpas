@@ -1,0 +1,58 @@
+{
+  "name": "@oma3/mpas-cli",
+  "version": "0.1.0-alpha.1",
+  "description": "MPAS participant CLI: account setup, harness registration, Credential Adapter, and Coordination Service",
+  "type": "module",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/oma3dao/mpas.git",
+    "directory": "cli"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "NOTICE"
+  ],
+  "bin": {
+    "mpas": "./dist/cli/index.js",
+    "mpas-cli": "./dist/cli/index.js",
+    "mpas-demo": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json && node scripts/bundle-assets.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node tests/scripts/run-tests.mjs",
+    "test:e2e:mcp-bridge": "node tests/scripts/run-mcp-bridge-e2e.mjs",
+    "prepack": "npm run build"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.32.1",
+    "@modelcontextprotocol/server": "2.0.0",
+    "@oma3/mpas": "0.1.0-alpha.14",
+    "@oma3/omatrust": "^0.1.0-alpha.14",
+    "ajv": "^8.17.1",
+    "ethers": "^6.17.0",
+    "fastify": "^5.3.3",
+    "jose": "^6.0.11",
+    "json-canonicalize": "2.0.0",
+    "multiformats": "^14.0.0",
+    "undici": "7.30.0",
+    "ws": "^8.21.0",
+    "yaml": "2.8.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.29",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.8.3",
+    "vitest": "5.0.3"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
