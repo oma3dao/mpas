@@ -35,6 +35,9 @@ describe("Phase 0: package and bundled inputs", () => {
     expect(pkg.repository).toEqual({ ...sdk.repository, directory: "cli" });
     expect(pkg.scripts.prepack).toBe("npm run build");
     expect(pkg.scripts.build).toContain("scripts/bundle-assets.mjs");
+    // The build starts from an empty dist, so files from deleted sources never ship.
+    expect(pkg.scripts.build.indexOf("rmSync('dist'")).toBeLessThan(pkg.scripts.build.indexOf("tsc"));
+    expect(pkg.scripts.build.indexOf("rmSync('dist'")).toBeGreaterThan(-1);
   });
 
   it("packs only dist, package.json, README.md, LICENSE, and NOTICE", () => {
