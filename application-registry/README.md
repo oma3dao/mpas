@@ -35,7 +35,7 @@ Each JSON file has the following structure:
 | `plugin`         | Yes      | Where to find the `MpasApplicationPlugin` for this application.             |
 | `publisher`      | Yes      | Who publishes and maintains this implementation.                            |
 | `status`         | Yes      | Implementation status: `"active"`, `"beta"`, `"planned"`, or `"deprecated"`. |
-| `install`        | No       | Where `mpas mcp add` finds this implementation's install manifest. Present only when the implementation can be installed by the CLI. |
+| `source`         | No       | URL of the implementation's application folder, the URL to pass to `mpas mcp add`. Present only when the folder can be installed by the CLI. |
 
 ### `application` Object
 
@@ -80,14 +80,11 @@ Future protocols (OpenAPI, EVM, A2A) will define their own upstream object forma
 | `publisherDid` | No       | Publisher's DID.                                 |
 | `repository`   | No       | Publisher's primary repository for this implementation. |
 
-### `install` Object
+### `source` Field
 
-| Field            | Required | Description                                                        |
-| :--------------- | :------: | :----------------------------------------------------------------- |
-| `manifestUrl`    | Yes      | `https` URL of the implementation's `install.json` manifest.        |
-| `manifestDigest` | Yes      | `{ "alg": "sha-256", "value": "<base64url>" }` over the manifest's exact bytes. |
+`source` is the URL a participant passes to `mpas mcp add <url>`. It names the implementation's application folder, which holds `plugin.json`, `adapter-config.example.json` for Verifiers, `bridge/package.json` for Proposers, and `README.md`. A GitHub folder URL has the form `https://github.com/<owner>/<repo>/tree/<ref>/<path>`.
 
-The manifest lives in the implementation's own repository and names the bridge package and exact version, the plugin URL, the deployment config template URL with its digest, and the README URL. `mpas mcp add` checks the manifest against `manifestDigest`, the plugin against `plugin.artifactDid`, and the template against the manifest's digest before writing anything. The CLI ships a snapshot of this folder, so a change here reaches users with the next CLI release. Recompute `manifestDigest` in the same change that edits the manifest.
+The CLI never reads this registry. It downloads from the URL it is given, so a change here needs no CLI release. Installing from a URL trusts whoever controls it, so point `source` at a folder your organization controls.
 
 ## Integration Types
 
@@ -105,7 +102,8 @@ MPAS verification is built in — no bridge or credential adapter. The applicati
 2. Follow the schema above
 3. Ensure your plugin exists at the referenced location
 4. If you set `plugin.artifactDid`, confirm it matches the plugin as published
-5. Submit a pull request
+5. If the folder can be installed with `mpas mcp add`, set `source` to its URL
+6. Submit a pull request
 
 ## Keeping an Entry Current
 

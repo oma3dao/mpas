@@ -30,10 +30,10 @@ npm pack
 ```
 
 Inspect the pack output. It must contain only `dist/` (including
-`dist/bundled/registry/` and `dist/bundled/skills/`), `package.json`,
-`README.md`, `LICENSE`, and `NOTICE`. It must not contain `tests/` or any key
-file. The registry snapshot in the package is whatever `application-registry/`
-holds at this commit, so registry changes ship with this release.
+`dist/bundled/skills/`), `package.json`, `README.md`, `LICENSE`, and `NOTICE`.
+It must not contain `tests/`, any key file, or `dist/bundled/registry/`: the
+CLI bundles no application data, so application changes never need a release.
+Skill changes do ship with this release.
 
 Install the tarball into a temporary prefix and check that it runs without the
 repository:

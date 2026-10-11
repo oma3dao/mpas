@@ -33,12 +33,12 @@ stands for the loopback default URL. Prompts appear only on a terminal.
 ```sh
 mpas init proposer --coordination <url> --action <url>
 mpas config --verifier-did <verifier did>
-mpas mcp add --app <app> --harness <claude-code|claude-desktop|codex|cursor|hermes|openclaw>
+mpas mcp add <url> --harness <claude-code|claude-desktop|codex|cursor|hermes|openclaw>
 ```
 
 `init` prints your DID; send it to the Verifier's operator. `mpas mcp add`
 downloads and verifies the application's plugin, writes the bridge config,
-registers `<app>-mpas` in the harness, installs the `mpas-proposer` skill where
+registers `<name>-mpas` in the harness, installs the `mpas-proposer` skill where
 the harness has a skills folder, and prints the role preamble to paste into the
 harness's instruction file. It never edits an instruction file.
 
@@ -56,10 +56,10 @@ mpas init maintainer --coordination <url> --harness <name>
 
 ```sh
 mpas init verifier --action <url> [--mode direct|relay]
-mpas mcp add --app <app>
-mpas signer add --app <app> --proposer <did>
-mpas signer add --app <app> --maintainer <did> --label <name>
-mpas config validate <app>
+mpas mcp add <url>
+mpas signer add --app <name> --proposer <did>
+mpas signer add --app <name> --maintainer <did> --label <name>
+mpas config validate <name>
 ```
 
 `--mode direct` means Proposers submit to this adapter at the Action URL;
@@ -89,7 +89,8 @@ oma3dao/mpas#6.
   that read it restart; the command says which ones.
 - A manual setup keeps its DID with `--use-key`: for example
   `mpas init proposer --use-key ~/.mpas/keys/proposer-key.json`. The original
-  key file stays where it is; `mpas mcp add --replace-config` writes generated
+  key file stays where it is; `mpas mcp add <url> --name <name> --replace-config`,
+  using the name the existing config has, writes generated
   configs. Until every bridge and signer config points at
   `keys/signing-key.json`, `mpas config` and `mpas key rotate` change nothing
   and print the steps to finish the move. If the key is already at
@@ -100,9 +101,22 @@ oma3dao/mpas#6.
   account share its key and DID, so that DID cannot approve its own proposals.
   Each agent still has exactly one role.
 
-`mpas mcp add` needs install data that an application publishes in the
-registry. Where an application has none yet, use the manual steps in the
-guides. The design record is
+### Application URLs
+
+`mpas mcp add <url>` takes the URL of an application's folder, for example
+`https://github.com/oma3dao/mpas-applications/tree/main/applications/railway`.
+Find it in the application's entry in
+[`application-registry/`](../application-registry/), in its `source` field.
+The application is installed under the folder's name, which the later
+`--app <name>` commands use; `--name` chooses another, and a name already used
+in the home is refused. Installing from a URL trusts whoever controls it, so
+the command prints the URL and the plugin's `artifactDid` before writing
+anything.
+
+A Verifier can install any application whose folder has a deployment config
+template. A Proposer also needs the application's bridge published on npm,
+and none is yet, so Proposers use the manual steps in the guides for now. The
+design record is
 [docs/features/install-script/spec.md](../docs/features/install-script/spec.md).
 
 ## Specifications

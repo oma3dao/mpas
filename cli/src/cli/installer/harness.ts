@@ -1,5 +1,6 @@
 import { cp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { parse as parseToml } from "smol-toml";
 import { Document, parseDocument } from "yaml";
 import { type Account, ensureDir, exists, type HomePaths, type Role, writeJsonAtomic } from "./account.js";
 import { type InstallerContext, say } from "./context.js";
@@ -138,10 +139,19 @@ async function readYamlDocument(path: string): Promise<Document> {
   return doc;
 }
 
-/** The arguments of each MCP server entry already in the harness location, or the raw config text when it cannot be parsed structurally. */
-async function existingEntries(ctx: InstallerContext, harness: HarnessName, home: string, flag: string | undefined): Promise<string[][] | string> {
-  const argsOf = (servers: Record<string, any> | undefined) =>
-    Object.values(servers ?? {}).map((server) => (Array.isArray(server?.args) ? server.args.map(String) : []));
+interface ExistingServers {
+  names: string[];
+  args: string[][];
+  /** Each server's arguments by name. */
+  byName: Map<string, string[]>;
+}
+
+/** The name and arguments of each MCP server entry already in the harness location, or the raw config text when it cannot be parsed structurally. */
+async function existingServers(ctx: InstallerContext, harness: HarnessName, home: string, flag: string | undefined): Promise<ExistingServers | string> {
+  const argsOf = (servers: Record<string, any> | undefined): ExistingServers => {
+    const byName = new Map(Object.entries(servers ?? {}).map(([name, server]) => [name, Array.isArray(server?.args) ? server.args.map(String) : []]));
+    return { names: [...byName.keys()], args: [...byName.values()], byName };
+  };
   switch (harness) {
     case "cursor":
       return argsOf((await readJsonObject(join(home, "mcp.json"))).mcpServers);
@@ -152,12 +162,18 @@ async function existingEntries(ctx: InstallerContext, harness: HarnessName, home
     case "hermes":
       return argsOf((await readYamlDocument(join(home, "config.yaml"))).toJS()?.mcp_servers);
     case "codex": {
+      // Parsed structurally: a server's table name may be bare, "double", or 'single' quoted.
       const path = join(home, "config.toml");
-      return (await exists(path)) ? readFile(path, "utf8") : [];
+      if (!(await exists(path))) return argsOf({});
+      try {
+        return argsOf(parseToml(await readFile(path, "utf8")).mcp_servers as Record<string, any> | undefined);
+      } catch (error) {
+        throw new InstallerError(`Could not read ${path}: ${error instanceof Error ? error.message : String(error)}. Fix it before adding a server, so no existing server is replaced by mistake.`);
+      }
     }
     case "openclaw": {
       const result = await runHarnessCli(ctx, "openclaw", ["config", "get", "mcp.servers", "--json"]);
-      if (result.exitCode !== 0) return [];
+      if (result.exitCode !== 0) return argsOf({});
       try {
         return argsOf(JSON.parse(result.stdout) as Record<string, any>);
       } catch {
@@ -167,13 +183,30 @@ async function existingEntries(ctx: InstallerContext, harness: HarnessName, home
   }
 }
 
+/**
+ * The server with this name in the selected harness location, if there is one.
+ * An unknown harness has no location to look in; registration reports it later.
+ */
+export async function harnessServer(
+  ctx: InstallerContext,
+  role: AgentRole,
+  options: RegistrationOptions,
+  name: string,
+): Promise<{ args: string[] | undefined } | undefined> {
+  if (!isHarnessName(options.harness)) return undefined;
+  const servers = await existingServers(ctx, options.harness, harnessHome(ctx, options.harness, role, options.harnessHome), options.harnessHome);
+  // Unparseable output: assume the name may be taken, with arguments unknown, so nothing is replaced.
+  if (typeof servers === "string") return servers.includes(name) ? { args: undefined } : undefined;
+  return servers.byName.has(name) ? { args: servers.byName.get(name) } : undefined;
+}
+
 /** Refuses to put a Proposer bridge and the Maintainer signer in one agent, judged by the config file each entry launches. */
 async function checkOneRolePerAgent(ctx: InstallerContext, harness: HarnessName, role: AgentRole, home: string, flag: string | undefined): Promise<void> {
-  const entries = await existingEntries(ctx, harness, home, flag);
+  const entries = await existingServers(ctx, harness, home, flag);
   const conflictSuffix = role === "maintainer" ? "-mcp-bridge-config.json" : "maintainer-signer-config.json";
   const conflict = typeof entries === "string"
     ? entries.includes(conflictSuffix)
-    : entries.some((args) => args.some((arg) => arg.endsWith(conflictSuffix)));
+    : entries.args.some((args) => args.some((arg) => arg.endsWith(conflictSuffix)));
   if (conflict) {
     const other = role === "maintainer" ? "a Proposer bridge" : "the Maintainer signer";
     throw new InstallerError(

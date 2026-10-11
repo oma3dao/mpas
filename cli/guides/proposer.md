@@ -18,19 +18,25 @@ npm install -g @oma3/mpas-cli@alpha
 mpas init proposer --coordination <url> --action <url>
 # Send the printed DID to the Verifier's operator, and get the Verifier's DID.
 mpas config --verifier-did <verifier did>
-mpas mcp add --app <app> --harness <claude-code|claude-desktop|codex|cursor|hermes|openclaw>
+mpas mcp add <url> --harness <claude-code|claude-desktop|codex|cursor|hermes|openclaw>
 ```
 
-`mpas mcp add` writes the bridge config, registers `<app>-mpas` in the harness,
+`mpas mcp add` writes the bridge config, registers `<name>-mpas` in the harness,
 installs the `mpas-proposer` skill where the harness has a skills folder, and
 prints the role preamble for step 6 below. Check the result with
-`mpas config validate <app>`. Before the first `@oma3/mpas-cli` release, build
-the command from `cli` with `npm ci && npm run build && npm link`.
+`mpas config validate <name>`. To run a version that is not published yet,
+build the command from `cli` with `npm ci && npm run build && npm link`.
 If you set this account up by hand, keep its DID with
 `mpas init proposer --use-key ~/.mpas/keys/proposer-key.json` (plus the flags above).
 
-`mpas mcp add` needs install data that the application publishes in the
-registry. For an application without it, follow the manual steps below.
+`<url>` is the application's folder, for example
+`https://github.com/oma3dao/mpas-applications/tree/main/applications/railway`.
+Find it in the application's registry entry (step 3 below), in its `source`
+field. The application is installed under the folder's name; `--name` chooses
+another. Installing from a URL trusts whoever controls it, so the command
+prints the URL and the plugin's `artifactDid` first. The harness entry runs
+the application's bridge from npm, and no bridge is published yet, so for now
+follow the manual steps below.
 
 ---
 

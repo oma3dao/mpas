@@ -3,7 +3,6 @@ import { parseInstallerArgs } from "./args.js";
 import { type InstallerContext, say, warn } from "./context.js";
 import { InstallerError, usageError } from "./errors.js";
 import { isPlaceholder, updateJsonFile } from "./files.js";
-import { loadRegistry, resolveApplication } from "./registry.js";
 import { parseDidJwk } from "./values.js";
 import { homeFlag, shellQuote } from "./shell.js";
 
@@ -65,19 +64,9 @@ export async function runSigner(args: string[], ctx: InstallerContext): Promise<
 
 /** The application's draft when one exists, otherwise its live config. */
 async function findDeploymentConfig(paths: HomePaths, app: string, ctx: InstallerContext): Promise<Target> {
-  const names = [app];
-  try {
-    names.push(resolveApplication(await loadRegistry(ctx.deps.registryDir), app).applicationPart);
-  } catch {
-    // Not in the registry; the name is used as given.
-  }
-  for (const name of names) {
-    if (await exists(paths.draftConfig(name))) return { path: paths.draftConfig(name), live: false };
-  }
-  for (const name of names) {
-    if (await exists(paths.liveConfig(name))) return { path: paths.liveConfig(name), live: true };
-  }
-  throw new InstallerError(`No deployment config for ${app} in ${paths.config}. Run \`mpas mcp add${homeFlag(paths, ctx.deps)} --app ${shellQuote(app)}\` first.`);
+  if (await exists(paths.draftConfig(app))) return { path: paths.draftConfig(app), live: false };
+  if (await exists(paths.liveConfig(app))) return { path: paths.liveConfig(app), live: true };
+  throw new InstallerError(`No deployment config named ${app} in ${paths.config}. Install the application first with \`mpas mcp add${homeFlag(paths, ctx.deps)} <url>\`, or pass the name it was installed under.`);
 }
 
 async function addSigner(ctx: InstallerContext, target: Target, app: string, values: Map<string, string>, home: string): Promise<number> {

@@ -15,7 +15,7 @@ export function migrationSteps(paths: HomePaths, deps: InstallerDependencies, ke
     "To bring the home into the managed layout without changing its DID:",
     `  1. Back up ${paths.home} and stop the processes that use it.`,
     `  2. Keep the participant's existing key at ${paths.key}. For a home without account.json, run \`mpas init <role>${home} --use-key ${keyFileHint}\`, which copies the key there; if the key is already there, pass that path.`,
-    `  3. Point each bridge and signer config at that key: agent.keyFile ${paths.key} and agent.did the account's DID. Or regenerate a bridge config with \`mpas mcp add${home} --app <app> --replace-config\`. A config that belongs to another participant moves to that participant's own home.`,
+    `  3. Point each bridge and signer config at that key: agent.keyFile ${paths.key} and agent.did the account's DID. Or regenerate a bridge config with \`mpas mcp add${home} <url> --name <name> --replace-config\`, where <name> is the name the existing config uses, as in <name>-mcp-bridge-config.json. A config that belongs to another participant moves to that participant's own home.`,
     `  4. Run \`mpas config validate${home}\`, then restart the processes.`,
   ].join("\n");
 }

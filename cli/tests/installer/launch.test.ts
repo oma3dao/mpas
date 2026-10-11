@@ -8,7 +8,7 @@ import { promisify } from "node:util";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { bundleAssets } from "../../scripts/bundle-assets.mjs";
 import { startDaemon } from "../../src/adapter/daemon.js";
-import { newDid, readJson, repoRoot, run, tempDir, testDeps, writeCredential } from "./helpers.js";
+import { newDid, readJson, repoRoot, run, tempDir, testDeps, writeCredential, fixtureSourceUrl } from "./helpers.js";
 
 const demoRoot = fileURLToPath(new URL("../../", import.meta.url));
 const execFileAsync = promisify(execFile);
@@ -48,7 +48,7 @@ describe("launching the generated setup from a build", () => {
   it("starts the Credential Adapter from the paths in the printed command", async () => {
     const home = join(await tempDir(), "home");
     expect((await run(["init", "verifier", "--home", home, "--action", "local", "--mode", "direct"], testDeps())).exitCode).toBe(0);
-    const added = await run(["mcp", "add", "--home", home, "--app", "mirror"], testDeps());
+    const added = await run(["mcp", "add", "--home", home, fixtureSourceUrl], testDeps());
     expect(added.exitCode, added.stderr).toBe(0);
     await run(["signer", "add", "--home", home, "--app", "mirror", "--proposer", await newDid()], testDeps());
     await run(["signer", "add", "--home", home, "--app", "mirror", "--maintainer", await newDid()], testDeps());

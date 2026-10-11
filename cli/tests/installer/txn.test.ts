@@ -1,7 +1,7 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { initAccount, readJson, run, snapshot, tempDir, testDeps, writeFixtureBridge } from "./helpers.js";
+import { initAccount, readJson, run, snapshot, tempDir, testDeps, writeFixtureBridge, fixtureSourceUrl } from "./helpers.js";
 
 type Step = "stage" | "backup" | "marker" | "commit";
 
@@ -68,7 +68,7 @@ describe("multi-file updates", () => {
     const added = await initAccount("proposer", ["--verifier-did", "did:web:verifier.example.test"]);
     const homedir = await tempDir();
     const beforeAdd = await snapshot(added);
-    expect((await run(["mcp", "add", "--home", added, "--app", "mirror", "--harness", "cursor"], testDeps({ homedir, failpoint: failAt("commit", 1) }))).exitCode).not.toBe(0);
+    expect((await run(["mcp", "add", "--home", added, fixtureSourceUrl, "--harness", "cursor"], testDeps({ homedir, failpoint: failAt("commit", 1) }))).exitCode).not.toBe(0);
     expect(await snapshot(added)).toEqual(beforeAdd);
     expect(await snapshot(join(homedir, ".cursor"))).toEqual({});
   });
