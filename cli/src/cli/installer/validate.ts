@@ -8,7 +8,6 @@ import { parseInstallerArgs } from "./args.js";
 import { type InstallerContext, say } from "./context.js";
 import { usageError } from "./errors.js";
 import { findPlaceholders, listBridgeConfigs, listFiles } from "./files.js";
-import { loadRegistry } from "./registry.js";
 import { homeFlag, shellQuote } from "./shell.js";
 
 const VALIDATE_FLAGS = { "--home": "value" } as const;
@@ -95,7 +94,6 @@ async function checkSignerConfig(paths: HomePaths, account: Account, report: Rep
 }
 
 async function checkBridges(paths: HomePaths, account: Account, app: string | undefined, report: Report, ctx: InstallerContext): Promise<void> {
-  const registry = await loadRegistry(ctx.deps.registryDir);
   const bridges = (await listBridgeConfigs(paths)).filter(
     (path) => !app || basename(path) === `${app}-mcp-bridge-config.json` || basename(path) === app,
   );
@@ -123,24 +121,18 @@ async function checkBridges(paths: HomePaths, account: Account, app: string | un
     const pluginPath = typeof config.plugin === "string" ? config.plugin : undefined;
     const applicationDid = config.target?.applicationDid;
     const appName = basename(bridge).replace(/-mcp-bridge-config\.json$/, "");
-    const bundled = registry.find((entry) => entry.entry.application.applicationDid === applicationDid);
-    // An installed application stays pinned to what it was installed from; a newer bundled registry is only reported.
+    // An installed application is checked against what it was installed from, with no download.
+    // A bridge set up by hand has no record and gets the config checks only.
     const record = (await exists(paths.installed(appName)))
-      ? await readJsonFile<{ registryEntry?: { plugin?: { artifactDid?: string } } }>(paths.installed(appName))
+      ? await readJsonFile<{ plugin?: { artifactDid?: string }; registryEntry?: { plugin?: { artifactDid?: string } } }>(paths.installed(appName))
       : undefined;
-    const expected = record?.registryEntry?.plugin?.artifactDid ?? bundled?.entry.plugin.artifactDid;
+    const expected = record?.plugin?.artifactDid ?? record?.registryEntry?.plugin?.artifactDid;
     if (!pluginPath || !(await exists(pluginPath))) {
       report.fail(bridge, "plugin file is missing");
-    } else if (!expected) {
-      report.fail(pluginPath, `no registry artifactDid for ${applicationDid}`);
-    } else if ((await computeArtifactDid(await readJsonFile(pluginPath))) !== expected) {
-      report.fail(pluginPath, `does not match the artifactDid recorded ${record ? "at install" : "in the registry"}`);
+    } else if (expected && (await computeArtifactDid(await readJsonFile(pluginPath))) !== expected) {
+      report.fail(pluginPath, `does not match the artifactDid recorded at install (${expected})`);
     } else if (problems.length === 0) {
       report.ok(bridge);
-    }
-    const newer = bundled?.entry.plugin.artifactDid;
-    if (record && newer && newer !== expected) {
-      report.info(`A newer registry entry for ${appName} is bundled with this CLI. Update with: mpas mcp add${homeFlag(paths, ctx.deps)} --app ${shellQuote(appName)} --replace-config`);
     }
   }
 }

@@ -260,11 +260,11 @@ mpas init verifier --home ~/.mpas-verifier --action local --mode direct
 mpas init maintainer --home ~/.mpas-maintainer --coordination local --harness codex
 mpas init proposer --home ~/.mpas-proposer --coordination local --action local
 mpas config --home ~/.mpas-proposer --verifier-did <verifier DID>
-mpas mcp add --home ~/.mpas-proposer --app <app> --harness codex
-mpas mcp add --home ~/.mpas-verifier --app <app>
-mpas signer add --home ~/.mpas-verifier --app <app> --proposer <proposer DID>
-mpas signer add --home ~/.mpas-verifier --app <app> --maintainer <maintainer DID>
-mpas config validate --home ~/.mpas-verifier <app>
+mpas mcp add --home ~/.mpas-proposer <url> --harness codex
+mpas mcp add --home ~/.mpas-verifier <url>
+mpas signer add --home ~/.mpas-verifier --app <name> --proposer <proposer DID>
+mpas signer add --home ~/.mpas-verifier --app <name> --maintainer <maintainer DID>
+mpas config validate --home ~/.mpas-verifier <name>
 ```
 
 Codex keeps the two agents apart with `~/.codex-proposer` and
@@ -282,9 +282,11 @@ mpas daemon start \
   --journal-path ~/.mpas-verifier/journal/dispatch-ledger.jsonl
 ```
 
-`mpas mcp add` needs install data that the application publishes in the
-registry. The GitHub mirror application this guide uses has none, so the rest
-of Part 2 sets it up by hand in a single home.
+`<url>` is the application's folder, from the `source` field of its entry in
+`application-registry/`, and `<name>` is the folder's name unless `--name`
+chose another. Installing from a URL trusts whoever controls it. The GitHub
+mirror application this guide uses has no application folder to install from,
+so the rest of Part 2 sets it up by hand in a single home.
 
 ## 2.1 Prepare a Demo MPAS Home
 

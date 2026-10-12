@@ -2,7 +2,7 @@ import { rename } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { loadDeploymentConfigs } from "../../src/adapter/config-loader.js";
-import { readJson, run, tempDir, testDeps } from "./helpers.js";
+import { readJson, run, tempDir, testDeps, fixtureSourceUrl } from "./helpers.js";
 
 type Json = Record<string, any>;
 
@@ -39,10 +39,10 @@ describe("Phase 4: end-to-end setup across three accounts", () => {
 
     // 2. DIDs are exchanged out of band. The Proposer stores the Verifier's and adds the bridge.
     await ok(["config", "--home", homes.proposer, "--verifier-did", did.verifier], "proposer");
-    await ok(["mcp", "add", "--home", homes.proposer, "--app", "mirror", "--harness", "cursor"], "proposer");
+    await ok(["mcp", "add", "--home", homes.proposer, fixtureSourceUrl, "--harness", "cursor"], "proposer");
 
     // 3. The Verifier adds the application, its signers, and the upstream credential, then makes the draft live.
-    await ok(["mcp", "add", "--home", homes.verifier, "--app", "mirror"], "verifier");
+    await ok(["mcp", "add", "--home", homes.verifier, fixtureSourceUrl], "verifier");
     await ok(["signer", "add", "--home", homes.verifier, "--app", "mirror", "--proposer", did.proposer], "verifier");
     await ok(["signer", "add", "--home", homes.verifier, "--app", "mirror", "--maintainer", did.maintainer, "--label", "Maintainer A"], "verifier");
     await ok(["credential", "set", "github-mirror-token", "--credential-dir", join(homes.verifier, "credentials"), "--value", "test-token"], "verifier");

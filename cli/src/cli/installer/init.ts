@@ -260,10 +260,10 @@ async function finishRole(role: Role, paths: HomePaths, account: Account, values
     say(ctx, "Next:");
     say(ctx, "  Send your DID to the Verifier's operator.");
     if (!account.verifierDid) say(ctx, `  Store the Verifier's DID: mpas config${homeFlag(paths, ctx.deps)} --verifier-did <did>`);
-    say(ctx, `  Add an application bridge: mpas mcp add${homeFlag(paths, ctx.deps)} --app <app> --harness <harness>`);
+    say(ctx, `  Add an application bridge: mpas mcp add${homeFlag(paths, ctx.deps)} <url> --harness <harness>`);
     return;
   }
   say(ctx, "Next:");
-  say(ctx, `  Add an application: mpas mcp add${homeFlag(paths, ctx.deps)} --app <app>`);
+  say(ctx, `  Add an application: mpas mcp add${homeFlag(paths, ctx.deps)} <url>`);
   say(ctx, `  Collect the Proposer and Maintainer DIDs and add them with \`mpas signer add${homeFlag(paths, ctx.deps)}\`.`);
 }

@@ -2,7 +2,6 @@ import { chmod, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  buildRegistry,
   fixtureApplicationDid,
   initAccount,
   newDid,
@@ -14,6 +13,7 @@ import {
   writeFixtureBridge,
   writeFixtureConfig,
   writeMixedKey,
+  fixtureSourceUrl,
 } from "./helpers.js";
 
 afterEach(() => {
@@ -80,9 +80,9 @@ describe("Phase 2: mpas config validate", () => {
     expect(adapterResult.exitCode).not.toBe(0);
     expect(adapterResult.stdout).toMatch(new RegExp(`${adapterBridge}.*adapter`));
 
-    const plugin = await initAccount("proposer");
-    await writeFixtureBridge(plugin);
-    const pluginPath = join(plugin, "plugins", "mirror-plugin.json");
+    const plugin = await initAccount("proposer", ["--verifier-did", "did:web:verifier.example.test"]);
+    expect((await run(["mcp", "add", "--home", plugin, fixtureSourceUrl, "--harness", "cursor"], testDeps({ homedir: join(plugin, "..", "user") }))).exitCode).toBe(0);
+    const pluginPath = (await readJson<{ plugin: string }>(join(plugin, "mcp-server-configs", "mirror-mcp-bridge-config.json"))).plugin;
     const pluginJson = await readJson<Record<string, any>>(pluginPath);
     pluginJson.description = "tampered";
     await writeFile(pluginPath, JSON.stringify(pluginJson));
@@ -176,17 +176,33 @@ describe("Phase 2: mpas config validate", () => {
     expect(legacy.stdout).toContain("Config: custom-name");
   });
 
-  it("checks an installed plugin against the record made at install, not a newer bundled registry", async () => {
+  it("checks an installed plugin against the record made at install, offline, even after the source changes", async () => {
     const home = await initAccount("proposer", ["--verifier-did", "did:web:verifier.example.test"]);
     const homedir = join(home, "..", "user");
-    expect((await run(["mcp", "add", "--home", home, "--app", "mirror", "--harness", "cursor"], testDeps({ homedir }))).exitCode).toBe(0);
-    expect((await run(["config", "validate", "--home", home], offline())).exitCode).toBe(0);
+    expect((await run(["mcp", "add", "--home", home, fixtureSourceUrl, "--harness", "cursor"], testDeps({ homedir }))).exitCode).toBe(0);
 
-    // A later CLI bundles a registry that names a different plugin for the same application.
-    const upgraded = await buildRegistry([{ name: "mirror-fixtureorg", registryArtifactDid: "did:artifact:bafkreinewerpluginnewerpluginnewerpluginnewerpluginnewerplugi" }]);
-    const result = await run(["config", "validate", "--home", home], testDeps({ registryDir: upgraded.registryDir }));
-    expect(result.exitCode, result.stdout).toBe(0);
-    expect(result.stdout).toMatch(/newer registry entry/i);
-    expect(result.stdout).toMatch(/mpas mcp add(?: --home \S+)? --app mirror --replace-config/);
+    // Validation never downloads, so whatever the source publishes later cannot change the result.
+    const deps = testDeps({
+      fetchBytes: async (url) => {
+        throw new Error(`validate must not download ${url}`);
+      },
+      npmVersionExists: async () => {
+        throw new Error("validate must not call the network");
+      },
+    });
+    const result = await run(["config", "validate", "--home", home], deps);
+    expect(result.exitCode, result.stdout + result.stderr).toBe(0);
+    expect(result.stdout).not.toMatch(/registry/i);
+  });
+
+  it("gives a bridge without an install record the config checks only", async () => {
+    const home = await initAccount("proposer", ["--verifier-did", "did:web:verifier.example.test"]);
+    await writeFixtureBridge(home);
+    const pluginPath = join(home, "plugins", "mirror-plugin.json");
+    const pluginJson = await readJson<Record<string, any>>(pluginPath);
+    pluginJson.description = "edited by hand";
+    await writeFile(pluginPath, JSON.stringify(pluginJson));
+    const result = await run(["config", "validate", "--home", home], offline());
+    expect(result.exitCode, result.stdout + result.stderr).toBe(0);
   });
 });

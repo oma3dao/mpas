@@ -32,7 +32,6 @@ export interface InstallerDependencies {
   startedViaNpx: boolean;
   /** Version of the running `@oma3/mpas-cli` package. */
   packageVersion: string;
-  registryDir: string;
   skillsDir: string;
   fetchBytes: (url: string) => Promise<Uint8Array>;
   npmVersionExists: (packageName: string, version: string) => Promise<boolean>;
@@ -78,10 +77,11 @@ export function defaultInstallerDependencies(): InstallerDependencies {
     npxScriptPath: findNpxScript(process.execPath, process.env),
     startedViaNpx: mpasScriptPath.split(/[\\/]/).includes("_npx"),
     packageVersion: packageJson.version,
-    registryDir: assets.registryDir,
     skillsDir: assets.skillsDir,
     fetchBytes: async (url) => {
-      if (!url.startsWith("https://")) throw new Error(`Refusing to download over a non-https URL: ${url}`);
+      const { protocol, hostname } = new URL(url);
+      const loopback = ["localhost", "127.0.0.1", "[::1]"].includes(hostname);
+      if (protocol !== "https:" && !(protocol === "http:" && loopback)) throw new Error(`Refusing to download over a non-https URL: ${url}`);
       const response = await fetch(url, { redirect: "follow" });
       if (!response.ok) throw new Error(`Download failed (${response.status}): ${url}`);
       return new Uint8Array(await response.arrayBuffer());

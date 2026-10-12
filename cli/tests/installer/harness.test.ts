@@ -1,7 +1,7 @@
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { type CommandRecord, initAccount, readJson, repoRoot, run, snapshot, tempDir, testDeps } from "./helpers.js";
+import { type CommandRecord, initAccount, readJson, repoRoot, run, snapshot, tempDir, testDeps, fixtureSourceUrl } from "./helpers.js";
 
 type Json = Record<string, any>;
 const nodePath = "/opt/node/bin/node";
@@ -171,7 +171,7 @@ describe("Phase 3: harness registration", () => {
     expect((await maintainerInit("cursor", homedir)).result.exitCode).toBe(0);
 
     const proposer = await initAccount("proposer", ["--verifier-did", "did:web:verifier.example.test"]);
-    const proposerResult = await run(["mcp", "add", "--home", proposer, "--app", "mirror", "--harness", "cursor"], testDeps({ homedir }));
+    const proposerResult = await run(["mcp", "add", "--home", proposer, fixtureSourceUrl, "--harness", "cursor"], testDeps({ homedir }));
     expect(proposerResult.exitCode).not.toBe(0);
     expect(proposerResult.stderr).toContain("--harness-home");
     expect(await readJson(join(proposer, "mcp-server-configs", "mirror-mcp-bridge-config.json"))).toMatchObject({ mode: "proposer" });

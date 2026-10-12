@@ -27,5 +27,6 @@
     "githubOrg": "wivity",
     "publisherDid": "did:web:wivity.com"
   },
-  "status": "beta"
+  "status": "beta",
+  "source": "https://github.com/oma3dao/mpas-applications/tree/main/applications/railway"
 }

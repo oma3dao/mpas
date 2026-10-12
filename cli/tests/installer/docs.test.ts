@@ -71,3 +71,25 @@ describe("Phase 5: help text and operator docs", () => {
     }
   });
 });
+
+describe("Phase 6: docs show mpas mcp add <url>", () => {
+  it("shows the URL form in --help and never --app for mcp add", async () => {
+    const result = await run(["--help"], testDeps());
+    expect(result.stdout).toContain("mpas mcp add [--role proposer] <url>");
+    expect(result.stdout).toContain("mpas mcp add [--role verifier] <url>");
+    expect(result.stdout).not.toMatch(/mpas mcp add[^\n]*--app/);
+  });
+
+  it("explains the source URL, where to find one, and what installing from it trusts", async () => {
+    const readme = await read("README.md");
+    const section = readme.slice(readme.indexOf("## Install and set up"), readme.indexOf("## Architecture"));
+    expect(section).toContain("mpas mcp add <url>");
+    expect(section).toContain("application-registry");
+    expect(section).toMatch(/trusts/);
+    for (const guide of ["guides/proposer.md", "guides/credential-adapter.md", "guides/setup-macos.md"]) {
+      const text = await read(guide);
+      expect(text, guide).toContain("mpas mcp add");
+      expect(text, guide).not.toMatch(/mpas mcp add[^\n]*--app/);
+    }
+  });
+});

@@ -10,6 +10,7 @@ import {
   requireAccount,
   resolveHome,
   type Role,
+  readJsonFile,
   timestamp,
 } from "./account.js";
 import { parseInstallerArgs, type ParsedInstallerArgs } from "./args.js";
@@ -20,19 +21,30 @@ import {
   checkRegistrationOptions,
   finishAgentSetup,
   HARNESS_NAMES,
+  harnessServer,
   parseHarnessName,
+  type RegistrationOptions,
   registerServer,
   registerSigner,
 } from "./harness.js";
-import { fetchVerifiedPlugin, fetchVerifiedTemplate, requireBridge, type ResolvedInstall, resolveInstall } from "./install-data.js";
 import { printAdapterStart } from "./runtime.js";
 import { homeFlag, shellQuote } from "./shell.js";
+import {
+  type ApplicationSource,
+  checkApplicationName,
+  loadSourceBridge,
+  loadSourcePlugin,
+  loadSourceTemplate,
+  parseSourceUrl,
+  type SourcePlugin,
+} from "./source.js";
 import { commitChanges, type FileChange } from "./txn.js";
 
 const MCP_ADD_FLAGS = {
   "--home": "value",
   "--role": "value",
   "--app": "value",
+  "--name": "value",
   "--harness": "value",
   "--harness-home": "value",
   "--skill": "value",
@@ -42,14 +54,19 @@ const MCP_ADD_FLAGS = {
 } as const;
 
 const NOT_FOR: Record<Role, string[]> = {
-  maintainer: ["--app", "--plugin", "--config-template", "--replace-config"],
+  maintainer: ["--name", "--plugin", "--config-template", "--replace-config"],
   proposer: ["--config-template"],
   verifier: ["--harness", "--harness-home", "--skill"],
 };
 
+const USAGE = "Usage: mpas mcp add <url> [--name <name>] [--harness <harness>] [options], where <url> is the application's folder";
+
 export async function runMcpAdd(args: string[], ctx: InstallerContext): Promise<number> {
   const parsed = parseInstallerArgs(args, MCP_ADD_FLAGS, "mpas mcp add");
-  if (parsed.positionals.length > 0) throw usageError("Usage: mpas mcp add [--role <role>] [--app <app>] [--harness <harness>] [options]");
+  if (parsed.values.has("--app")) {
+    throw usageError("mpas mcp add takes the URL of the application's folder instead of --app: mpas mcp add <url> [--name <name>]. Find the URL in the application's registry entry (its source field).");
+  }
+  if (parsed.positionals.length > 1) throw usageError(USAGE);
   const paths = homePaths(resolveHome(parsed.values.get("--home"), ctx.deps));
   const account = await requireAccount(paths, homeFlag(paths, ctx.deps));
   const role = await selectRole(parsed, account, ctx);
@@ -59,6 +76,7 @@ export async function runMcpAdd(args: string[], ctx: InstallerContext): Promise<
     }
   }
   if (role === "maintainer") {
+    if (parsed.positionals.length > 0) throw usageError("A Maintainer's mpas mcp add registers the signer server and takes no URL.");
     const harness = await harnessFlagOrAsk(parsed, ctx);
     await registerSigner(ctx, paths, account, {
       harness,
@@ -86,11 +104,15 @@ async function selectRole(parsed: ParsedInstallerArgs, account: Account, ctx: In
   })) as Role;
 }
 
-async function appFlagOrAsk(parsed: ParsedInstallerArgs, ctx: InstallerContext): Promise<string> {
-  const flag = parsed.values.get("--app");
-  if (flag !== undefined) return flag;
-  if (!ctx.deps.isTerminal) throw usageError("--app is required without a terminal.");
-  return ctx.asker.required("Application", "for example github", (answer) => answer);
+async function sourceOrAsk(parsed: ParsedInstallerArgs, ctx: InstallerContext): Promise<ApplicationSource> {
+  const given = parsed.positionals[0];
+  if (given !== undefined) return parseSourceUrl(given);
+  if (!ctx.deps.isTerminal) throw usageError(`The application's folder URL is required without a terminal. ${USAGE}`);
+  const answer = await ctx.asker.required("Application folder URL", "https://github.com/<owner>/<repo>/tree/<ref>/<path>", (value) => {
+    parseSourceUrl(value);
+    return value;
+  });
+  return parseSourceUrl(answer);
 }
 
 async function harnessFlagOrAsk(parsed: ParsedInstallerArgs, ctx: InstallerContext): Promise<string> {
@@ -100,37 +122,93 @@ async function harnessFlagOrAsk(parsed: ParsedInstallerArgs, ctx: InstallerConte
   return ctx.asker.required("Harness", HARNESS_NAMES.join(", "), (answer) => parseHarnessName(answer, false));
 }
 
+interface InstalledRecord {
+  source?: string;
+}
+
+/**
+ * Refuses a name this home already uses (spec §9.5). `--replace-config`
+ * reinstalls the same source under its name, or takes over an application
+ * config set up by hand, which has no install record. Either way a harness
+ * server with the name must launch this home's bridge config; anything else
+ * there belongs to someone else and is never replaced.
+ */
+async function checkNameFree(
+  ctx: InstallerContext,
+  paths: HomePaths,
+  name: string,
+  source: ApplicationSource,
+  replace: boolean,
+  harness?: RegistrationOptions,
+): Promise<void> {
+  const record = (await exists(paths.installed(name))) ? await readJsonFile<InstalledRecord>(paths.installed(name)) : undefined;
+  const configs = [
+    (await exists(paths.bridgeConfig(name))) && `the bridge config ${paths.bridgeConfig(name)}`,
+    (await exists(paths.draftConfig(name))) && `the draft ${paths.draftConfig(name)}`,
+    (await exists(paths.liveConfig(name))) && `the deployment config ${paths.liveConfig(name)}`,
+  ].filter((use): use is string => Boolean(use));
+  const server = harness ? await harnessServer(ctx, "proposer", harness, `${name}-mpas`) : undefined;
+  const serverIsOurs = server?.args?.includes(paths.bridgeConfig(name)) ?? false;
+  const uses = [
+    record && `an installed application from ${record.source ?? "an earlier CLI version"}`,
+    ...configs,
+    server && (serverIsOurs
+      ? `the server ${name}-mpas in ${harness!.harness}`
+      : `a server named ${name}-mpas in ${harness!.harness} that does not run this home's bridge config`),
+  ].filter((use): use is string => Boolean(use));
+  if (uses.length === 0) return;
+  const sameSource = record?.source === source.url;
+  const takeover = !record && configs.length > 0;
+  if (replace && (sameSource || takeover) && (!server || serverIsOurs)) return;
+  const reinstall = sameSource && (!server || serverIsOurs) ? ` To reinstall ${source.url} under this name, pass --replace-config.` : "";
+  throw new InstallerError(`The name "${name}" is already used in this home: ${uses.join("; ")}. Choose another name with --name <name>.${reinstall}`);
+}
+
+async function applicationName(parsed: ParsedInstallerArgs, source: ApplicationSource): Promise<string> {
+  return checkApplicationName(parsed.values.get("--name") ?? source.defaultName);
+}
+
+function announce(ctx: InstallerContext, source: ApplicationSource, plugin: SourcePlugin): void {
+  say(ctx, `Source: ${source.url}`);
+  say(ctx, `Plugin artifactDid: ${plugin.artifactDid}`);
+  say(ctx, "Installing from a URL trusts whoever controls it. Check that this is the application you meant.");
+}
+
 async function addProposerBridge(ctx: InstallerContext, paths: HomePaths, account: Account, parsed: ParsedInstallerArgs): Promise<number> {
   if (!account.verifierDid) {
     throw new InstallerError(`Store the Verifier's DID before adding a bridge: mpas config${homeFlag(paths, ctx.deps)} --verifier-did <did>`);
   }
-  const app = await appFlagOrAsk(parsed, ctx);
+  const source = await sourceOrAsk(parsed, ctx);
   const harness = await harnessFlagOrAsk(parsed, ctx);
   const options = { harness, harnessHome: parsed.values.get("--harness-home"), skill: parsed.values.get("--skill") };
   const mode = checkRegistrationOptions(options);
+  const name = await applicationName(parsed, source);
+  await checkNameFree(ctx, paths, name, source, parsed.booleans.has("--replace-config"), options);
 
-  const resolved = await resolveInstall(ctx, app);
-  const name = resolved.entry.applicationPart;
-  const bridgePath = paths.bridgeConfig(name);
-  if ((await exists(bridgePath)) && !parsed.booleans.has("--replace-config")) {
-    throw new InstallerError(`${bridgePath} already exists. Pass --replace-config to rewrite it.`);
-  }
-  const bridge = requireBridge(resolved);
-  const plugin = await fetchVerifiedPlugin(ctx, resolved, parsed.values.get("--plugin"));
+  const bridge = await loadSourceBridge(ctx, source);
+  const plugin = await loadSourcePlugin(ctx, source, parsed.values.get("--plugin"));
   const published = await ctx.deps.npmVersionExists(bridge.packageName, bridge.version);
+  announce(ctx, source, plugin);
 
-  const pluginPath = paths.plugin(name, resolved.entry.entry.plugin.artifactDid!);
+  const bridgePath = paths.bridgeConfig(name);
+  const pluginPath = paths.plugin(name, plugin.artifactDid);
   await ensureDir(paths.workflows);
   await commitChanges(paths, [
-    { path: pluginPath, contents: plugin },
-    { path: paths.installed(name), contents: json(installRecord(ctx, resolved)) },
+    { path: pluginPath, contents: plugin.bytes },
+    {
+      path: paths.installed(name),
+      contents: json(installRecord(ctx, name, "proposer", source, { plugin: plugin.from, bridgePackage: bridge.from }, plugin, {
+        package: bridge.packageName,
+        version: bridge.version,
+      })),
+    },
     {
       path: bridgePath,
       contents: json({
         mode: "proposer",
         plugin: pluginPath,
         agent: { did: account.did, keyFile: paths.key },
-        target: { applicationDid: resolved.entry.entry.application.applicationDid },
+        target: { applicationDid: plugin.applicationDid },
         coordination: { url: account.coordinationUrl },
         actionEndpoint: { url: account.actionUrl, verifierDid: account.verifierDid },
         workflow: { dbPath: paths.workflowDb(name) },
@@ -149,7 +227,7 @@ async function addProposerBridge(ctx: InstallerContext, paths: HomePaths, accoun
     bridgeEntry(ctx, bridge.packageName, bridge.version, bridgePath));
   await finishAgentSetup(ctx, paths, "proposer", registered, options, mode);
   say(ctx);
-  if (resolved.manifest.readme) say(ctx, `Application README: ${resolved.manifest.readme}`);
+  say(ctx, `Application README: ${source.readmeUrl}`);
   say(ctx, `Check the setup with: mpas config validate${homeFlag(paths, ctx.deps)} ${shellQuote(name)}`);
   return 0;
 }
@@ -158,52 +236,52 @@ function json(value: unknown): string {
   return `${JSON.stringify(value, null, 2)}\n`;
 }
 
-/** What `mcp add` ingested, so later checks of this application do not depend on the CLI's bundled registry. */
-function installRecord(ctx: InstallerContext, resolved: ResolvedInstall) {
+/** What `mcp add` installed and where it came from, so later checks of this application never download again. */
+function installRecord(
+  ctx: InstallerContext,
+  name: string,
+  role: Role,
+  source: ApplicationSource,
+  files: Record<string, string>,
+  plugin: SourcePlugin,
+  bridge?: { package: string; version: string },
+) {
   return {
-    version: "1",
+    version: "2",
     type: "MpasInstalledApplication",
-    app: resolved.entry.applicationPart,
-    registryName: resolved.entry.name,
-    registryEntry: resolved.entry.entry,
-    manifest: resolved.manifest,
+    name,
+    role,
+    source: source.url,
+    files,
+    plugin: { artifactDid: plugin.artifactDid, applicationDid: plugin.applicationDid },
+    ...(bridge ? { bridge } : {}),
     cliVersion: ctx.deps.packageVersion,
     installedAt: ctx.deps.now().toISOString(),
   };
 }
 
 async function addVerifierApplication(ctx: InstallerContext, paths: HomePaths, account: Account, parsed: ParsedInstallerArgs): Promise<number> {
-  const app = await appFlagOrAsk(parsed, ctx);
-  const resolved = await resolveInstall(ctx, app);
-  const name = resolved.entry.applicationPart;
-  const draftPath = paths.draftConfig(name);
-  const livePath = paths.liveConfig(name);
+  const source = await sourceOrAsk(parsed, ctx);
+  const name = await applicationName(parsed, source);
   const replace = parsed.booleans.has("--replace-config");
-  if (!replace && ((await exists(draftPath)) || (await exists(livePath)))) {
-    throw new InstallerError(`${name} already has a deployment config. Pass --replace-config to write a new draft.`);
-  }
-  const plugin = await fetchVerifiedPlugin(ctx, resolved, parsed.values.get("--plugin"));
-  const template = await fetchVerifiedTemplate(ctx, resolved, parsed.values.get("--config-template"));
+  await checkNameFree(ctx, paths, name, source, replace);
+  const plugin = await loadSourcePlugin(ctx, source, parsed.values.get("--plugin"));
+  const template = await loadSourceTemplate(ctx, source, parsed.values.get("--config-template"), plugin);
+  announce(ctx, source, plugin);
 
   // Plugin files are named for their artifact, so a newer plugin never replaces the one a live config uses.
-  const pluginPath = paths.plugin(name, resolved.entry.entry.plugin.artifactDid!);
+  const pluginPath = paths.plugin(name, plugin.artifactDid);
+  const draftPath = paths.draftConfig(name);
   const files: FileChange[] = [
-    { path: pluginPath, contents: plugin },
-    { path: paths.installed(name), contents: json(installRecord(ctx, resolved)) },
+    { path: pluginPath, contents: plugin.bytes },
+    { path: paths.installed(name), contents: json(installRecord(ctx, name, "verifier", source, { plugin: plugin.from, template: template.from }, plugin)) },
   ];
-  const readme = resolved.manifest.readme ?? "(the publisher's README)";
-  if (!template) {
-    await commitChanges(paths, files, ctx.deps);
-    say(ctx, `Saved the plugin: ${pluginPath}`);
-    throw new InstallerError(`${resolved.entry.name} publishes no deployment config template. Set up the config by following ${readme}`);
-  }
-
   const earlier = replace && (await exists(draftPath))
     ? join(paths.drafts, `${name}-adapter-config.${timestamp(ctx.deps)}.json`)
     : undefined;
   if (earlier) files.push({ path: earlier, contents: await readFile(draftPath) });
-  template.plugin = { ...template.plugin, path: pluginPath };
-  files.push({ path: draftPath, contents: json(template) });
+  template.config.plugin = { ...template.config.plugin, path: pluginPath };
+  files.push({ path: draftPath, contents: json(template.config) });
   await commitChanges(paths, files, ctx.deps);
 
   say(ctx, `Saved the plugin: ${pluginPath}`);
@@ -211,7 +289,7 @@ async function addVerifierApplication(ctx: InstallerContext, paths: HomePaths, a
   say(ctx, `Saved a deployment config draft: ${draftPath}`);
   say(ctx);
   say(ctx, "Next:");
-  say(ctx, `  1. Follow the application's README for upstream setup, such as credentials or OAuth: ${readme}`);
+  say(ctx, `  1. Follow the application's README for upstream setup, such as credentials or OAuth: ${source.readmeUrl}`);
   say(ctx, "  2. Add each signer:");
   const home = homeFlag(paths, ctx.deps);
   say(ctx, `       mpas signer add${home} --app ${shellQuote(name)} --proposer <did>`);

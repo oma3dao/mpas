@@ -30,26 +30,55 @@ npm pack
 ```
 
 Inspect the pack output. It must contain only `dist/` (including
-`dist/bundled/registry/` and `dist/bundled/skills/`), `package.json`,
-`README.md`, `LICENSE`, and `NOTICE`. It must not contain `tests/` or any key
-file. The registry snapshot in the package is whatever `application-registry/`
-holds at this commit, so registry changes ship with this release.
+`dist/bundled/skills/`), `package.json`, `README.md`, `LICENSE`, and `NOTICE`.
+It must not contain `tests/`, any key file, or `dist/bundled/registry/`: the
+CLI bundles no application data, so application changes never need a release.
+Skill changes do ship with this release. The build empties `dist/` first, so
+files from deleted sources never ship. This check prints nothing when the
+tarball is clean:
 
-Install the tarball into a temporary prefix and check that it runs without the
-repository:
+```sh
+tar -tzf oma3-mpas-cli-0.1.0-alpha.N.tgz | grep -E "^package/tests/|dist/bundled/registry/|signing-key|test-keys|\.pem$"
+```
+
+The next two checks run the tarball outside the repository. Each one works in
+its own temporary folder, keeps npm's cache there too, and deletes the folder
+on its last line, so nothing from MPAS stays on the machine. Paste each block
+whole: the last line runs even if a check fails.
+
+Install the tarball, run the CLI, set up a Proposer, and install a real
+application from its folder URL as a Verifier. The `mcp add` line downloads
+from GitHub and prints the source URL and the plugin's `artifactDid` before
+writing a draft:
 
 ```sh
 tmp=$(mktemp -d)
-npm install -g --prefix "$tmp" ./oma3-mpas-cli-0.1.0-alpha.N.tgz
+npm_config_cache="$tmp/cache" npm install -g --prefix "$tmp" ./oma3-mpas-cli-0.1.0-alpha.N.tgz
 "$tmp/bin/mpas" --help
-"$tmp/bin/mpas" init proposer --home "$tmp/home" --coordination local --action local
-npm_config_cache="$tmp/cache" npx -y ./oma3-mpas-cli-0.1.0-alpha.N.tgz --help
+"$tmp/bin/mpas" init proposer --home "$tmp/proposer" --coordination local --action local
+"$tmp/bin/mpas" init verifier --home "$tmp/verifier" --action local --mode direct
+"$tmp/bin/mpas" mcp add --home "$tmp/verifier" https://github.com/oma3dao/mpas-applications/tree/main/applications/railway
+rm -rf "$tmp"
 ```
 
-The last line checks the one-shot form users run with `npx -y @oma3/mpas-cli@alpha`. It works because the package has a `mpas-cli` command named after the package.
+Check the one-shot form users run with `npx -y @oma3/mpas-cli@alpha`. It works
+because the package has a `mpas-cli` command named after the package:
+
+```sh
+tmp=$(mktemp -d)
+npm_config_cache="$tmp/cache" npx -y ./oma3-mpas-cli-0.1.0-alpha.N.tgz --help
+rm -rf "$tmp"
+```
 
 Commit the version and lockfile changes, complete review, and publish from the
-reviewed commit. Authenticate with npm using the web/passkey flow and verify
+reviewed commit:
+
+```sh
+git commit -am "Release @oma3/mpas-cli 0.1.0-alpha.N"
+```
+
+Run the remaining commands from `cli`; the repository root has no
+`package.json`. Authenticate with npm using the web/passkey flow and verify
 the active identity:
 
 ```sh
@@ -57,7 +86,8 @@ npm login --auth-type=web
 npm whoami
 ```
 
-Publish the prerelease:
+Publish the prerelease. `npm publish` rebuilds `dist/` from the committed
+source through `prepack`, so it does not upload the tarball made above:
 
 ```sh
 npm publish --access public --tag alpha
@@ -69,7 +99,15 @@ Confirm the published version, the dist-tags, and a one-shot run:
 ```sh
 npm view @oma3/mpas-cli@alpha version
 npm dist-tag ls @oma3/mpas-cli
-npx -y @oma3/mpas-cli@alpha --help
+tmp=$(mktemp -d)
+npm_config_cache="$tmp/cache" npx -y @oma3/mpas-cli@alpha --help
+rm -rf "$tmp"
+```
+
+Then delete the tarball made for the checks:
+
+```sh
+rm oma3-mpas-cli-0.1.0-alpha.N.tgz
 ```
 
 Stable releases use the `latest` dist-tag instead of `alpha`.

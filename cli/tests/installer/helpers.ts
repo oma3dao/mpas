@@ -1,5 +1,4 @@
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import { copyFile, lstat, mkdir, mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
@@ -68,7 +67,6 @@ export function testDeps(overrides: Partial<InstallerDependencies> = {}): Instal
     npxScriptPath: "/opt/node/lib/node_modules/npm/bin/npx-cli.js",
     startedViaNpx: false,
     packageVersion: "0.1.0-alpha.1",
-    registryDir: join(installerFixtures, "registry"),
     skillsDir: join(repoRoot, "integrations", "skills"),
     fetchBytes: fixtureFetch,
     npmVersionExists: async () => true,
@@ -129,6 +127,8 @@ export const fixtureArtifactDid = "did:artifact:bafkreiboiym5t7serxxvynew6qzrjjo
 export const fixturePluginFile = `mirror-plugin-${fixtureArtifactDid.replace("did:artifact:", "")}.json`;
 export const fixtureTemplatePath = join(installerFixtures, "downloads", "mirror", "adapter-config.example.json");
 export const fixturePluginPath = join(installerFixtures, "downloads", "mirror", "plugin.json");
+/** The fixture application's folder URL, served by `fixtureFetch`. */
+export const fixtureSourceUrl = "https://fixtures.example.test/mirror";
 
 export async function newDid(suite: "Ed25519" | "P-256" = "Ed25519"): Promise<string> {
   return (await generateMpasKey(suite)).did;
@@ -216,65 +216,49 @@ export async function fixtureFetch(url: string): Promise<Uint8Array> {
   return new Uint8Array(await readFile(join(installerFixtures, "downloads", url.slice(prefix.length))));
 }
 
-export function sha256Digest(bytes: Uint8Array): { alg: "sha-256"; value: string } {
-  return { alg: "sha-256", value: createHash("sha256").update(bytes).digest("base64url") };
-}
-
 export interface FixtureApp {
-  /** Registry name, for example `mirror-fixtureorg`. */
+  /** Folder name, which is also the default application name. */
   name: string;
   applicationDid?: string;
-  manifest?: (manifest: Record<string, any>) => void;
   template?: (template: Record<string, any>) => void;
+  bridgePackage?: (pkg: Record<string, any>) => void;
   withoutTemplate?: boolean;
+  withoutBridge?: boolean;
   pluginBytes?: Uint8Array;
-  /** The registry's artifactDid. Defaults to the one computed from the plugin bytes. */
-  registryArtifactDid?: string;
 }
 
-/** Builds a registry and its downloads in a temporary folder, with digests computed over the final bytes. */
-export async function buildRegistry(apps: FixtureApp[]): Promise<{ registryDir: string; fetchBytes: (url: string) => Promise<Uint8Array> }> {
-  const registryDir = await tempDir("mpas-registry-");
+/**
+ * Serves one application folder per app at https://fixtures.example.test/<name>,
+ * with the template's plugin pin computed from the plugin bytes unless the test changes it.
+ */
+export async function buildSource(apps: FixtureApp[]): Promise<{ url: (name: string) => string; fetchBytes: (url: string) => Promise<Uint8Array> }> {
   const downloads = new Map<string, Uint8Array>();
-  const baseEntry = await readJson<Record<string, any>>(join(installerFixtures, "registry", "mirror-fixtureorg.json"));
+  const encode = (value: unknown) => new TextEncoder().encode(`${JSON.stringify(value, null, 2)}\n`);
   for (const app of apps) {
     const applicationDid = app.applicationDid ?? fixtureApplicationDid;
     const base = `https://fixtures.example.test/${app.name}/`;
-    const pluginBytes = app.pluginBytes ?? new Uint8Array(await readFile(fixturePluginPath));
+    let pluginBytes = app.pluginBytes ?? new Uint8Array(await readFile(fixturePluginPath));
+    if (app.applicationDid && !app.pluginBytes) {
+      const plugin = JSON.parse(new TextDecoder().decode(pluginBytes));
+      plugin.applicationDid = applicationDid;
+      pluginBytes = encode(plugin);
+    }
     downloads.set(`${base}plugin.json`, pluginBytes);
-    const artifactDid = await computeArtifactDid(JSON.parse(new TextDecoder().decode(pluginBytes)));
     const template = await readJson<Record<string, any>>(fixtureTemplatePath);
     template.target.applicationDid = applicationDid;
     template.policy.applicationDid = applicationDid;
-    template.plugin.artifactDid = artifactDid;
+    template.plugin.artifactDid = await computeArtifactDid(JSON.parse(new TextDecoder().decode(pluginBytes)));
     app.template?.(template);
-    const templateBytes = new TextEncoder().encode(`${JSON.stringify(template, null, 2)}\n`);
-    downloads.set(`${base}adapter-config.example.json`, templateBytes);
-    const manifest: Record<string, any> = {
-      version: "1",
-      type: "MpasInstallManifest",
-      applicationDid,
-      bridge: { package: `@fixture/mpas-bridge-${app.name}`, version: "1.2.3" },
-      plugin: { url: `${base}plugin.json` },
-      adapterConfigTemplate: { url: `${base}adapter-config.example.json`, digest: sha256Digest(templateBytes) },
-      readme: `${base}README.md`,
-    };
-    if (app.withoutTemplate) delete manifest.adapterConfigTemplate;
-    app.manifest?.(manifest);
-    const manifestBytes = new TextEncoder().encode(`${JSON.stringify(manifest, null, 2)}\n`);
-    downloads.set(`${base}install.json`, manifestBytes);
-    const entry = structuredClone(baseEntry);
-    entry.application.applicationDid = applicationDid;
-    entry.publisher.githubOrg = app.name.split("-").pop();
-    entry.plugin.artifactDid = app.registryArtifactDid ?? artifactDid;
-    entry.install = { manifestUrl: `${base}install.json`, manifestDigest: sha256Digest(manifestBytes) };
-    await writeFile(join(registryDir, `${app.name}.json`), `${JSON.stringify(entry, null, 2)}\n`);
+    if (!app.withoutTemplate) downloads.set(`${base}adapter-config.example.json`, encode(template));
+    const pkg: Record<string, any> = { name: `@fixture/mpas-bridge-${app.name}`, version: "1.2.3" };
+    app.bridgePackage?.(pkg);
+    if (!app.withoutBridge) downloads.set(`${base}bridge/package.json`, encode(pkg));
   }
   return {
-    registryDir,
+    url: (name: string) => `https://fixtures.example.test/${name}`,
     fetchBytes: async (url: string) => {
       const bytes = downloads.get(url);
-      if (!bytes) throw new Error(`Unexpected download: ${url}`);
+      if (!bytes) throw new Error(`Not found (404): ${url}`);
       return bytes;
     },
   };

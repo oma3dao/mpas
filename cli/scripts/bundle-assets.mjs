@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 
-// Copies the application registry and the role skills into the package so the
-// published CLI can resolve applications and print role preambles without a
-// repository checkout. Runs as part of `npm run build`.
+// Copies the role skills into the package so the published CLI can install
+// them and print role preambles without a repository checkout. Application
+// data is never bundled: `mpas mcp add` reads it from the URL it is given.
+// Runs as part of `npm run build`.
 
-import { copyFile, cp, mkdir, readdir, rm } from "node:fs/promises";
+import { cp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -12,13 +13,6 @@ export const BUNDLED_SKILLS = ["mpas-proposer", "mpas-maintainer"];
 
 export async function bundleAssets({ repoRoot, outDir }) {
   await rm(outDir, { recursive: true, force: true });
-
-  const registryDir = join(repoRoot, "application-registry");
-  const registryOut = join(outDir, "registry");
-  await mkdir(registryOut, { recursive: true });
-  for (const name of (await readdir(registryDir)).filter((file) => file.endsWith(".json")).sort()) {
-    await copyFile(join(registryDir, name), join(registryOut, name));
-  }
 
   for (const skill of BUNDLED_SKILLS) {
     await cp(join(repoRoot, "integrations", "skills", skill), join(outDir, "skills", skill), { recursive: true });

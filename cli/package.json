@@ -1,6 +1,6 @@
 {
   "name": "@oma3/mpas-cli",
-  "version": "0.1.0-alpha.1",
+  "version": "0.1.0-alpha.2",
   "description": "MPAS participant CLI: account setup, harness registration, Credential Adapter, and Coordination Service",
   "type": "module",
   "license": "Apache-2.0",
@@ -25,7 +25,7 @@
     "mpas-demo": "./dist/index.js"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json && node scripts/bundle-assets.mjs",
+    "build": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\" && tsc -p tsconfig.build.json && node scripts/bundle-assets.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node tests/scripts/run-tests.mjs",
     "test:e2e:mcp-bridge": "node tests/scripts/run-mcp-bridge-e2e.mjs",
@@ -42,9 +42,10 @@
     "jose": "^6.0.11",
     "json-canonicalize": "2.0.0",
     "multiformats": "^14.0.0",
+    "smol-toml": "1.9.0",
     "undici": "7.30.0",
     "ws": "^8.21.0",
-    "yaml": "2.8.1"
+    "yaml": "2.8.4"
   },
   "devDependencies": {
     "@types/node": "^22.15.29",

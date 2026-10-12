@@ -4,17 +4,17 @@
 
 **Created:** 2026-10-07
 
-**Updated:** 2026-10-09
+**Updated:** 2026-10-10
 
-**Status:** Implemented. See Implementation status.
+**Status:** Phases 0 to 5 implemented and released as `0.1.0-alpha.1`. Phase 6, install from a URL, is implemented and not yet released. See Implementation status.
 
-Behavior is defined in the spec. This plan is the build order and the tests. Tests use a temporary `--home`, an injectable prompt, an injectable `process.execPath`, and injectable harness, registry, manifest, download, and npm-lookup runners. They do not call the network, listen on a port, or print a private JWK.
+Behavior is defined in the spec. This plan is the build order and the tests. The spec was reorganized on 2026-10-10 into one section per command (§9.1 to §9.6), with shared rules in §7 and §8. Tests use a temporary `--home`, an injectable prompt, an injectable `process.execPath`, and injectable harness, download, and npm-lookup runners. Phases 0 to 5 also inject the registry and manifest, which Phase 6 removes. They do not call the network, listen on a port, or print a private JWK.
 
 Each phase starts by writing that phase's tests from the list below and running them red. Implementation of the phase then turns that file green. Do not write a separate commit per test. A later phase may add tests, and it does not rewrite an earlier phase's tests to match the code.
 
 ## Implementation status
 
-As of 2026-10-09, Phases 0 through 5 are implemented on `feat/install-script` and not yet committed. The phase lists below include every change from the review rounds, and each behavior is recorded in the spec. All 110 installer tests and the 553 existing tests pass (663 in total), and `npm run typecheck` is clean.
+As of 2026-10-09, Phases 0 through 5 are implemented, and they were merged in oma3dao/mpas#115. The phase lists below include every change from the review rounds, and each behavior is recorded in the spec. All 110 installer tests and the 553 existing tests pass (663 in total), and `npm run typecheck` is clean.
 
 | Phase | Status | Tests in `cli/tests/installer/` |
 |---|---|---|
@@ -24,17 +24,23 @@ As of 2026-10-09, Phases 0 through 5 are implemented on `feat/install-script` an
 | 3. `mpas mcp add` | Done | `mcp-add.test.ts` (17), `harness.test.ts` (11) |
 | 4. End-to-end and launch check | Done | `e2e.test.ts` (1), `launch.test.ts` (2) |
 | 5. Help text and operator docs | Done | `docs.test.ts` (5) |
+| 6. Install from a URL | Done, 2026-10-10 | `mcp-add.test.ts` (35, replacing the Phase 3 file), `docs.test.ts` (+2), `package.test.ts`, `validate.test.ts`, and the other files' `mcp add` calls |
 
 Code is in `cli/src/cli/installer/`, with the build step in `cli/scripts/bundle-assets.mjs` and test fixtures in `cli/tests/fixtures/installer/`. Run the tests with `npx vitest run tests/installer` from `cli`.
 
 Process note: Phases 0 and 1, and every change from the review rounds, had their tests run red before the code was written. The first pass of Phases 2 to 5 had its tests written first but not run red.
 
+Phases 0 to 5 were committed and published as `@oma3/mpas-cli@0.1.0-alpha.1`. In that release `mpas mcp add` reads install data from the bundled registry, and no registry entry has any, so every `mpas mcp add <app>` exits with "has no install data in the registry yet" and writes nothing. Phase 6 replaces that path: `mpas mcp add` takes the URL of an application's folder (spec §9.5 as of 2026-10-10).
+
+Phase 6 is implemented, with the review fixes below: all 130 installer tests and 683 CLI tests pass, and `npm run typecheck` is clean. Code is in `cli/src/cli/installer/source.ts` and `mcp-add.ts`; `registry.ts` and `install-data.ts` are removed. Against the real `mpas-applications` folders on GitHub, Verifier `mpas mcp add` installed GitHub, Netlify, Railway, and Upstash, and the Railway draft passed `mpas config validate` after `mpas signer add` and a credential file, with no hand edits.
+
 Not done yet:
 
-- Release gate (spec §19). No application in `mpas-applications` has an install manifest or a published bridge, so `mpas mcp add` has run only against fixtures, and the Proposer bridge entry has not been launched.
+- Release gate (spec §9.5). No application has a published bridge, so `mpas mcp add` has run only against fixtures, and the Proposer bridge entry has not been launched.
 - Real harness registration. The `codex`, `claude`, and `openclaw` command forms were checked against their documentation, and tests use injected runners. One real registration per harness is still needed.
-- Publishing. A person publishes `@oma3/mpas-cli` by following the Release section. The one-shot `npx` form has been checked against a packed tarball.
-- `mpas-applications` work: install manifests, a README and template per application, and the issue about `humanApprovers` in the Netlify example.
+- Publishing Phase 6 as `0.1.0-alpha.2`. A person publishes by following the Release section.
+- Proposer installs from a real application, which wait for a bridge published on npm.
+- `mpas-applications` work: a README and template for the applications that lack them, and bridges published on npm. GitHub, Netlify, Railway, and Upstash have a README and a template. The Netlify `humanApprovers` issue (oma3dao/mpas-applications#61) is closed.
 
 ---
 
@@ -197,7 +203,7 @@ Launch check, from a build of the package compiled into a temporary folder:
 
 - The Maintainer's generated harness entry, run exactly as written to the harness config (`command`, `args`, `env`), starts the signer server and answers an MCP `tools/list` with the four signer tools.
 - The Credential Adapter starts on a free port from the config, credential, adapter-key, and journal paths in the printed `mpas adapter start` command, with the Verifier's config loaded, and then stops.
-- The Proposer bridge entry is not launched here, because no bridge is published yet. The release gate in spec §19 covers it.
+- The Proposer bridge entry is not launched here, because no bridge is published yet. The release gate in spec §9.5 covers it.
 
 ## Phase 5: Help text and operator docs
 
@@ -208,6 +214,52 @@ Exit criterion: every test in this phase passes.
 - The opening section of `cli/README.md` tells a person or an agent the npm install, `init`, `config` and `config validate`, `key rotate`, proposer `mcp add`, maintainer registration at init, verifier `mcp add`, `signer add`, `remove`, and `list`, and oma3dao/mpas#6 for approval rules.
 - `cli/guides/proposer.md`, `maintainer.md`, and `credential-adapter.md` lead with those commands. `setup-macos.md` uses one `--home` per participant for the single-machine demo.
 - `cli/RELEASING.md` exists, modeled on `sdk/protocol/RELEASING.md`, and contains the steps in the Release section below.
+
+## Phase 6: Install from a URL
+
+Exit criterion: every test in this phase passes, and the existing CLI tests and `cli` typecheck still pass. Behavior is spec §9.5 as of 2026-10-10. This phase replaces the registry-and-manifest install path that Phases 0, 2, and 3 built. The tests for that path are removed or rewritten here, as listed, and the earlier phase lists stay as the record of what `0.1.0-alpha.1` shipped.
+
+Package and registry:
+
+- The build no longer copies `application-registry/`. `npm pack --dry-run --json` lists no `dist/bundled/registry/`, and the skills are still bundled. The Phase 0 registry tests are removed.
+- The registry loader and the manifest code in `cli/src/cli/installer/` are removed, with their fixtures. The Phase 3 tests for `manifestDigest`, the registry `artifactDid`, and an unknown registry application are removed. The Phase 2 test for the bundled-registry fallback in `mpas config validate` is removed.
+- `application-registry/README.md` replaces the `install` row with an optional `source` row: the folder URL to pass to `mpas mcp add`. The GitHub, Netlify, Railway, and Upstash entries gain `source` pointing at their folders in `mpas-applications`.
+
+Source URL, with an injected downloader serving fixture folders:
+
+- A GitHub folder URL (`/tree/<ref>/<path>`) downloads each file from `raw.githubusercontent.com` at that ref. Any other `https` URL is the folder itself. `http://` is accepted only for a loopback host. Any other scheme exits nonzero and writes nothing.
+- A folder without `plugin.json`, a Proposer source without `bridge/package.json`, and a Verifier source without `adapter-config.example.json` each exit nonzero and write nothing.
+- A template whose `plugin.artifactDid` or `target.applicationDid` does not match the downloaded plugin exits nonzero and writes nothing. `--plugin` and `--config-template` get the same checks.
+- A `bridge/package.json` version that is a range or tag exits nonzero. An exact version missing from npm keeps the Phase 3 behavior: plugin and bridge config saved, harness registration fails.
+- Stdout prints the source URL and the plugin's `artifactDid` before any file is written.
+- `--app` on `mpas mcp add` exits nonzero and names the `mpas mcp add <url>` form. A Maintainer `mpas mcp add` with a URL exits nonzero.
+
+Review fixes (Astra, 2026-10-11):
+
+- `--replace-config` with no install record and no application config, where only an unrelated `<name>-mpas` harness server exists, exits nonzero and leaves the harness config byte-identical. A hand-made bridge config whose harness entry launches it is taken over; one whose `<name>-mpas` entry launches a different config is refused.
+- A Codex `config.toml` whose server table is written `[mcp_servers.x]`, `[mcp_servers."x"]`, `[mcp_servers.'x']`, or with spaces around the dot is recognized, and no `codex` command runs without `--replace-config`. An unparseable `config.toml` stops the command before any `codex` command.
+- Proposer and Verifier `init` print `mpas mcp add <url>`, and the managed-layout migration steps print `mpas mcp add <url> --name <name> --replace-config`. Neither prints `--app`.
+
+Name:
+
+- With no `--name`, the name is the last folder name in the URL. `--name` overrides it. A name with characters other than lowercase letters, digits, and hyphens exits nonzero.
+- A name already in use exits nonzero, leaves the home and the harness byte-identical, and the error names `--name`. One test each for a name in use by `installed/<name>.json`, a Proposer bridge config, a Verifier draft, a live deployment config, and a `<name>-mpas` server already in the selected harness.
+- The same source with `--name <other>` succeeds and leaves the first application's files and harness entry unchanged.
+- The same source URL under the same name with `--replace-config` reinstalls: the record is replaced, and Verifier drafts follow the Phase 3 replacement rules. A different source URL under an existing name is a conflict even with `--replace-config`.
+- The Maintainer's `mpas-coordination` entry is still replaced in place by Maintainer `mpas mcp add`.
+- `mpas signer --app <name>` and `mpas config validate <name>` act on the application installed under that name.
+
+Install record and validation:
+
+- `installed/<name>.json` holds the source URL, each file's URL, the plugin's `artifactDid` and `applicationDid`, the bridge package and version for a Proposer, and the install time.
+- `mpas config validate` checks the plugin copy against the recorded `artifactDid` with no download. After the fixture folder changes, the result is unchanged.
+- A home with no install record gets the existing config checks and no plugin-source check.
+
+End-to-end and docs:
+
+- The Phase 4 end-to-end test installs its fixture application from a fixture URL for both the Proposer and the Verifier.
+- `mpas --help`, the opening section of `cli/README.md`, `cli/guides/proposer.md`, `credential-adapter.md`, and `setup-macos.md` show `mpas mcp add <url>`, say where to find a URL (the registry's `source` field today), and say that installing trusts the source URL. Until the release gate passes, they keep the manual steps beside it. The `docs.test.ts` checks are updated to match.
+- `cli/RELEASING.md` and the Release section below drop the sentence about the registry snapshot shipping with each release.
 
 ## Release (performed by a person)
 
@@ -231,7 +283,7 @@ npm pack --dry-run
 npm pack
 ```
 
-Inspect the pack output. It must contain only the files listed in Phase 0, and no `tests/` directory or key file. The registry snapshot in the package is whatever `application-registry/` holds at this commit, so registry changes ship with this release.
+Inspect the pack output. It must contain only the files listed in Phase 0, and no `tests/` directory, key file, or `dist/bundled/registry/` (Phase 6). Skill changes ship with this release; application changes never need one.
 
 Install the tarball into a temporary prefix and check that it runs without the repository:
 
@@ -267,5 +319,5 @@ npx -y @oma3/mpas-cli@alpha --help
 - The tests above pass, and the existing CLI tests and `cli` typecheck pass.
 - `sdk/protocol/` has no diff. If `generateMpasKey` or `isDidJwk` cannot do the job, stop before adding an SDK export.
 - Do not publish `@oma3/mpas-cli` while implementing this plan. A person publishes it by following the Release section.
-- The `mpas-applications` work in spec §19 is tracked in that repository. Until a real application has a manifest, `mcp add` is exercised only with fixtures.
-- The docs keep `mpas mcp add` beside the manual steps until the release gate in spec §19 passes against the packed package.
+- The `mpas-applications` work in spec §9.5 is tracked in that repository. Until a real application has a published bridge, Proposer `mcp add` is exercised only with fixtures.
+- The docs keep `mpas mcp add` beside the manual steps until the release gate in spec §9.5 passes against the packed package.

@@ -1,7 +1,7 @@
 import { mkdir, rename } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { newDid, printedCommand, readJson, run, shellWords, tempDir, testDeps, writeCredential } from "./helpers.js";
+import { newDid, printedCommand, readJson, run, shellWords, tempDir, testDeps, writeCredential, fixtureSourceUrl } from "./helpers.js";
 
 function linesWith(output: string, text: string): string[] {
   return output.split("\n").filter((line) => line.includes(text));
@@ -15,7 +15,7 @@ describe("printed commands", () => {
 
     const defaultInit = await run(["init", "verifier", "--action", "https://relay.example.test", "--mode", "relay"], deps());
     expect(defaultInit.exitCode, defaultInit.stderr).toBe(0);
-    const defaultAdd = await run(["mcp", "add", "--app", "mirror"], deps());
+    const defaultAdd = await run(["mcp", "add", fixtureSourceUrl], deps());
     expect(defaultAdd.stdout).not.toContain("--home");
 
     const proposer = await run(["init", "proposer", "--home", custom, "--coordination", "local", "--action", "local"], deps());
@@ -27,7 +27,7 @@ describe("printed commands", () => {
 
     const verifierHome = join(await tempDir(), "verifier");
     await run(["init", "verifier", "--home", verifierHome, "--action", "local"], deps());
-    const added = await run(["mcp", "add", "--home", verifierHome, "--app", "mirror"], deps());
+    const added = await run(["mcp", "add", "--home", verifierHome, fixtureSourceUrl], deps());
     expect(added.exitCode, added.stderr).toBe(0);
     for (const text of ["mpas signer add", "mpas config validate", "--mode direct|relay"]) {
       const lines = linesWith(added.stdout, text);
@@ -66,7 +66,7 @@ describe("printed commands", () => {
     const init = await run(["init", "verifier", "--home", home, "--action", url, "--mode", "relay"], testDeps());
     expect(init.exitCode, init.stderr).toBe(0);
 
-    const added = await run(["mcp", "add", "--home", home, "--app", "mirror"], testDeps());
+    const added = await run(["mcp", "add", "--home", home, fixtureSourceUrl], testDeps());
     expect(added.exitCode, added.stderr).toBe(0);
     const words = shellWords(printedCommand(added.stdout, "mpas adapter start"));
     expect(words.slice(0, 13)).toEqual([

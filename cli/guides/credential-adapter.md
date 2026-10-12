@@ -5,26 +5,34 @@
 ```sh
 npm install -g @oma3/mpas-cli@alpha
 mpas init verifier --action <url> [--mode direct|relay]
-mpas mcp add --app <app>
-mpas signer add --app <app> --proposer <did>
-mpas signer add --app <app> --maintainer <did> --label <name>
-mpas config validate <app>
+mpas mcp add <url>
+mpas signer add --app <name> --proposer <did>
+mpas signer add --app <name> --maintainer <did> --label <name>
+mpas config validate <name>
 ```
 
 Use `--mode direct` when Proposers submit to this adapter at the Action URL,
 and `--mode relay` when the adapter polls a relay there. Without a mode, the
 printed instructions show both `mpas adapter start` commands. `mpas mcp add`
-downloads and verifies the application's plugin and deployment config template,
+downloads the application's plugin and deployment config template from its folder,
+checks that they agree,
 writes a draft under `~/.mpas/config/drafts/`, and prints the
 `mpas adapter start` command for this home. Follow the application's README for
 upstream setup such as `mpas credential set` or `mpas oauth login`. Signer DIDs
 can arrive in any order; add each one with `mpas signer add`. When
 `mpas config validate` passes, move the draft into `~/.mpas/config/` and start
-the adapter. Before the first `@oma3/mpas-cli` release, build the command from
-`cli` with `npm ci && npm run build && npm link`.
+the adapter. To run a version that is not published yet, build the command
+from `cli` with `npm ci && npm run build && npm link`.
 
-`mpas mcp add` needs install data that the application publishes in the
-registry. For an application without it, follow the manual setup below.
+`<url>` is the application's folder, for example
+`https://github.com/oma3dao/mpas-applications/tree/main/applications/railway`.
+Find it in the application's entry in the `mpas` repository's
+`application-registry/`, in its `source` field. The application is installed
+under the folder's name, which `--app <name>` uses afterwards; `--name`
+chooses another. Installing from a URL trusts whoever controls it, so the
+command prints the URL and the plugin's `artifactDid` first. For an
+application whose folder has no deployment config template, follow the manual
+setup below.
 
 ## Manual setup
 
