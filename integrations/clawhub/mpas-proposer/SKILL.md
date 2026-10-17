@@ -116,8 +116,10 @@ handle its `authorizationState`:
 
 Use the harness-managed `tasks/get` operation to observe the existing Task.
 The bridge doesn't watch for approvals on its own: it checks Coordination only
-when the Task is observed, at most once every few seconds, and an Action that
-nobody checks on expires. Expect a Maintainer to report an approval or
+when the Task is observed, at most once every few seconds. Your initial call
+is always submitted, but an approved Action that nobody checks on is never
+executed and expires. Likewise, if a submission fails, the bridge retries it
+only when the Task is next checked. Expect a Maintainer to report an approval or
 rejection on the channel you used to notify them. When a Maintainer reports a
 decision, observe the Task once. Don't keep checking otherwise; respect the
 Task's polling hint. While authorization is required, `coordinationCheckedAt`

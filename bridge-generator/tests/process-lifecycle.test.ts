@@ -4,6 +4,7 @@ import { copyFile, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { DatabaseSync } from "node:sqlite";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { runGenerate } from "../src/generate.js";
 
@@ -56,15 +57,7 @@ describe("generated bridge process lifecycle", () => {
     ["SIGTERM arrives", (child: ChildProcessWithoutNullStreams) => child.kill("SIGTERM")],
   ])("exits with code 0 when %s while a Coordination poll hangs", async (_name, leave) => {
     const services = await startFakeServices(maintainerDid);
-    const configPath = join(bridgeDir, `config-${Date.now()}.json`);
-    await writeFile(configPath, JSON.stringify({
-      plugin: "../plugin.json",
-      agent: { keyFile: "agent-key.json" },
-      adapter: { url: services.url },
-      coordination: { url: services.url },
-      workflow: { dbPath: `store-${Date.now()}.db`, shutdownGraceMs: SHUTDOWN_GRACE_MS },
-    }));
-    const child = spawn(process.execPath, ["dist/index.js", "--config", configPath], { cwd: bridgeDir });
+    const child = spawnBridge(await writeConfig(services.url));
     const rpc = jsonRpc(child);
     try {
       await rpc.request("initialize", {
@@ -83,15 +76,10 @@ describe("generated bridge process lifecycle", () => {
       }).catch(() => {});
       await services.pollStarted;
 
-      const exit = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
-        child.once("exit", (code, signal) => resolve({ code, signal }));
-      });
+      const exit = exitOf(child);
       const leftAt = Date.now();
       leave(child);
-      const result = await Promise.race([
-        exit,
-        new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), SHUTDOWN_GRACE_MS + 5_000)),
-      ]);
+      const result = await Promise.race([exit, timeout(SHUTDOWN_GRACE_MS + 5_000)]);
 
       expect(result).toEqual({ code: 0, signal: null });
       expect(Date.now() - leftAt).toBeLessThan(SHUTDOWN_GRACE_MS + 1_000 + 1_000);
@@ -101,11 +89,160 @@ describe("generated bridge process lifecycle", () => {
       await services.close();
     }
   }, 30_000);
+
+  it("after a crash, resumes the submission only on observation, then exits on EOF while it is in flight", async () => {
+    const services = await startFakeServices(maintainerDid, "hang");
+    // A short claim lease lets the restarted bridge take over the crashed one's
+    // workflow. The restarted bridge keeps the default 30-second submission
+    // timeout, so only noticing EOF exits it promptly.
+    const dbPath = `store-crash-${Date.now()}.db`;
+    const first = spawnBridge(await writeConfig(services.url, { dbPath, submissionTimeoutMs: 1_000, claimLeaseMs: 1_500 }));
+    const second = { child: undefined as ChildProcessWithoutNullStreams | undefined };
+    try {
+      // Crash after the workflow is durably recorded and its first submission is in flight.
+      const crashed = jsonRpc(first);
+      await crashed.request("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "crash", version: "0" } });
+      crashed.notify("notifications/initialized");
+      void crashed.request("tools/call", { name: "echo", arguments: {} }).catch(() => {});
+      await services.submissionCount(1);
+      first.kill("SIGKILL");
+      await new Promise((resolve) => first.once("exit", resolve));
+      await new Promise((resolve) => setTimeout(resolve, 1_600));
+
+      // The restarted bridge does no remote work at startup.
+      second.child = spawnBridge(await writeConfig(services.url, { dbPath }));
+      const rpc = jsonRpc(second.child);
+      await rpc.request("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "restart", version: "0" } });
+      rpc.notify("notifications/initialized");
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      expect(services.idempotencyKeys()).toHaveLength(1);
+
+      // Observing the Task resumes the submission with the same key.
+      const actionId = pendingActionId(join(bridgeDir, dbPath));
+      await rpc.request("tools/call", { name: "mpas_wait_for_action_result", arguments: { actionId, timeoutSeconds: 0 } });
+      await services.submissionCount(2);
+
+      const exit = exitOf(second.child);
+      const leftAt = Date.now();
+      second.child.stdin.end();
+      const result = await Promise.race([exit, timeout(SHUTDOWN_GRACE_MS + 5_000)]);
+
+      expect(result).toEqual({ code: 0, signal: null });
+      expect(Date.now() - leftAt).toBeLessThan(SHUTDOWN_GRACE_MS + 2_000);
+      const keys = services.idempotencyKeys();
+      expect(keys).toHaveLength(2);
+      expect(keys[1]).toBe(keys[0]);
+    } finally {
+      for (const child of [first, second.child]) {
+        if (child && child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+      }
+      await services.close();
+    }
+  }, 30_000);
+
+  it("lets a request already sent finish within the grace and persists its outcome before exiting", async () => {
+    const services = await startFakeServices(maintainerDid, "slow-executed");
+    const dbPath = `store-grace-${Date.now()}.db`;
+    const child = spawnBridge(await writeConfig(services.url, { dbPath }));
+    try {
+      const rpc = jsonRpc(child);
+      await rpc.request("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "grace", version: "0" } });
+      rpc.notify("notifications/initialized");
+      void rpc.request("tools/call", { name: "echo", arguments: {} }).catch(() => {});
+      await services.submissionCount(1);
+
+      const exit = exitOf(child);
+      child.stdin.end();
+      const result = await Promise.race([exit, timeout(SHUTDOWN_GRACE_MS + 5_000)]);
+      expect(result).toEqual({ code: 0, signal: null });
+      expect(workflowStates(join(bridgeDir, dbPath))).toEqual(["resolved"]);
+      expect(services.idempotencyKeys()).toHaveLength(1);
+    } finally {
+      if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+      await services.close();
+    }
+  }, 30_000);
+
+  it("exits with code 0 when stdout breaks (EPIPE)", async () => {
+    const services = await startFakeServices(maintainerDid);
+    const child = spawnBridge(await writeConfig(services.url));
+    try {
+      const exit = exitOf(child);
+      child.stdout.destroy();
+      child.stdin.write(`${JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "epipe", version: "0" } },
+      })}\n`);
+      const result = await Promise.race([exit, timeout(SHUTDOWN_GRACE_MS + 5_000)]);
+      expect(result).toEqual({ code: 0, signal: null });
+    } finally {
+      if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+      await services.close();
+    }
+  }, 30_000);
 });
 
-/** Verifier that requires approvals, plus a Coordination Service whose poll never answers. */
-async function startFakeServices(maintainer: string) {
+/** The Action ID of the bridge store's one unfinished workflow. */
+function pendingActionId(dbFile: string): string {
+  const db = new DatabaseSync(dbFile, { readOnly: true });
+  try {
+    // The store keys rows by Task ID in action_id; the Action ID is current_action_id.
+    const row = db.prepare("SELECT current_action_id FROM workflows WHERE state = 'created'").get() as
+      | { current_action_id: string }
+      | undefined;
+    if (!row) throw new Error("Expected one unfinished workflow.");
+    return row.current_action_id;
+  } finally {
+    db.close();
+  }
+}
+
+function workflowStates(dbFile: string): string[] {
+  const db = new DatabaseSync(dbFile, { readOnly: true });
+  try {
+    return (db.prepare("SELECT state FROM workflows").all() as { state: string }[]).map((row) => row.state);
+  } finally {
+    db.close();
+  }
+}
+
+async function writeConfig(url: string, workflow: Record<string, number | string> = {}): Promise<string> {
+  const stamp = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const configPath = join(bridgeDir, `config-${stamp}.json`);
+  await writeFile(configPath, JSON.stringify({
+    plugin: "../plugin.json",
+    agent: { keyFile: "agent-key.json" },
+    adapter: { url },
+    coordination: { url },
+    workflow: { dbPath: `store-${stamp}.db`, shutdownGraceMs: SHUTDOWN_GRACE_MS, ...workflow },
+  }));
+  return configPath;
+}
+
+function spawnBridge(configPath: string): ChildProcessWithoutNullStreams {
+  return spawn(process.execPath, ["dist/index.js", "--config", configPath], { cwd: bridgeDir });
+}
+
+function exitOf(child: ChildProcessWithoutNullStreams) {
+  return new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
+    child.once("exit", (code, signal) => resolve({ code, signal }));
+  });
+}
+
+function timeout(ms: number) {
+  return new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), ms));
+}
+
+/**
+ * Verifier that requires approvals (or, with `"hang"`, never answers), plus a
+ * Coordination Service whose poll never answers.
+ */
+async function startFakeServices(maintainer: string, verifier: "approvals" | "hang" | "slow-executed" = "approvals") {
   let polls = 0;
+  const keys: string[] = [];
+  const submissionWaiters: { count: number; resolve(): void }[] = [];
   let markPollStarted: () => void = () => {};
   const pollStarted = new Promise<void>((resolve) => {
     markPollStarted = resolve;
@@ -120,6 +257,21 @@ async function startFakeServices(maintainer: string) {
       polls += 1;
       markPollStarted();
       return; // Never answer, like the overloaded production service.
+    }
+    if (request.url === "/mpas/v1/verifier/action") {
+      keys.push(String(body.idempotencyKey));
+      for (const waiter of submissionWaiters.filter((entry) => keys.length >= entry.count)) waiter.resolve();
+      if (verifier === "hang") return;
+      if (verifier === "slow-executed") {
+        setTimeout(() => send({
+          version: "1",
+          type: "ActionResponse",
+          verifier: { did: maintainer },
+          result: "executed",
+          executionResult: { content: [{ type: "text", text: "done" }], isError: false },
+        }), 500);
+        return;
+      }
     }
     const actionPackage = body.actionPackage as {
       actionEnvelope: { actionId: unknown };
@@ -161,6 +313,11 @@ async function startFakeServices(maintainer: string) {
     url: `http://127.0.0.1:${address.port}`,
     pollStarted,
     polls: () => polls,
+    idempotencyKeys: () => [...keys],
+    submissionCount: (count: number) => new Promise<void>((resolve) => {
+      if (keys.length >= count) resolve();
+      else submissionWaiters.push({ count, resolve });
+    }),
     close: () => new Promise<void>((resolve) => {
       server.closeAllConnections();
       server.close(() => resolve());

@@ -145,11 +145,14 @@ export class CoordinationUnavailableError extends Error {
   readonly code = "COORDINATION_UNAVAILABLE";
   /** Server-requested delay from `Retry-After`, when present. */
   readonly retryAfterMs?: number;
+  /** HTTP status of the response, when one was received. */
+  readonly status?: number;
 
-  constructor(message: string, options?: ErrorOptions & { retryAfterMs?: number }) {
+  constructor(message: string, options?: ErrorOptions & { retryAfterMs?: number; status?: number }) {
     super(message, options);
     this.name = "CoordinationUnavailable";
     this.retryAfterMs = options?.retryAfterMs;
+    this.status = options?.status;
   }
 }
 
@@ -198,7 +201,7 @@ export class CoordinationServiceClient {
         },
         unavailable: ({ status, cause, retryAfterMs }) => status === undefined
           ? new CoordinationUnavailableError(`Coordination Service is unavailable at ${this.url}.`, { cause })
-          : new CoordinationUnavailableError(`Coordination Service returned HTTP ${status}.`, { retryAfterMs }),
+          : new CoordinationUnavailableError(`Coordination Service returned HTTP ${status}.`, { retryAfterMs, status }),
         rejected: (status) => new CoordinationResponseError(
           `Coordination Service rejected the request with HTTP ${status}.`,
         ),

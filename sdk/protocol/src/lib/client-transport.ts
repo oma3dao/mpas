@@ -132,7 +132,7 @@ export class MpasHttpTransport {
         const code = bodyError?.error.code ?? (response.status === 401 ? "signature_invalid" : "permission_denied");
         throw this.errors.authentication(response.status, code);
       }
-      if (response.status === 408 || response.status === 425 || response.status === 429 || response.status >= 500) {
+      if (isRetryableHttpFailure(response.status, parseMpasHttpError(text))) {
         const retryAfterMs = parseRetryAfterMs(response.headers.get("retry-after"));
         throw this.errors.unavailable({
           status: response.status,
@@ -170,6 +170,24 @@ export async function waitForPollInterval(intervalMs: number, signal?: AbortSign
       resolve();
     }, { once: true });
   });
+}
+
+/** HTTP statuses that may succeed on retry when the response doesn't say: 408, 425, 429 and 5xx. */
+export function isRetryableHttpStatus(status: number): boolean {
+  return status === 408 || status === 425 || status === 429 || status >= 500;
+}
+
+/**
+ * Whether a failed HTTP response may succeed on an identical retry. An
+ * `MpasHttpError` body's `retryable` flag decides when present (HTTP profile
+ * §4.9); otherwise the status does. Every MPAS HTTP client classifies
+ * failures with this one rule.
+ */
+export function isRetryableHttpFailure(status: number, body: unknown): boolean {
+  const declared = typeof body === "object" && body !== null && (body as { type?: unknown }).type === "MpasHttpError"
+    ? (body as { error?: { retryable?: unknown } }).error?.retryable
+    : undefined;
+  return typeof declared === "boolean" ? declared : isRetryableHttpStatus(status);
 }
 
 /**

@@ -5,6 +5,7 @@ import type {
   DeliveryEnvelope,
   MpasHttpError,
 } from "../types/mpas.js";
+import { isRetryableHttpFailure, isRetryableHttpStatus } from "./client-transport.js";
 import {
   ActionEndpointClient,
   ActionEndpointClientError,
@@ -38,13 +39,21 @@ export class AdapterResponseError extends Error {
 
 /** Raised when the adapter returns a non-2xx MpasHttpError (e.g. 400 unparseable request). */
 export class AdapterRequestError extends Error {
+  /**
+   * Whether an identical retry may succeed, by the shared MPAS HTTP rule
+   * ({@link isRetryableHttpFailure}).
+   */
+  readonly retryable: boolean;
+
   constructor(
     readonly code: string,
     message: string,
     readonly status: number,
+    retryable: boolean = isRetryableHttpStatus(status),
   ) {
     super(message);
     this.name = "AdapterRequestError";
+    this.retryable = retryable;
   }
 }
 
@@ -80,8 +89,12 @@ export class CredentialAdapterClient {
     try {
       return await this.submitActionRequest(buildActionRequest({ actionPackage: pkg }));
     } catch (error) {
+      // Keep the endpoint client's classification: a malformed success
+      // response is permanent, an HTTP failure carries its retryability, and
+      // anything else is an outage.
       if (
         error instanceof ActionEndpointClientError &&
+        error.retryable === false &&
         (error.message.includes("valid ActionResponse") || error.message.includes("valid JSON"))
       ) {
         throw new AdapterResponseError(error.message, { cause: error });
@@ -91,6 +104,7 @@ export class CredentialAdapterClient {
           error.protocolCode ?? "server_error",
           error.message,
           error.status,
+          error.retryable ?? isRetryableHttpStatus(error.status),
         );
       }
       throw new AdapterUnavailableError(`Credential Adapter is unavailable at ${this.url}.`, { cause: error });
@@ -118,10 +132,11 @@ export class CredentialAdapterClient {
 
       if (!response.ok) {
         const httpError = body as Partial<MpasHttpError>;
+        const retryable = isRetryableHttpFailure(response.status, body);
         if (httpError?.type === "MpasHttpError" && httpError.error) {
-          throw new AdapterRequestError(httpError.error.code, httpError.error.message, response.status);
+          throw new AdapterRequestError(httpError.error.code, httpError.error.message, response.status, retryable);
         }
-        throw new AdapterRequestError("server_error", `Adapter returned HTTP ${response.status}.`, response.status);
+        throw new AdapterRequestError("server_error", `Adapter returned HTTP ${response.status}.`, response.status, retryable);
       }
 
       return body as T;

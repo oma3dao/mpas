@@ -101,11 +101,14 @@ export class ActionRelayUnavailableError extends Error {
   readonly code = "ACTION_RELAY_UNAVAILABLE";
   /** Server-requested delay from `Retry-After`, when present. */
   readonly retryAfterMs?: number;
+  /** HTTP status of the response, when one was received. */
+  readonly status?: number;
 
-  constructor(message: string, options?: ErrorOptions & { retryAfterMs?: number }) {
+  constructor(message: string, options?: ErrorOptions & { retryAfterMs?: number; status?: number }) {
     super(message, options);
     this.name = "ActionRelayUnavailableError";
     this.retryAfterMs = options?.retryAfterMs;
+    this.status = options?.status;
   }
 }
 
@@ -151,7 +154,7 @@ export class ActionRelayClient {
         ),
         unavailable: ({ status, cause, retryAfterMs }) => status === undefined
           ? new ActionRelayUnavailableError(`Action Relay is unavailable at ${this.url}.`, { cause })
-          : new ActionRelayUnavailableError(`Action Relay returned HTTP ${status}.`, { retryAfterMs }),
+          : new ActionRelayUnavailableError(`Action Relay returned HTTP ${status}.`, { retryAfterMs, status }),
         rejected: (status) => new ActionRelayResponseError(
           `Action Relay rejected the request with HTTP ${status}.`,
         ),

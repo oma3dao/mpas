@@ -12,7 +12,7 @@ import {
   parseActionRequestEnvelope,
   parseActionResponse,
 } from "./routing.js";
-import { abortableRequest } from "./client-transport.js";
+import { abortableRequest, isRetryableHttpFailure, isRetryableHttpStatus } from "./client-transport.js";
 import { parseRetryAfterMs } from "./retry-backoff.js";
 import { deriveMpasAudience, signMpasRfc9421, type MpasRfc9421Signer } from "./rfc9421.js";
 
@@ -51,6 +51,8 @@ export interface ActionEndpointClientErrorOptions extends ErrorOptions {
   protocolCode?: string;
   /** Server-requested delay from `Retry-After`, when present. */
   retryAfterMs?: number;
+  /** Whether retrying the identical request may succeed. */
+  retryable?: boolean;
 }
 
 /** Error returned for Action endpoint transport, HTTP, identity, or response failures. */
@@ -59,6 +61,13 @@ export class ActionEndpointClientError extends Error {
   readonly status?: number;
   readonly protocolCode?: string;
   readonly retryAfterMs?: number;
+  /**
+   * Whether retrying the identical request may succeed: true for network
+   * failures and HTTP 408, 425, 429 and 5xx (or an `MpasHttpError` marked
+   * retryable); false for identity, validation and protocol errors and other
+   * rejections. Undefined when the client cannot tell.
+   */
+  readonly retryable?: boolean;
 
   constructor(message: string, options: ActionEndpointClientErrorOptions = {}) {
     super(message, options);
@@ -66,6 +75,7 @@ export class ActionEndpointClientError extends Error {
     this.status = options.status;
     this.protocolCode = options.protocolCode;
     this.retryAfterMs = options.retryAfterMs;
+    this.retryable = options.retryable;
   }
 }
 
@@ -142,7 +152,7 @@ export class ActionEndpointClient {
     if (this.upstreamBinding !== undefined) {
       const inner = canonical.type === "DeliveryEnvelope" ? canonical.payload : canonical;
       if (inner.upstreamBinding !== undefined && (inner.upstreamBinding.toolSurface.alg !== this.upstreamBinding.toolSurface.alg || inner.upstreamBinding.toolSurface.value !== this.upstreamBinding.toolSurface.value || inner.upstreamBinding.upstreamDigest !== this.upstreamBinding.upstreamDigest)) {
-        throw new ActionEndpointClientError("Request binding conflicts with configured upstream binding.");
+        throw new ActionEndpointClientError("Request binding conflicts with configured upstream binding.", { retryable: false });
       }
       const bound = parseActionRequest({ ...inner, upstreamBinding: this.upstreamBinding });
       canonical = canonical.type === "DeliveryEnvelope" ? { ...canonical, payload: bound } : bound;
@@ -152,6 +162,7 @@ export class ActionEndpointClient {
     if (signer && signer.did !== requiredDid) {
       throw new ActionEndpointClientError(
         `Action request identity ${requiredDid} does not match signer DID ${signer.did}.`,
+        { retryable: false },
       );
     }
 
@@ -189,7 +200,7 @@ export class ActionEndpointClient {
       } catch (error) {
         throw new ActionEndpointClientError(
           "Action endpoint response was not valid JSON.",
-          { status: response.status, cause: error },
+          { status: response.status, cause: error, retryable: response.ok ? false : isRetryableHttpStatus(response.status) },
         );
       }
       if (!response.ok) {
@@ -200,6 +211,7 @@ export class ActionEndpointClient {
           {
             status: response.status,
             protocolCode: error?.type === "MpasHttpError" ? error.error?.code : undefined,
+            retryable: isRetryableHttpFailure(response.status, parsed),
             ...(retryAfterMs !== undefined ? { retryAfterMs } : {}),
           },
         );
@@ -209,14 +221,14 @@ export class ActionEndpointClient {
       } catch (error) {
         throw new ActionEndpointClientError(
           "Action endpoint did not return a valid ActionResponse.",
-          { cause: error },
+          { cause: error, retryable: false },
         );
       }
     } catch (error) {
       if (error instanceof ActionEndpointClientError) throw error;
       throw new ActionEndpointClientError(
         `Action endpoint is unavailable at ${this.url}.`,
-        { cause: error },
+        { cause: error, retryable: true },
       );
     } finally {
       abortable.dispose();

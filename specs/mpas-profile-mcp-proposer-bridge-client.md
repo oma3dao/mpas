@@ -222,9 +222,9 @@ The bridge MUST use `readyForSubmission` in Task metadata and persisted workflow
 ## 6. Task Results
 
 A `tasks/get` response reflects the bridge's local workflow state and MUST NOT
-wait on any remote service. A `tasks/get` for a workflow awaiting approvals MAY
-start a rate-limited Coordination poll (Section 9); that poll's results are
-applied in the background and appear in later responses.
+wait on any remote service. It MAY start the Task's next step in the background
+(Section 9): a rate-limited Coordination poll while approvals are awaited,
+otherwise a due retry. Results appear in later responses.
 
 - A native upstream `CallToolResult` is returned unchanged in a completed
   Task's `result`.
@@ -270,20 +270,45 @@ Cancellation is cooperative:
 
 Cancellation of an already-terminal visible Task is an acknowledged no-op.
 
-## 9. Background Progress and Retention
+## 9. Progress and Retention
 
-Task observation and MPAS progression are independent. Until the current
-Action expires or the Task reaches a terminal state, the bridge MUST perform
-startup reconciliation, MUST submit a completed Action Package once
-Coordination reports it, and MUST retry transient adapter and Coordination
-failures with backoff.
+The bridge progresses a Task only in response to client requests. A tool call
+records the workflow and begins its initial submission. Observing a Task
+(`tasks/get` or the compatibility wait tool) may start that Task's next step.
+When an in-flight request completes, the bridge persists its result and
+performs directly dependent work: it MUST submit a completed Action Package
+once a Coordination poll reports it.
+
+A retryable failure or a Verifier `pending` MUST record a durable backoff,
+honoring `Retry-After`. The bridge MUST NOT retry before that time and retries
+only on a later observation of the Task itself. A permanent failure
+(authentication, authorization, a non-retryable rejection, a protocol or
+validation error, or a malformed success response) MUST be surfaced and MUST
+NOT be retried. A definitive Action outcome, including an executed application
+error or a rejection, MUST NOT be resubmitted. A failure that cannot be
+classified has an unknown outcome and MAY be retried. Every retry MUST reuse
+the Action's idempotency key and identical request. Only an approval newly
+collected by a Coordination poll may trigger a submission for a Task other than
+the one observed. The bridge MUST NOT run remote work on a timer. Startup
+reconciliation is local: an unfinished workflow resumes on the next
+observation of its Task. An operation for a Task MUST NOT start while another
+is in flight for it.
+
+On disconnect or shutdown the bridge MUST stop accepting requests and starting
+remote calls, including a submission a late Coordination response would
+trigger. It SHOULD let calls already sent finish within a bounded grace period
+and persist their outcomes. It MUST NOT record an interrupted call as failed or
+cancelled; its outcome is unknown, and the workflow keeps its Task ID and
+idempotency key.
 
 The bridge MUST poll Coordination only in response to a client observing a
-Task whose workflow awaits approvals. It MUST NOT poll Coordination on a timer
-or at startup. It MUST NOT have more than one Coordination poll in flight at a
-time, and it MUST rate-limit polls; a request within the limit receives the
-last known state. Task observation MUST NOT wait on Coordination. An Action
-that no client observes MAY expire without its approvals being collected.
+Task whose workflow awaits approvals. It MUST NOT poll Coordination at startup.
+It MUST NOT have more than one Coordination poll in flight at a time, and it
+MUST rate-limit polls; a request within the limit receives the last known
+state. Task observation MUST NOT wait on any remote service. An Action that no
+client observes MAY expire without its approvals being collected, and a failed
+submission that no client observes MAY expire without being retried. A Task
+read after its Action expired MUST be reported as expired.
 
 A stdio bridge MUST exit when its input stream ends or closes, including while
 requests are in flight.

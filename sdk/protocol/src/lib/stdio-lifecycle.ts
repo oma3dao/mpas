@@ -3,7 +3,7 @@ import { DEFAULT_SHUTDOWN_GRACE_MS } from "./bridge-runtime.js";
 /** Streams and process hooks used by {@link bindStdioShutdown}; injectable for tests. */
 export interface StdioShutdownHost {
   stdin: Pick<NodeJS.ReadableStream, "once" | "off">;
-  stdout: Pick<NodeJS.WritableStream, "once" | "off">;
+  stdout: Pick<NodeJS.WritableStream, "once" | "on" | "off">;
   once(signal: NodeJS.Signals, listener: () => void): unknown;
   off(signal: NodeJS.Signals, listener: () => void): unknown;
   exit(code: number): void;
@@ -15,7 +15,10 @@ export interface StdioShutdownOptions {
    * bridge down, and close the workflow store here.
    */
   shutdown: () => Promise<void>;
-  /** Exit with code 1 if `shutdown` has not finished by then. Default 6000ms. */
+  /**
+   * Exit with code 1 if `shutdown` has not finished by then. Use the
+   * configured shutdown grace plus one second. Default 6000ms.
+   */
   forceExitAfterMs?: number;
   /** Notified with the trigger, for logging. */
   onTrigger?: (reason: string) => void;
@@ -25,11 +28,17 @@ export interface StdioShutdownOptions {
 
 const SIGNALS: NodeJS.Signals[] = ["SIGTERM", "SIGINT", "SIGHUP"];
 
+function ignoreError(): void {}
+
 /**
  * Exit a stdio MCP server when its client goes away (feature reduce-polling
  * §6): stdin `end` or `close`, an stdout write error such as `EPIPE`, or
  * SIGTERM, SIGINT or SIGHUP. The process exits with code 0 once `shutdown`
  * resolves, or 1 if it rejects or exceeds `forceExitAfterMs`.
+ *
+ * Bind this, then connect the stdio transport so stdin is being read, before
+ * awaiting any network-dependent startup work: `end` is only emitted for a
+ * stream that is being consumed.
  *
  * Returns `dispose`, which removes the listeners without shutting down.
  */
@@ -54,6 +63,8 @@ export function bindStdioShutdown(options: StdioShutdownOptions): () => void {
     if (triggered) return;
     triggered = true;
     dispose();
+    // Later writes to a closed stdout keep failing; absorb them while shutting down.
+    host.stdout.on("error", ignoreError);
     options.onTrigger?.(reason);
     const force = setTimeout(() => host.exit(1), forceExitAfterMs);
     force.unref?.();
