@@ -79,7 +79,8 @@ interface WorkflowConfig {
   notificationAssignedElsewhere?: boolean;
   /**
    * Action and Coordination HTTP wait. Must stay below claimLeaseMs.
-   * Default 45000, above the reference adapter's 35-second wait for a joined dispatch.
+   * Defaults to 45000 for Action requests, above the reference adapter's
+   * 35-second wait for a joined dispatch, and 30000 for Coordination requests.
    */
   submissionTimeoutMs?: number;
   /** Worker claim lease. Must exceed submissionTimeoutMs. Default 60000. */

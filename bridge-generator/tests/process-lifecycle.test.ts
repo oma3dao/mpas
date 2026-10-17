@@ -97,7 +97,7 @@ describe("generated bridge process lifecycle", () => {
   it("after a crash, resumes the submission only on observation, then exits on EOF while it is in flight", async () => {
     const services = await startFakeServices(maintainerDid, "hang");
     // A short claim lease lets the restarted bridge take over the crashed one's
-    // workflow. The restarted bridge keeps the default 30-second submission
+    // workflow. The restarted bridge keeps the default 45-second submission
     // timeout, so only noticing EOF exits it promptly.
     const dbPath = `store-crash-${Date.now()}.db`;
     const first = spawnBridge(await writeConfig(services.url, { dbPath, submissionTimeoutMs: 1_000, claimLeaseMs: 1_500 }));
@@ -167,6 +167,32 @@ describe("generated bridge process lifecycle", () => {
     }
   }, 30_000);
 
+  it("records a submission cut off by shutdown as interrupted and keeps its Task for a restart", async () => {
+    const services = await startFakeServices(maintainerDid, "hang");
+    const dbPath = `store-abort-${Date.now()}.db`;
+    const child = spawnBridge(await writeConfig(services.url, { dbPath }));
+    try {
+      const rpc = jsonRpc(child);
+      await rpc.request("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "abort", version: "0" } });
+      rpc.notify("notifications/initialized");
+      void rpc.request("tools/call", { name: "echo", arguments: {} }).catch(() => {});
+      await services.submissionCount(1);
+
+      const exit = exitOf(child);
+      child.stdin.end();
+      const result = await Promise.race([exit, timeout(SHUTDOWN_GRACE_MS + 5_000)]);
+      expect(result).toEqual({ code: 0, signal: null });
+      // The Verifier never answered, so the outcome is unknown: the bridge aborts
+      // the request and records that, rather than leaving no trace of it.
+      expect(workflowAttempts(join(bridgeDir, dbPath))).toEqual([
+        { state: "created", outcomes: ["interrupted"] },
+      ]);
+    } finally {
+      if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+      await services.close();
+    }
+  }, 30_000);
+
   it("exits with code 0 when stdout breaks (EPIPE)", async () => {
     const services = await startFakeServices(maintainerDid);
     const child = spawnBridge(await writeConfig(services.url));
@@ -207,6 +233,24 @@ function workflowStates(dbFile: string): string[] {
   const db = new DatabaseSync(dbFile, { readOnly: true });
   try {
     return (db.prepare("SELECT state FROM workflows").all() as { state: string }[]).map((row) => row.state);
+  } finally {
+    db.close();
+  }
+}
+
+function workflowAttempts(dbFile: string): { state: string; outcomes: string[] }[] {
+  const db = new DatabaseSync(dbFile, { readOnly: true });
+  try {
+    const rows = db.prepare("SELECT state, adapter_attempts FROM workflows").all() as {
+      state: string;
+      adapter_attempts: string;
+    }[];
+    return rows.map((row) => ({
+      state: row.state,
+      outcomes: (JSON.parse(row.adapter_attempts) as { outcome?: string }[])
+        .map((attempt) => attempt.outcome)
+        .filter((outcome): outcome is string => outcome !== undefined && outcome !== "idempotencyBound"),
+    }));
   } finally {
     db.close();
   }

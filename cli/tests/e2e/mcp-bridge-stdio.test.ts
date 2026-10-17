@@ -15,7 +15,7 @@ const TASK_META = {
   "io.modelcontextprotocol/clientCapabilities": {
     extensions: {
       "io.modelcontextprotocol/tasks": {},
-      "org.oma3/mpas": { version: "2" },
+      "org.oma3/mpas": { version: "3" },
     },
   },
 };
@@ -102,7 +102,7 @@ describe("MCP 2026 stdio transport smoke test", () => {
       capabilities: {
         extensions: {
           "io.modelcontextprotocol/tasks": {},
-          "org.oma3/mpas": { version: "2", disclosure: "transparent" },
+          "org.oma3/mpas": { version: "3", disclosure: "transparent" },
         },
       },
     });
@@ -137,7 +137,7 @@ describe("MCP 2026 stdio transport smoke test", () => {
     expect(created).toMatchObject({
       resultType: "task",
       status: "working",
-      _meta: { "org.oma3/mpas": { version: "2", authorizationState: "submitted" } },
+      _meta: { "org.oma3/mpas": { version: "3", authorizationState: "submitted" } },
     });
 
     const current = await tasksClient.request("tasks/get", { taskId: created.taskId, _meta: TASK_META });
@@ -171,7 +171,7 @@ describe("MCP 2026 stdio transport smoke test", () => {
       code: -32021,
       data: {
         requiredCapabilities: {
-          extensions: { "org.oma3/mpas": { version: "2" } },
+          extensions: { "org.oma3/mpas": { version: "3" } },
         },
       },
     });

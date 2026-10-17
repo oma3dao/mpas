@@ -428,17 +428,31 @@ The bridge config lives on the agent side and tells the MCP Bridge how to connec
 | `coordination.url`       | The coordination service endpoint                                              |
 | `workflow.dbPath`        | SQLite path for the durable workflow store. Relative paths resolve against the config file's directory. Omit only for ephemeral use — without it, active Actions do not survive a bridge restart |
 | `workflow.resultRetentionSeconds` | Minimum seconds a resolved result stays retrievable (default `86400`) |
-| `workflow.pollIntervalMs` | Background workflow tick interval (default `2000`)                            |
-| `workflow.taskPollIntervalMs` | Client-facing `tasks/get` polling hint (default `5000`)                   |
+| `workflow.pollIntervalMs` | Deprecated and ignored. The bridge has no background loop                  |
+| `workflow.taskPollIntervalMs` | Client-facing `tasks/get` polling hint while approvals are awaited (default `60000`) |
+| `workflow.processingTaskPollIntervalMs` | Client-facing `tasks/get` polling hint while the bridge has work to do for the Task (default `2000`). After a failure it is never shorter than the time until the retry |
+| `workflow.coordinationRefreshMinIntervalMs` | Minimum time between Coordination Service polls started by Task checks (default `10000`, minimum `5000`) |
+| `workflow.shutdownGraceMs` | How long requests already sent may finish when the MCP client goes away, before the bridge aborts them and exits (default `5000`) |
+| `workflow.submissionTimeoutMs` | Timeout for one Action or Coordination request. Defaults to `45000` for Action requests and `30000` for Coordination requests. Must stay below `workflow.claimLeaseMs` |
+| `workflow.claimLeaseMs` | How long one bridge process holds a workflow while it submits (default `60000`) |
 
 The bridge speaks MCP `2026-07-28` and advertises
-`io.modelcontextprotocol/tasks` plus `org.oma3/mpas` through
-`server/discover`. A terminal A1 outcome available during the original
-application `tools/call` is returned as a normal MCP result. When processing
-is deferred, the call returns a flat official Task whose stable `taskId` is
-distinct from every MPAS Action ID. Clients observe deferred progress and
-retrieve the terminal native result with read-only `tasks/get`; Task polling
-does not drive the background MPAS workflow.
+`io.modelcontextprotocol/tasks` plus `org.oma3/mpas` version `"3"` through
+`server/discover`. A client that declares `org.oma3/mpas` must declare
+version `"3"`. If the Action reaches a terminal outcome within one second of
+the application `tools/call`, the call returns the normal MCP result.
+Otherwise it returns a flat official Task whose stable `taskId` is distinct
+from every MPAS Action ID. Clients follow progress and retrieve the terminal
+native result with `tasks/get`. The bridge does no work in the background:
+each Task check can poll the Coordination Service, at most every
+`workflow.coordinationRefreshMinIntervalMs`, and take the Action's next step,
+so an approved Action executes when the client next checks its Task.
+
+The bridge exits when its MCP client goes away: when stdin ends or closes,
+when writing to stdout fails, or on SIGTERM, SIGINT or SIGHUP. Requests
+already sent get `workflow.shutdownGraceMs` to finish. The bridge then aborts
+the rest and records their outcome as unknown; after a restart, it resends
+each one with the same idempotency key when its Task is next checked.
 
 `approvalStrategy` and `approvalTimeoutMs` are deprecated and ignored. There
 is no synchronous approval wait and no MPAS result tool. Hosts should honor
@@ -549,7 +563,7 @@ See [tests/README.md](tests/README.md) for the full test guide, including focuse
 
 ## Building and selecting signature suites
 
-The demo installs the published `@oma3/mpas@0.1.0-alpha.14` package from the npm
+The demo installs the published `@oma3/mpas@0.1.0-alpha.15` package from the npm
 registry. Do not point it at a local `file:` SDK path or `node_modules` symlink
 when validating a release:
 
