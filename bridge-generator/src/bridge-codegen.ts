@@ -65,8 +65,10 @@ interface WorkflowConfig {
   resultRetentionSeconds?: number;
   /** @deprecated Ignored: the bridge polls Coordination only when a client observes a Task. */
   pollIntervalMs?: number;
-  /** Client-facing tasks/get polling hint. Default 60000ms. */
+  /** Client-facing tasks/get polling hint while approvals are awaited. Default 60000ms. */
   taskPollIntervalMs?: number;
+  /** Client-facing tasks/get polling hint while the bridge itself has work to do. Default 2000ms. */
+  processingTaskPollIntervalMs?: number;
   /** Minimum time between Coordination polls. Default 10000ms; minimum 5000ms. */
   coordinationRefreshMinIntervalMs?: number;
   /** Wait for in-flight work at shutdown. Default 5000ms. */
@@ -201,6 +203,9 @@ export class GeneratedBridge {
         resultRetentionSeconds: workflow.resultRetentionSeconds ?? 86_400,
         ...(workflow.pollIntervalMs !== undefined ? { pollIntervalMs: workflow.pollIntervalMs } : {}),
         ...(workflow.taskPollIntervalMs !== undefined ? { taskPollIntervalMs: workflow.taskPollIntervalMs } : {}),
+        ...(workflow.processingTaskPollIntervalMs !== undefined
+          ? { processingTaskPollIntervalMs: workflow.processingTaskPollIntervalMs }
+          : {}),
         ...(workflow.coordinationRefreshMinIntervalMs !== undefined
           ? { coordinationRefreshMinIntervalMs: workflow.coordinationRefreshMinIntervalMs }
           : {}),

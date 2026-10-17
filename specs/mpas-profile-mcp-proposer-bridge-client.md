@@ -1,8 +1,8 @@
 # MPAS MCP Proposer Bridge Profile
 
-**Status:** Draft v0.2
+**Status:** Draft v0.3
 
-**Profile version:** `2`
+**Profile version:** `3`
 
 **MCP profile-extension identifier:** `org.oma3/mpas`
 
@@ -29,7 +29,7 @@ Verifier results, and service-to-service interfaces. This profile does not
 restate those lower-layer contracts or prescribe bridge storage and process
 topology beyond the client-visible guarantees defined here.
 
-Profile version 2 supports transparent disclosure only. It does not define
+Profile version 3 supports transparent disclosure only. It does not define
 opaque authorization metadata, approval-count progress, task subscriptions,
 or a multi-tenant bridge service.
 
@@ -104,7 +104,7 @@ negotiation. A conforming bridge advertises:
     "extensions": {
       "io.modelcontextprotocol/tasks": {},
       "org.oma3/mpas": {
-        "version": "2",
+        "version": "3",
         "disclosure": "transparent"
       }
     }
@@ -120,7 +120,7 @@ negotiation. Listing tools does not propose an MPAS Action.
 ### 3.2 Protected requests
 
 Every `tools/call`, `tasks/get`, `tasks/update`, and `tasks/cancel` request MUST
-declare MCP `2026-07-28`, the official Tasks extension, and version 2 of this
+declare MCP `2026-07-28`, the official Tasks extension, and version 3 of this
 profile extension:
 
 ```json
@@ -129,7 +129,7 @@ profile extension:
   "io.modelcontextprotocol/clientCapabilities": {
     "extensions": {
       "io.modelcontextprotocol/tasks": {},
-      "org.oma3/mpas": { "version": "2" }
+      "org.oma3/mpas": { "version": "3" }
     }
   }
 }
@@ -137,7 +137,10 @@ profile extension:
 
 These values appear in the request's `params._meta`. Missing capabilities
 return JSON-RPC `-32021` with the missing entries under
-`data.requiredCapabilities.extensions`. A missing or unsupported protocol
+`data.requiredCapabilities.extensions`. The profile version is matched
+exactly: a bridge implementing version 3 MUST reject every other declared
+version, older or newer, with `-32021`, naming version `"3"` in
+`data.requiredCapabilities.extensions["org.oma3/mpas"]`. A missing or unsupported protocol
 envelope returns `-32602`.
 
 ## 4. Tool Surface
@@ -168,7 +171,7 @@ While a Task is `working`, its top-level `_meta` MUST contain:
 
 ```typescript
 interface MpasTaskMeta {
-  version: "2";
+  version: "3";
   actionId: string;
   actionEnvelopeHash: {
     alg: "sha-256";
@@ -206,7 +209,7 @@ rewriting the stored signed package.
 `requirements` is present only for `authorization_required` when A2's
 Proposer-authored `authorizationRequirements.approvalRequirements` is present.
 These conditions normally derive from the Verifier's advisory A1 response.
-Profile version 2 MUST NOT expose collected-versus-required approval counts.
+Profile version 3 MUST NOT expose collected-versus-required approval counts.
 
 | Bridge workflow state | Task status | Authorization state |
 |---|---|---|
@@ -221,6 +224,21 @@ The bridge MUST use `readyForSubmission` in Task metadata and persisted workflow
 
 ## 6. Task Results
 
+A `tools/call` for an application tool returns promptly. The bridge durably
+records the workflow and its Task ID, begins the initial submission, and waits
+at most one second. If the Action reaches a terminal outcome in that time, the
+bridge returns the result directly, as a native `CallToolResult` or a
+`CallToolResult` with `isError: true`. Otherwise, or as soon as the Action is
+known to be deferred (the Verifier required approvals and the replacement
+Action is stored), it returns a `CreateTaskResult`. Returning the Task MUST
+NOT abort or repeat the submission in flight: it continues under the same Task
+ID and idempotency key. A bridge MUST NOT send a `CreateTaskResult` to a client
+that has not declared the Tasks extension.
+
+A Task's `statusMessage` MUST NOT imply authorization or execution merely
+because a request was sent. While the initial submission awaits the Verifier,
+the Task is `working` with authorization state `submitted`.
+
 A `tasks/get` response reflects the bridge's local workflow state and MUST NOT
 wait on any remote service. It MAY start the Task's next step in the background
 (Section 9): a rate-limited Coordination poll while approvals are awaited,
@@ -231,7 +249,7 @@ otherwise a due retry. Results appear in later responses.
 - A terminal MPAS outcome without a native application result is a completed
   Task whose `result` is a valid `CallToolResult` with `isError: true`.
 - `failed` is reserved for a stored JSON-RPC execution error.
-- `input_required` is not used by profile version 2. The proposer bridge,
+- `input_required` is not used by profile version 3. The proposer bridge,
   acting for the Proposer (a Signer), creates the initial `propose` Approval.
   If policy requires additional Approvals, the bridge collects them from
   eligible Signers acting as Maintainers through Coordination rather than
@@ -256,7 +274,7 @@ of scope.
 ## 8. Update and Cancellation
 
 For a known visible Task, `tasks/update` accepts an `inputResponses` object,
-ignores it because profile version 2 never enters `input_required`, and returns
+ignores it because profile version 3 never enters `input_required`, and returns
 `{ "resultType": "complete" }`.
 
 Cancellation is cooperative:
@@ -349,11 +367,16 @@ ttlMs     = keepUntil - createdAt
 ```
 
 `pollIntervalMs` is a client hint and is independent of the bridge's
-Coordination rate limit.
+Coordination rate limit and its retry backoff. It reflects the Task's state:
+a long interval (default 60 seconds) while approvals are awaited and a short
+one (default 2 seconds) while the bridge itself has work to do. After a failed
+remote call, it is never shorter than the time until the retry is allowed.
+Each check of a working Task can start its next step, so hosts that follow the
+hint drive retries without polling more often than useful.
 
 ## 10. Versioning and Compatibility
 
-Profile version 2 replaces the incompatible version 1 client interface as the
+Profile version 2 replaced the incompatible version 1 client interface as the
 primary interface. Version 1 did not advertise `org.oma3/mpas` and used the
 proprietary `mpas_wait_for_action_result` tool, tool-presence discovery,
 description notices, output-schema unions, and MPAS-specific result wrappers.
@@ -370,17 +393,21 @@ Profile version, or negotiated MCP protocol version. A breaking change to the
 Task metadata schema, result interpretation, discovery requirements, or
 client-visible workflow responsibilities requires a new profile version.
 
-The [reduced proposer-bridge polling](../docs/features/reduce-polling/spec.md)
-revision of Sections 5, 6 and 9 keeps profile version 2. It adds one optional
-metadata member, and a client that observes its Task as Section 6 describes
-sees the same outcomes as before.
+Profile version 3, from the
+[reduced proposer-bridge polling](../docs/features/reduce-polling/spec.md)
+feature, replaces version 2. It changes client-visible workflow
+responsibilities: the bridge progresses a Task only when a client calls a tool
+or observes the Task (Section 9), a tool call returns a Task within about one
+second (Section 6), and Task metadata gains `coordinationCheckedAt`. Version 2
+is not supported by version 3 bridges; bridges and the clients that declare
+the profile are upgraded together.
 
 ### 10.1 Temporary conventional-client compatibility annex
 
 Until maintained agent harnesses can consume the official Tasks extension, a
 bridge MAY also implement the temporary compatibility adapter defined by the
 [MCP Client Compatibility feature](../docs/features/mcp-client-compatibility/spec.md).
-This annex does not make the legacy surface part of profile version 2.
+This annex does not make the legacy surface part of profile version 3.
 
 The bridge MUST select one connection-local surface from the wire handshake:
 `server/discover` selects the Tasks profile, while conventional `initialize`

@@ -70,6 +70,10 @@ describe("generated bridge process lifecycle", () => {
         structuredContent: { actionRef: { actionId: { value: string } } };
       };
       const actionId = deferred.structuredContent.actionRef.actionId.value;
+      // The tool call returns as soon as approvals are known to be required;
+      // observe once the approval request is registered with Coordination.
+      await services.workflowCreated;
+      await new Promise((resolve) => setTimeout(resolve, 100));
       void rpc.request("tools/call", {
         name: "mpas_wait_for_action_result",
         arguments: { actionId, timeoutSeconds: 120 },
@@ -241,6 +245,10 @@ function timeout(ms: number) {
  */
 async function startFakeServices(maintainer: string, verifier: "approvals" | "hang" | "slow-executed" = "approvals") {
   let polls = 0;
+  let markWorkflowCreated: () => void = () => {};
+  const workflowCreated = new Promise<void>((resolve) => {
+    markWorkflowCreated = resolve;
+  });
   const keys: string[] = [];
   const submissionWaiters: { count: number; resolve(): void }[] = [];
   let markPollStarted: () => void = () => {};
@@ -278,6 +286,7 @@ async function startFakeServices(maintainer: string, verifier: "approvals" | "ha
       approvalBundle: { actionEnvelopeHash: unknown };
     };
     if (request.url === "/mpas/v1/coordination/workflow") {
+      markWorkflowCreated();
       send({
         version: "1",
         type: "CoordinationActionResponse",
@@ -312,6 +321,7 @@ async function startFakeServices(maintainer: string, verifier: "approvals" | "ha
   return {
     url: `http://127.0.0.1:${address.port}`,
     pollStarted,
+    workflowCreated,
     polls: () => polls,
     idempotencyKeys: () => [...keys],
     submissionCount: (count: number) => new Promise<void>((resolve) => {

@@ -16,7 +16,7 @@ const TASK_META = {
   "io.modelcontextprotocol/clientCapabilities": {
     extensions: {
       "io.modelcontextprotocol/tasks": {},
-      "org.oma3/mpas": { version: "2" },
+      "org.oma3/mpas": { version: "3" },
     },
   },
 };

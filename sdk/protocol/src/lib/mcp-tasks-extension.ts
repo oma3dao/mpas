@@ -11,7 +11,8 @@ import type { ToolCallResult } from "../types/mcp.js";
 
 export const MCP_TASKS_EXTENSION_ID = "io.modelcontextprotocol/tasks";
 export const MPAS_MCP_PROFILE_EXTENSION_ID = "org.oma3/mpas";
-export const MPAS_MCP_PROFILE_VERSION = "2";
+/** MPAS proposer-bridge profile version; matched exactly (feature reduce-polling §14). */
+export const MPAS_MCP_PROFILE_VERSION = "3";
 export const MCP_TASKS_SCHEMA_COMMIT = "2c1425d9a288b9b1f489430fe1e00bb392b47e48";
 
 export type TaskStatus = "working" | "input_required" | "completed" | "failed" | "cancelled";

@@ -1186,6 +1186,14 @@ async function shutDownProcess(bridge: ProposerBridge, services: ReturnType<type
   await done;
 }
 
+/** The Task ID of the workflow whose Action a recorded request carried. */
+function taskIdOfRequest(store: MemoryWorkflowStore, body: string): string {
+  const request = JSON.parse(body) as ActionRequest;
+  const record = store.getWorkflowByActionId(request.actionPackage.actionEnvelope.actionId.value);
+  if (!record) throw new Error("No workflow for the recorded request.");
+  return record.taskId;
+}
+
 function taskIdFor(store: MemoryWorkflowStore, pullNumber: number): string {
   const match = store.listRecoverableWorkflows()
     .find((record) => pullNumberOf(record.actionPackage as ActionPackage) === pullNumber);
@@ -1471,18 +1479,23 @@ describe("submission and recovery policy", () => {
     ["HTTP 400", new ActionEndpointClientError("Action endpoint returned HTTP 400.", { status: 400, retryable: false })],
     ["an authentication failure", new MpasAuthError(401, "signature_invalid", "unauthenticated")],
     ["an invalid response", new ActionEndpointClientError("Action endpoint did not return a valid ActionResponse.", { retryable: false })],
-  ])("stops on %s: the failure is surfaced and never retried", async (_name, error) => {
+  ])("stops on %s: the error is returned directly from tools/call and never retried", async (_name, error) => {
     const store = new MemoryWorkflowStore();
     const services = processServices({ verifier: () => error });
     const bridge = processBridge(store, services, "process-1");
     const result = await bridge.handleToolCall("merge_pull_request", TASK_A);
-    if (result.resultType !== "task") throw new Error("Expected a Task.");
-    expect(bridge.handleTasksGet(result.taskId)).toMatchObject({
-      status: "completed",
-      result: { isError: true, structuredContent: { code: "ACTION_SUBMISSION_REJECTED" } },
+    expect(result).toMatchObject({
+      resultType: "complete",
+      isError: true,
+      structuredContent: { type: "MpasTaskError", code: "ACTION_SUBMISSION_REJECTED" },
     });
+    expect(result).not.toHaveProperty("taskId");
+
+    // Even observed later, the terminal workflow is never resubmitted.
+    const taskId = taskIdOfRequest(store, services.verifierRequests[0]!.body);
+    expect(store.getWorkflow(taskId)).toMatchObject({ state: "unresolvable" });
     await vi.advanceTimersByTimeAsync(10 * 60_000);
-    bridge.handleTasksGet(result.taskId);
+    bridge.handleTasksGet(taskId);
     await vi.advanceTimersByTimeAsync(10);
     expect(services.verifierRequests).toHaveLength(1);
     await bridge.shutdown();
@@ -1664,12 +1677,11 @@ describe("one HTTP failure classification across every client", () => {
       const store = new MemoryWorkflowStore();
       const bridge = makeBridge({ endpoint: relayEndpoint(server.url), coordination: fakeCoordination(async () => emptyPoll()).service, store });
       const result = await bridge.handleToolCall("merge_pull_request", {});
-      if (result.resultType !== "task") throw new Error("Expected a Task.");
-      expect(store.getWorkflow(result.taskId)).toMatchObject({
-        state: "unresolvable",
-        resolution: { errorCode: "ACTION_SUBMISSION_REJECTED" },
+      expect(result).toMatchObject({
+        resultType: "complete",
+        isError: true,
+        structuredContent: { code: "ACTION_SUBMISSION_REJECTED" },
       });
-      bridge.handleTasksGet(result.taskId);
       await new Promise((resolve) => setTimeout(resolve, 50));
       expect(requests).toBe(1);
       await bridge.shutdown();
@@ -1708,10 +1720,12 @@ describe("one HTTP failure classification across every client", () => {
       const bridge = makeBridge({ endpoint, coordination, store });
       const result = await bridge.handleToolCall("merge_pull_request", {});
       if (result.resultType !== "task") throw new Error("Expected a Task.");
-      expect(store.getWorkflow(result.taskId)).toMatchObject({
+      // The Task returns once approvals are known to be required; creation
+      // continues in the background.
+      await vi.waitFor(() => expect(store.getWorkflow(result.taskId)).toMatchObject({
         state: "unresolvable",
         resolution: { errorCode: "COORDINATION_REQUEST_REJECTED" },
-      });
+      }));
       await bridge.shutdown();
     } finally {
       await server.close();
@@ -1843,5 +1857,264 @@ describe("responses during the shutdown grace period", () => {
     expect(attemptsOf(store, taskA).at(-1)).toMatchObject({ outcome: "interrupted" });
     expect(attemptsOf(store, taskA).at(-1)!.notBefore).toBeUndefined();
     expect(attemptsOf(store, taskB).at(-1)).toMatchObject({ outcome: "unreachable", retryAfterMs: 60_000 });
+  });
+});
+
+describe("prompt Task return (profile 3)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(START);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** An endpoint answering each request after `delayMs`, or never. */
+  function delayedEndpoint(answer: () => ActionResponse | Error, delayMs: number | "never") {
+    const requests: number[] = [];
+    const endpoint: WorkflowActionEndpoint = {
+      submitActionRequest() {
+        requests.push(Date.now());
+        if (delayMs === "never") return new Promise(() => {});
+        return new Promise((resolve, reject) => setTimeout(() => {
+          const value = answer();
+          if (value instanceof Error) reject(value);
+          else resolve(value);
+        }, delayMs));
+      },
+    };
+    return { endpoint, requests };
+  }
+
+  async function settleTime<T>(promise: Promise<T>, stepMs = 50, limitMs = 5_000): Promise<{ value: T; afterMs: number }> {
+    let value: T | undefined;
+    let done = false;
+    void promise.then((result) => {
+      value = result;
+      done = true;
+    });
+    const started = Date.now();
+    while (!done && Date.now() - started < limitMs) {
+      await vi.advanceTimersByTimeAsync(stepMs);
+    }
+    if (!done) throw new Error("did not settle");
+    return { value: value as T, afterMs: Date.now() - started };
+  }
+
+  it("returns the native result directly when the Action settles within the budget, to both kinds of client", async () => {
+    const native = { content: [{ type: "text", text: "merged" }], isError: false };
+    for (const conventional of [false, true]) {
+      const { endpoint } = delayedEndpoint(() => response("executed", { executionResult: native }), 300);
+      const bridge = makeBridge({ endpoint, coordination: fakeCoordination(async () => emptyPoll()).service });
+      const call = conventional
+        ? bridge.handleCompatibilityToolCall("merge_pull_request", {})
+        : bridge.handleToolCall("merge_pull_request", {});
+      const { value, afterMs } = await settleTime(call as Promise<unknown>);
+      expect(afterMs).toBeLessThanOrEqual(350);
+      expect(value).toMatchObject(conventional ? native : { ...native, resultType: "complete" });
+      await bridge.shutdown();
+    }
+  });
+
+  it("returns a working Task at one second while the submission continues, without a second submission", async () => {
+    const native = { content: [{ type: "text", text: "merged" }], isError: false };
+    const { endpoint, requests } = delayedEndpoint(() => response("executed", { executionResult: native }), 5_000);
+    const store = new MemoryWorkflowStore();
+    const bridge = makeBridge({ endpoint, coordination: fakeCoordination(async () => emptyPoll()).service, store });
+
+    const { value, afterMs } = await settleTime(bridge.handleToolCall("merge_pull_request", {}));
+    expect(afterMs).toBeGreaterThanOrEqual(1_000);
+    expect(afterMs).toBeLessThanOrEqual(1_050);
+    if (value.resultType !== "task") throw new Error("Expected a Task.");
+    expect(store.getWorkflow(value.taskId)).toBeDefined();
+    expect(value).toMatchObject({
+      resultType: "task",
+      status: "working",
+      statusMessage: "Awaiting the Verifier response.",
+      pollIntervalMs: 2_000,
+      _meta: { "org.oma3/mpas": { version: "3", authorizationState: "submitted", disclosure: "transparent" } },
+    });
+
+    for (let step = 0; step < 30; step += 1) {
+      expect(bridge.handleTasksGet(value.taskId)).toMatchObject({ status: "working" });
+      await vi.advanceTimersByTimeAsync(100);
+    }
+    expect(requests).toHaveLength(1);
+
+    await vi.advanceTimersByTimeAsync(1_100);
+    expect(bridge.handleTasksGet(value.taskId)).toMatchObject({ status: "completed", result: native });
+    await vi.advanceTimersByTimeAsync(10);
+    expect(requests).toHaveLength(1);
+    await bridge.shutdown();
+  });
+
+  it("returns as soon as approvals are known to be required, before a slow Coordination creation finishes", async () => {
+    const { endpoint } = delayedEndpoint(() => APPROVALS_REQUIRED, 100);
+    const coordination = fakeCoordination(async () => emptyPoll(), () => new Promise(() => {}));
+    const bridge = makeBridge({ endpoint, coordination: coordination.service });
+
+    const { value, afterMs } = await settleTime(bridge.handleToolCall("merge_pull_request", {}), 10);
+    expect(afterMs).toBeLessThan(200);
+    expect(value).toMatchObject({
+      resultType: "task",
+      statusMessage: "Registering the approval request with the Coordination Service.",
+      pollIntervalMs: 2_000,
+      _meta: { "org.oma3/mpas": { version: "3", authorizationState: "authorization_required", requirements: REQUIREMENTS } },
+    });
+    expect(coordination.creates).toHaveLength(1);
+    const stopped = bridge.shutdown(0);
+    await vi.advanceTimersByTimeAsync(SHUTDOWN_SETTLE_MS + 1);
+    await stopped;
+  });
+
+  it("gives a conventional client the deferred handle, never a CreateTaskResult", async () => {
+    const { endpoint } = delayedEndpoint(() => EXECUTED, "never");
+    const bridge = makeBridge({ endpoint, coordination: fakeCoordination(async () => emptyPoll()).service });
+    const { value } = await settleTime(bridge.handleCompatibilityToolCall("merge_pull_request", {}));
+    expect(value).not.toHaveProperty("resultType");
+    expect(value.structuredContent).toMatchObject({ type: "MpasBridgeDeferredResult" });
+    const stopped = bridge.shutdown(0);
+    await vi.advanceTimersByTimeAsync(SHUTDOWN_SETTLE_MS + 1);
+    await stopped;
+  });
+
+  it("returns at once after a transient failure, with a hint aligned to the Retry-After delay", async () => {
+    const failure = new ActionEndpointClientError("Action endpoint returned HTTP 503.", { status: 503, retryable: true, retryAfterMs: 30_000 });
+    const { endpoint } = delayedEndpoint(() => failure, 0);
+    const bridge = makeBridge({ endpoint, coordination: fakeCoordination(async () => emptyPoll()).service });
+    const { value, afterMs } = await settleTime(bridge.handleToolCall("merge_pull_request", {}), 10);
+    expect(afterMs).toBeLessThan(100);
+    expect(value).toMatchObject({
+      resultType: "task",
+      statusMessage: expect.stringContaining("could not be reached"),
+      pollIntervalMs: 30_000,
+    });
+    await vi.advanceTimersByTimeAsync(10_000);
+    if (value.resultType !== "task") throw new Error("Expected a Task.");
+    // About 20 seconds of the 30-second delay remain.
+    const remaining = bridge.handleTasksGet(value.taskId).pollIntervalMs!;
+    expect(remaining).toBeGreaterThan(19_900);
+    expect(remaining).toBeLessThanOrEqual(20_000);
+    await bridge.shutdown();
+  });
+
+  it("tracks a submission that outlives its tool call during shutdown", async () => {
+    const lifetime = new AbortController();
+    const requests: number[] = [];
+    const endpoint: WorkflowActionEndpoint = {
+      submitActionRequest() {
+        requests.push(Date.now());
+        return new Promise((_resolve, reject) => {
+          lifetime.signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+        });
+      },
+    };
+    const store = new MemoryWorkflowStore();
+    const bridge = makeBridge({ endpoint, coordination: fakeCoordination(async () => emptyPoll()).service, store });
+    const { value } = await settleTime(bridge.handleToolCall("merge_pull_request", {}));
+    if (value.resultType !== "task") throw new Error("Expected a Task.");
+
+    let finished = false;
+    void bridge.shutdown(2_000, { abortInFlight: () => lifetime.abort() }).then(() => {
+      finished = true;
+    });
+    await vi.advanceTimersByTimeAsync(1_500);
+    expect(finished).toBe(false);
+    await vi.advanceTimersByTimeAsync(600);
+    expect(finished).toBe(true);
+    expect(attemptsOf(store, value.taskId).at(-1)).toMatchObject({ outcome: "interrupted" });
+    expect(requests).toHaveLength(1);
+  });
+
+  it.each([
+    [
+      "an immediate HTTP 400",
+      () => new ActionEndpointClientError("Action endpoint returned HTTP 400.", { status: 400, retryable: false }),
+      0,
+      "ACTION_SUBMISSION_REJECTED",
+    ],
+    [
+      "an HTTP 400 within the budget",
+      () => new ActionEndpointClientError("Action endpoint returned HTTP 400.", { status: 400, retryable: false }),
+      300,
+      "ACTION_SUBMISSION_REJECTED",
+    ],
+    [
+      "an invalid Verifier response",
+      () => response("additionalApprovalsRequired"),
+      0,
+      "INVALID_VERIFIER_RESPONSE",
+    ],
+  ])("returns the completed error directly for %s", async (_name, answer, delayMs, code) => {
+    const { endpoint, requests } = delayedEndpoint(answer, delayMs);
+    const store = new MemoryWorkflowStore();
+    const bridge = makeBridge({ endpoint, coordination: fakeCoordination(async () => emptyPoll()).service, store });
+    const { value, afterMs } = await settleTime(bridge.handleToolCall("merge_pull_request", {}), 10);
+    expect(afterMs).toBeLessThanOrEqual(delayMs + 20);
+    expect(value).toMatchObject({
+      resultType: "complete",
+      isError: true,
+      structuredContent: { version: "1", type: "MpasTaskError", code },
+    });
+    expect(value).not.toHaveProperty("taskId");
+    expect(requests).toHaveLength(1);
+    await bridge.shutdown();
+  });
+
+  it("returns a Task when the error arrives after the budget, and the Task then completes with it", async () => {
+    const { endpoint } = delayedEndpoint(
+      () => new ActionEndpointClientError("Action endpoint returned HTTP 400.", { status: 400, retryable: false }),
+      1_500,
+    );
+    const bridge = makeBridge({ endpoint, coordination: fakeCoordination(async () => emptyPoll()).service });
+    const { value } = await settleTime(bridge.handleToolCall("merge_pull_request", {}));
+    if (value.resultType !== "task") throw new Error("Expected a Task.");
+    await vi.advanceTimersByTimeAsync(600);
+    expect(bridge.handleTasksGet(value.taskId)).toMatchObject({
+      status: "completed",
+      result: { isError: true, structuredContent: { code: "ACTION_SUBMISSION_REJECTED" } },
+    });
+    await bridge.shutdown();
+  });
+
+  it("gives a conventional client the completed error directly too", async () => {
+    const { endpoint } = delayedEndpoint(
+      () => new ActionEndpointClientError("Action endpoint returned HTTP 400.", { status: 400, retryable: false }),
+      0,
+    );
+    const bridge = makeBridge({ endpoint, coordination: fakeCoordination(async () => emptyPoll()).service });
+    const { value } = await settleTime(bridge.handleCompatibilityToolCall("merge_pull_request", {}), 10);
+    expect(value).toMatchObject({
+      isError: true,
+      structuredContent: { type: "MpasBridgeError", code: "ACTION_SUBMISSION_REJECTED", retryable: false },
+    });
+    await bridge.shutdown();
+  });
+
+  it("honors configured hint overrides", async () => {
+    const { endpoint } = delayedEndpoint(() => APPROVALS_REQUIRED, 0);
+    const bridge = new ProposerBridge({
+      tools: TOOLS,
+      buildActionPackage: async (_name, args) => buildPackage(args, new Date(Date.now() + 30 * 60_000).toISOString()),
+      buildCoordinationReplacement: async (priorPackage, verifierRequirements) => {
+        const actionPackage = buildPackage({}, priorPackage.actionEnvelope.expiresAt);
+        return {
+          actionPackage,
+          authorizationRequirements: { ...structuredClone(verifierRequirements), actionEnvelopeHash: actionPackage.approvalBundle.actionEnvelopeHash },
+        };
+      },
+      store: new MemoryWorkflowStore(),
+      actionEndpoint: endpoint,
+      coordinationService: fakeCoordination(async () => emptyPoll()).service,
+      proposerDid: PROPOSER_DID,
+      resultRetentionSeconds: 86_400,
+      taskPollIntervalMs: 90_000,
+      processingTaskPollIntervalMs: 3_000,
+    });
+    const { value } = await settleTime(bridge.handleToolCall("merge_pull_request", {}), 10);
+    if (value.resultType !== "task") throw new Error("Expected a Task.");
+    await vi.advanceTimersByTimeAsync(10);
+    expect(bridge.handleTasksGet(value.taskId)).toMatchObject({ pollIntervalMs: 90_000, statusMessage: "Awaiting MPAS authorization." });
+    await bridge.shutdown();
   });
 });

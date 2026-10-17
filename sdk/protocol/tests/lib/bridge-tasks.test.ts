@@ -31,10 +31,12 @@ describe("official MCP Task result builders", () => {
       taskId: TASK_ID,
       status: "working",
       ttlMs: 1_800_000,
-      pollIntervalMs: 2_500,
+      // The bridge itself still has work to do: the processing hint applies.
+      pollIntervalMs: 2_000,
+      statusMessage: "Awaiting the Verifier response.",
       _meta: {
         "org.oma3/mpas": {
-          version: "2",
+          version: "3",
           actionId: ACTION_ID,
           actionEnvelopeHash: { alg: "sha-256", value: "signed-envelope-digest" },
           authorizationState: "submitted",
@@ -44,6 +46,46 @@ describe("official MCP Task result builders", () => {
     });
     expect(record.actionEnvelopeHash).toBe(storedDigest);
     expect(typeof record.actionEnvelopeHash).toBe("string");
+  });
+
+  /** A workflow in a state that reports authorization_required, with its requirements. */
+  function authorizing(state: "awaitingApprovals" | "submittingToCoordination"): WorkflowRecord {
+    return workflow({
+      state,
+      authorizationRequirements: {
+        version: "1",
+        type: "AuthorizationRequirements",
+        approvalRequirements: { anyOf: [{ type: "threshold" as const, threshold: 1, eligibleSigners: [PROPOSER_DID] }] },
+      },
+    });
+  }
+
+  it("hints by state: approvals, processing, and never before the next permitted retry", () => {
+    const config = { resultRetentionSeconds: 86_400, taskPollIntervalMs: 45_000, processingPollIntervalMs: 1_500 };
+    expect(buildCreateTaskResult(authorizing("awaitingApprovals"), config).pollIntervalMs).toBe(45_000);
+    expect(buildCreateTaskResult(workflow({ state: "created" }), config).pollIntervalMs).toBe(1_500);
+    expect(buildCreateTaskResult(authorizing("submittingToCoordination"), config).pollIntervalMs).toBe(1_500);
+    expect(buildCreateTaskResult(workflow({ state: "awaitingVerifierResult" }), config).pollIntervalMs).toBe(1_500);
+    expect(buildCreateTaskResult(workflow({ state: "created" }), { ...config, retryNotBefore: 31_000, now: 1_000 })
+      .pollIntervalMs).toBe(30_000);
+    expect(buildCreateTaskResult(workflow({ state: "created" }), { ...config, retryNotBefore: 1_200, now: 1_000 })
+      .pollIntervalMs).toBe(1_500);
+    expect(buildCreateTaskResult(workflow({ state: "created" }), { resultRetentionSeconds: 86_400 }).pollIntervalMs)
+      .toBe(2_000);
+    expect(buildCreateTaskResult(authorizing("awaitingApprovals"), { resultRetentionSeconds: 86_400 }).pollIntervalMs)
+      .toBe(60_000);
+  });
+
+  it("says when a step failed and will be retried, without implying authorization or execution", () => {
+    const retrying = { ...CONFIG, retrying: true };
+    expect(buildCreateTaskResult(workflow({ state: "created" }), retrying).statusMessage)
+      .toMatch(/could not be reached.*resends the same request/);
+    expect(buildCreateTaskResult(authorizing("submittingToCoordination"), CONFIG).statusMessage)
+      .toBe("Registering the approval request with the Coordination Service.");
+    expect(buildCreateTaskResult(authorizing("submittingToCoordination"), retrying).statusMessage)
+      .toMatch(/Maintainers cannot see it/);
+    expect(buildCreateTaskResult(workflow({ state: "readyForSubmission" }), retrying).statusMessage)
+      .toMatch(/approvals collected, but the Verifier could not be reached/);
   });
 
   it("includes transparent approval requirements without approval counts", () => {

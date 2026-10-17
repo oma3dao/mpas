@@ -1,9 +1,10 @@
 import { parseApprovalRequirements } from "./approval-requirements-schema.js";
 import type { ActionPackage, ApprovalRequirements, HashObject } from "../types/mpas.js";
+import { MPAS_MCP_PROFILE_VERSION } from "./mcp-tasks-extension.js";
 import type { WorkflowRecord } from "./workflow-store.js";
 
 export interface MpasTaskMeta {
-  version: "2";
+  version: typeof MPAS_MCP_PROFILE_VERSION;
   actionId: string;
   actionEnvelopeHash: HashObject;
   authorizationState: "submitted" | "authorization_required" | "pending" | "approvals_collected";
@@ -36,7 +37,7 @@ export function buildMpasTaskMeta(record: WorkflowRecord, options: MpasTaskMetaO
   const authorizationState = authorizationStateOf(record);
   const requirements = authorizationState === "authorization_required" ? approvalRequirementsOf(record) : undefined;
   return {
-    version: "2",
+    version: MPAS_MCP_PROFILE_VERSION,
     actionId: record.actionId,
     actionEnvelopeHash: structuredClone(actionEnvelopeHash),
     authorizationState,

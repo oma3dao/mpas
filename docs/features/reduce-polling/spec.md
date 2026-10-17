@@ -149,10 +149,14 @@ capacity.
    so duplicate processes don't multiply load and coordinating between them
    is unnecessary. Existing submission claim leases still prevent double
    submission.
-10. **Agents check when told.** Proposer agents are instructed to expect the
-    maintainer to report an approval or rejection out of band, and to check
-    the Task once when told (§8.3). The Task's polling hint becomes a slow
-    fallback: 60 seconds.
+10. **Hosts and agents may check either way.** Hosts that check Tasks
+    automatically follow a state-based polling hint; agents that check only
+    when prompted, for example when a Maintainer reports a decision, check
+    once (§8.3, §14.4). (Revised: an earlier draft told agents to rely on
+    Maintainers' reports.)
+11. **Profile version 3, and prompt Tasks.** These client-visible changes are
+    a new profile version, and a tool call returns a Task within about one
+    second (§14).
 
 ---
 
@@ -507,7 +511,8 @@ first, so stdin is read and its end detected from the start.
 | `pollIntervalMs` | **Deprecated.** Ignored apart from a one-time warning, because there is no timer to configure. |
 | `coordinationRefreshMinIntervalMs` | **New.** Default 10,000 ms; minimum 5,000 ms. |
 | `shutdownGraceMs` | **New.** Default 5,000 ms. |
-| `taskPollIntervalMs` | **Default changes** from 5,000 ms to 60,000 ms. Still only a client hint. |
+| `taskPollIntervalMs` | **Meaning narrows** to the hint while approvals are awaited (and for finished Tasks). **Default changes** from 5,000 ms to 60,000 ms. Still only a client hint. |
+| `processingTaskPollIntervalMs` | **New.** Hint while the bridge itself has work to do. Default 2,000 ms. After a failure the hint is never shorter than the time until the retry is allowed (§14.3). |
 
 Generated bridge configs accept the new options under `workflow`, alongside
 the existing `workflow.pollIntervalMs`.
@@ -590,17 +595,7 @@ ClawHub copy, `integrations/clawhub/mpas-proposer/SKILL.md`) currently tells
 agents to treat `tasks/get` as read-only and says "the bridge continues
 coordination and resubmission independently."
 
-Both copies change to say:
-
-- After notifying the Maintainers, expect a Maintainer to report back on the
-  same channel when they approve or reject.
-- When a Maintainer reports a decision, check the Task once, through
-  `tasks/get` or `mpas_wait_for_action_result`.
-- Don't keep checking otherwise. The bridge doesn't watch for approvals on
-  its own, so an approved Action nobody checks on is never executed and
-  expires.
-- `coordinationCheckedAt` shows when the state was last checked. If it is
-  older than the Maintainer's report, check again after a few seconds.
+Both copies change to the guidance in §14.4.
 
 ---
 
@@ -729,20 +724,22 @@ Profile and docs:
 
 ## 12. Rollout
 
-1. Feature change: SDK §4–§7, the `bridge-generator` template, the profile
-   revision (§8.1, §8.2) and the proposer skill (§8.3).
+1. Feature change: SDK §4–§7 and §14, the `bridge-generator` template, the
+   profile revision (§8.1, §8.2, §14.1) and the proposer skill (§14.4).
 2. Release change, following the existing release process: publish
    `@oma3/mpas` 0.1.0-alpha.15 and adopt it across the repository. The CLI
    depends on the published SDK, so this change also gives
    `cli/src/bridge/github-bridge.ts` the same entry-point and configuration
    changes as the generator template, updates the bridge configuration table
-   in `cli/README.md`, and moves the generator's pinned SDK version to
-   alpha.15.
+   in `cli/README.md`, moves the generator's pinned SDK version to
+   alpha.15, and moves the CLI's end-to-end tests to profile version 3.
 3. Bridges in `mpas-applications` regenerated or bumped to the new SDK.
 4. Running hosts restarted so each holds a single, current set of bridges.
 
-Mixed versions are safe. An old bridge still polls on its timer, and a new
-one simply stops doing so. No protocol or server change is required.
+Profile version 3 is a coordinated upgrade: bridges and the clients that
+declare `org.oma3/mpas` move together, because a version 3 bridge rejects
+version 2. Clients that use the conventional compatibility surface are
+unaffected. No Coordination Service or Verifier change is required.
 
 Behavior change for users: an approved Action now executes only when the
 proposer's client checks on it. Release notes should say so.
@@ -752,9 +749,126 @@ proposer's client checks on it. Release notes should say so.
 ## 13. Decisions from Review
 
 1. **Rate limit:** 10 seconds (`coordinationRefreshMinIntervalMs`).
-2. **Task hint:** 60 seconds (`taskPollIntervalMs`). Agents are expected to
-   learn about decisions from Maintainers, so the hint is only a fallback.
+2. **Task hints:** 60 seconds while approvals are awaited
+   (`taskPollIntervalMs`), 2 seconds while the bridge has work to do
+   (`processingTaskPollIntervalMs`), never shorter than a pending retry's
+   delay.
 3. **Limit responses:** no special handling. A 429 backs off like any other
    retryable error, and `coordinationCheckedAt` already shows that the state
    is stale.
 4. **Package structure:** unchanged for now (§10).
+5. **Fast path:** keep returning the native `CallToolResult` when an Action
+   settles within the budget. The Tasks extension lets the server choose
+   between a direct result and a `CreateTaskResult` (§14.2).
+6. **Profile version:** `"3"`, matched exactly.
+
+---
+
+## 14. Profile Version 3 and Prompt Task Return
+
+### 14.1 Profile Version 3
+
+The bridge advertises and requires `org.oma3/mpas` version `"3"`, matched
+exactly. Any other declared version, older or newer (`"2"`, `"2.2"`,
+`"3.0"`), is rejected with JSON-RPC `-32021`; `data.requiredCapabilities`
+names version `"3"`, and the message says which version was declared and
+which is supported. Task metadata carries `version: "3"`. This is the MPAS
+proposer-bridge profile version, not the MCP protocol version or the SDK
+version. The conventional-client compatibility surface keeps its own version
+and is unaffected.
+
+Version 3 is a new major version because it changes client-visible workflow
+responsibilities (§3, decision 5) and Task results (§14.2). Version 2 is not
+preserved; existing version 2 deployments stay on version 2 until bridges and
+clients upgrade together.
+
+### 14.2 Prompt Task Return
+
+A `tools/call` for an application tool:
+
+1. Durably records the workflow, with its server-generated Task ID, before it
+   can return a Task handle.
+2. Begins the initial submission and waits at most one second
+   (`TOOL_CALL_FAST_PATH_MS`), starting once the workflow is recorded.
+3. Returns, for a Tasks client, the native `CallToolResult` (or an error
+   `CallToolResult`) if the Action reaches a terminal outcome in that time.
+   A conventional client receives its normal completed result.
+4. Otherwise returns a `CreateTaskResult` for a Tasks client, or the existing
+   deferred handle for a conventional client. It returns early when the
+   Action is known to be deferred: once the Verifier has required approvals
+   and the replacement Action is stored, it doesn't wait for the Coordination
+   workflow to be created. A transient failure also returns at once.
+
+The Tasks extension allows either result: the server alone decides whether to
+return a `CreateTaskResult`, and a client that declared the extension handles
+either. A `CreateTaskResult` is never sent to a client that hasn't declared
+it.
+
+Returning the Task neither aborts nor repeats the submission in flight. It
+continues in the background, under the same Task ID and idempotency key, and
+shutdown tracks it. If it later fails, the recovery matrix (§5.6) applies. A
+Task check during the submission joins the Task's lane, and the eligibility
+check inside the lane prevents a second submission (§5.3).
+
+While the initial submission awaits the Verifier, the Task is `working`, with
+status message "Awaiting the Verifier response.", authorization state
+`submitted`, a 2-second polling hint, and metadata `version: "3"`, plus the
+usual timestamps, TTL, Action identity, hash, disclosure and expiry.
+
+### 14.3 Polling Hints and Status Messages
+
+| Task state | `pollIntervalMs` | Status message |
+|---|---|---|
+| `created` | 2 s | "Awaiting the Verifier response." |
+| `created`, last call failed | max(2 s, time until retry) | "The Verifier could not be reached. The bridge resends the same request when this Task is next checked." |
+| `submittingToCoordination` | 2 s | "Registering the approval request with the Coordination Service." |
+| `submittingToCoordination`, last call failed | max(2 s, time until retry) | "The approval request is not yet registered with the Coordination Service, so Maintainers cannot see it. The bridge retries when this Task is next checked." |
+| `awaitingApprovals` | 60 s | "Awaiting MPAS authorization." |
+| `readyForSubmission`, `submittingToVerifier` | 2 s, or max(2 s, time until retry) after a failure | "MPAS approvals collected; submitting for execution.", or a retry message after a failure |
+| `awaitingVerifierResult` | max(2 s, time until re-check) | "Awaiting the MPAS Verifier result." |
+
+The two base values are `processingTaskPollIntervalMs` and
+`taskPollIntervalMs`. Hints are client hints only, separate from the bridge's
+retry schedule and the Coordination rate limit. But because each check of a
+working Task can start its next step, a host that follows the hint drives
+retries at the right time. Status messages never imply authorization or
+execution merely because a request was sent.
+
+### 14.4 Host and Agent Guidance
+
+The proposer skill names the components and their relationships: the MCP
+host, the proposer agent, the bridge, the Coordination Service, and the
+Verifier or credential adapter. The host's Task checks and the bridge's
+Coordination polls are separate relationships. The guidance:
+
+- supports hosts that check Tasks automatically, following the hint, and
+  agents that check only when prompted;
+- requires neither continuous polling nor waiting for a Maintainer's
+  out-of-band report;
+- explains that host-managed checks needn't be duplicated by the agent's own
+  tool calls;
+- tells an agent whose Maintainer can't see the request to check the Task,
+  whose status message says whether registration is still pending, and never
+  to call the tool again;
+- documents the compatibility wait tool separately.
+
+### 14.5 Acceptance Criteria
+
+- [ ] Profile `"3"` is accepted; `"2"`, `"2.2"`, `"3.0"` and a numeric `3`
+      are rejected with `-32021` naming `"3"`; `server/discover` advertises
+      `"3"`; Task metadata carries `"3"`.
+- [ ] An Action that settles within one second returns the native result to a
+      Tasks client and to a conventional client.
+- [ ] An Action that ends without a native result within one second (a
+      permanent failure such as HTTP 400, or an invalid Verifier response)
+      returns the completed error `CallToolResult` directly, not a Task; one
+      that ends after the budget completes its Task with the same error.
+- [ ] A slow initial submission returns a `CreateTaskResult` at one second
+      with the §14.2 fields; the submission continues and resolves the Task;
+      repeated Task checks during it cause no second submission.
+- [ ] When approvals are required and Coordination creation is slow, the Task
+      returns before creation completes, with authorization state
+      `authorization_required` and the registering status message.
+- [ ] Shutdown tracks a submission that outlives the tool call.
+- [ ] Hints and status messages follow §14.3, including the retry-aligned
+      hint and configuration overrides.

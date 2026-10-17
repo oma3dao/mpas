@@ -121,6 +121,16 @@ export const DEFAULT_SUBMISSION_TIMEOUT_MS = 30_000;
 /** Default worker claim lease. Must exceed {@link DEFAULT_SUBMISSION_TIMEOUT_MS}. */
 export const DEFAULT_CLAIM_LEASE_MS = 60_000;
 
+export interface ProposeOptions {
+  /**
+   * Called as soon as the Action is known to be deferred, before any further
+   * remote call: the Verifier required approvals, the replacement Action is
+   * persisted, and Coordination creation is about to start. Lets a caller
+   * return a Task without waiting for that creation.
+   */
+  onDeferred?: () => void;
+}
+
 export type ProposeResult =
   | { kind: "settled"; record: WorkflowRecord; actionResponse: ActionResponse }
   | { kind: "deferred"; record: WorkflowRecord };
@@ -241,7 +251,7 @@ export class BridgeWorkflowEngine {
    * workflow before the first adapter submission (§9.2 commit point 1), so a
    * deferred result can be returned even when the adapter is unreachable.
    */
-  async propose(input: CreateWorkflowInput): Promise<ProposeResult> {
+  async propose(input: CreateWorkflowInput, options: ProposeOptions = {}): Promise<ProposeResult> {
     if (proposerDidOfPackage(input.actionPackage) !== this.proposerDid) {
       throw new Error("Action Package proposer DID does not match this bridge identity.");
     }
@@ -261,7 +271,7 @@ export class BridgeWorkflowEngine {
       if (!this.store.claimWorkflow(current.taskId, this.workerId, this.claimLeaseMs)) {
         return { kind: "deferred", record: this.mustGet(current.taskId) } as const;
       }
-      return this.submitInitial(this.mustGet(current.taskId));
+      return this.submitInitial(this.mustGet(current.taskId), options.onDeferred);
     });
     return result;
   }
@@ -285,6 +295,12 @@ export class BridgeWorkflowEngine {
    */
   markInFlightAborted(): void {
     this.inFlightAborted = true;
+  }
+
+  /** Whether this workflow's last remote call failed or was interrupted and awaits a retry. */
+  awaitingRetry(record: WorkflowRecord): boolean {
+    const outcome = lastAttempt(record)?.outcome;
+    return outcome === "unreachable" || outcome === "interrupted";
   }
 
   /**
@@ -501,7 +517,7 @@ export class BridgeWorkflowEngine {
     }
   }
 
-  private async submitInitial(record: WorkflowRecord): Promise<ProposeResult> {
+  private async submitInitial(record: WorkflowRecord, onDeferred?: () => void): Promise<ProposeResult> {
     const current = this.store.getWorkflow(record.taskId);
     if (!current || proposerDidOf(current) !== this.proposerDid || isTerminal(current) || current.state !== "created") {
       return this.resultFromRecord(current ?? record);
@@ -530,7 +546,7 @@ export class BridgeWorkflowEngine {
       case "additionalApprovalsRequired": {
         this.recordAttempt(record.taskId, "initial", "responded");
         this.store.saveLastActionResponse(record.taskId, response);
-        return this.replaceAndSubmitToCoordination(this.mustGet(record.taskId), "created", response);
+        return this.replaceAndSubmitToCoordination(this.mustGet(record.taskId), "created", response, onDeferred);
       }
       case "pending":
         this.recordAttempt(record.taskId, "initial", "pending");
@@ -547,6 +563,7 @@ export class BridgeWorkflowEngine {
     record: WorkflowRecord,
     fromState: "created" | "submittingToVerifier",
     response: ActionResponse,
+    onDeferred?: () => void,
   ): Promise<ProposeResult> {
     const verifierRequirements = response.authorizationRequirements;
     if (verifierRequirements?.result !== "additionalApprovalsRequired") {
@@ -602,6 +619,9 @@ export class BridgeWorkflowEngine {
       return { kind: "deferred", record: this.mustGet(record.taskId) };
     }
 
+    // The replacement Action is persisted and the outcome is known to be
+    // deferred; Coordination creation follows.
+    onDeferred?.();
     return this.submitToCoordination(this.mustGet(record.taskId));
   }
 

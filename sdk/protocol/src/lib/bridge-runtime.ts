@@ -7,6 +7,8 @@ import {
   buildCreateTaskResult,
   buildGetTaskResult,
   buildUpdateTaskResult,
+  hasCompleteToolCallResult,
+  DEFAULT_PROCESSING_POLL_INTERVAL_MS,
   DEFAULT_TASK_POLL_INTERVAL_MS,
   type TaskResultConfig,
 } from "./bridge-tasks.js";
@@ -71,8 +73,18 @@ export interface ProposerBridgeOptions {
    * {@link coordinationRefreshMinIntervalMs} (feature reduce-polling §7).
    */
   pollIntervalMs?: number;
-  /** Client-facing tasks/get polling hint. Default 60000ms. */
+  /**
+   * Client-facing polling hint while approvals are awaited, and for finished
+   * Tasks. Default {@link DEFAULT_TASK_POLL_INTERVAL_MS} (60000ms).
+   */
   taskPollIntervalMs?: number;
+  /**
+   * Client-facing polling hint while the bridge itself has work to do for a
+   * Task (submitting, registering with Coordination, awaiting the Verifier).
+   * After a failure the hint is never shorter than the time until the retry
+   * is allowed. Default {@link DEFAULT_PROCESSING_POLL_INTERVAL_MS} (2000ms).
+   */
+  processingTaskPollIntervalMs?: number;
   /**
    * Minimum time between Coordination polls started by client observation.
    * Default {@link DEFAULT_COORDINATION_REFRESH_MIN_INTERVAL_MS}; values below
@@ -112,6 +124,8 @@ export const LOCAL_CLEANUP_MIN_INTERVAL_MS = 10_000;
 export const DEFAULT_SHUTDOWN_GRACE_MS = 5_000;
 /** How long shutdown waits for aborted calls to record their interruption. */
 export const SHUTDOWN_SETTLE_MS = 500;
+/** Longest a tool call waits for its initial submission before returning a Task (feature reduce-polling §14.2). */
+export const TOOL_CALL_FAST_PATH_MS = 1_000;
 
 export class BridgeShuttingDownError extends Error {
   constructor() {
@@ -167,6 +181,7 @@ export class ProposerBridge {
     this.resultConfig = {
       resultRetentionSeconds: options.resultRetentionSeconds,
       taskPollIntervalMs: options.taskPollIntervalMs ?? DEFAULT_TASK_POLL_INTERVAL_MS,
+      processingPollIntervalMs: options.processingTaskPollIntervalMs ?? DEFAULT_PROCESSING_POLL_INTERVAL_MS,
     };
     this.compatibilityResultConfig = {
       resultRetentionSeconds: options.resultRetentionSeconds,
@@ -216,14 +231,19 @@ export class ProposerBridge {
     return structuredClone(this.compatibilityTools);
   }
 
-  /** Return a normal tool result on the fast path; expose a Task only when deferred. */
+  /**
+   * Return the final tool result directly when the Action reaches a terminal
+   * outcome within the fast path, including an error that ended it (feature
+   * reduce-polling §14.2); expose a Task only while it is still working.
+   */
   handleToolCall(toolName: string, args: object): Promise<TasksToolCallResult> {
     return this.track(async () => {
       this.cleanupLocal();
       const outcome = await this.proposeToolCall(toolName, args);
-      return outcome.kind === "settled"
-        ? buildCompleteToolCallResult(outcome.record)
-        : buildCreateTaskResult(outcome.record, this.taskResultConfig());
+      const record = this.store.getWorkflow(outcome.record.taskId) ?? outcome.record;
+      return hasCompleteToolCallResult(record)
+        ? buildCompleteToolCallResult(record)
+        : buildCreateTaskResult(record, this.taskResultConfig(record));
     });
   }
 
@@ -263,7 +283,7 @@ export class ProposerBridge {
     // and keep an overdue Task from reading as expired.
     const record = this.observe(this.visibleRecord(taskId));
     this.cleanupLocal();
-    return buildGetTaskResult(record, this.taskResultConfig());
+    return buildGetTaskResult(record, this.taskResultConfig(record));
   }
 
   /** MPAS v1 has no input_required state, so known responses are ignored. */
@@ -377,8 +397,14 @@ export class ProposerBridge {
     this.store.purgeExpiredResults(this.resultConfig.resultRetentionSeconds * 1_000);
   }
 
-  private taskResultConfig(): TaskResultConfig {
-    return { ...this.resultConfig, coordinationCheckedAt: this.coordinationCheckedAt };
+  private taskResultConfig(record: WorkflowRecord): TaskResultConfig {
+    const retryNotBefore = this.engine.retryNotBefore(record);
+    return {
+      ...this.resultConfig,
+      coordinationCheckedAt: this.coordinationCheckedAt,
+      retrying: this.engine.awaitingRetry(record),
+      ...(retryNotBefore !== undefined ? { retryNotBefore, now: this.now() } : {}),
+    };
   }
 
   private compatibilityConfig(): CompatibilityResultOptions {
@@ -471,6 +497,14 @@ export class ProposerBridge {
     return settled;
   }
 
+  /**
+   * Durably record the Action and begin its initial submission, then wait at
+   * most {@link TOOL_CALL_FAST_PATH_MS} (feature reduce-polling §14.2). Returns
+   * the outcome if it settles in time, or the deferred record as soon as the
+   * Action is known to be deferred or the budget expires. A submission still
+   * in flight is never aborted or repeated: it continues in the background,
+   * tracked for shutdown, under the same Task ID and idempotency key.
+   */
   private async proposeToolCall(toolName: string, args: object): Promise<ProposeResult> {
     if (!this.tools.some((tool) => tool.name === toolName)) {
       throw new UnknownBridgeToolError(toolName);
@@ -478,15 +512,36 @@ export class ProposerBridge {
 
     const actionPackage = await this.buildActionPackage(toolName, args);
     const envelope = actionPackage.actionEnvelope;
-    return this.engine.propose({
-      taskId: `urn:uuid:${randomUUID()}`,
+    const taskId = `urn:uuid:${randomUUID()}`;
+    let markDeferred: () => void = () => {};
+    const knownDeferred = new Promise<undefined>((resolve) => {
+      markDeferred = () => resolve(undefined);
+    });
+    // propose() records the workflow durably before its first await, so the
+    // Task exists before this method can return a handle to it.
+    const outcome = this.engine.propose({
+      taskId,
       actionId: envelope.actionId.value,
       actionIdempotencyKey: randomUUID(),
       actionEnvelopeHash: computeJsonHash(envelope).value,
       toolName,
       actionPackage,
       expiresAt: envelope.expiresAt,
+    }, { onDeferred: () => markDeferred() });
+
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const budget = new Promise<undefined>((resolve) => {
+      timer = setTimeout(() => resolve(undefined), TOOL_CALL_FAST_PATH_MS);
+      timer.unref?.();
     });
+    try {
+      const settled = await Promise.race([outcome.then((result) => ({ result })), knownDeferred, budget]);
+      if (settled) return settled.result;
+    } finally {
+      clearTimeout(timer);
+    }
+    this.runInBackground(outcome);
+    return { kind: "deferred", record: this.store.getWorkflow(taskId) ?? (await outcome).record };
   }
 
   private async handleCompatibilityWait(args: object): Promise<CompatibilityToolResult> {
