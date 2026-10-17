@@ -8,13 +8,18 @@ import {
   type Task,
   type UpdateTaskResult,
 } from "./mcp-tasks-extension.js";
-import { buildMpasTaskMeta } from "./mpas-task-meta.js";
+import { buildMpasTaskMeta, type MpasTaskMetaOptions } from "./mpas-task-meta.js";
 import { TERMINAL_WORKFLOW_STATES, type WorkflowRecord } from "./workflow-store.js";
 
 export interface TaskResultConfig {
   resultRetentionSeconds: number;
   taskPollIntervalMs?: number;
+  /** Last completed Coordination poll; see {@link MpasTaskMetaOptions}. */
+  coordinationCheckedAt?: string | null;
 }
+
+/** Default client polling hint (feature reduce-polling §7). */
+export const DEFAULT_TASK_POLL_INTERVAL_MS = 60_000;
 
 export function buildCreateTaskResult(record: WorkflowRecord, config: TaskResultConfig): CreateTaskResult {
   return { resultType: "task", ...taskSummary(record, config) };
@@ -63,8 +68,17 @@ function taskSummary(record: WorkflowRecord, config: TaskResultConfig): Task {
     createdAt: record.createdAt,
     lastUpdatedAt: record.updatedAt,
     ttlMs: ttlMs(record, config.resultRetentionSeconds),
-    pollIntervalMs: config.taskPollIntervalMs ?? 5_000,
-    ...(status === "working" ? { _meta: { [MPAS_MCP_PROFILE_EXTENSION_ID]: buildMpasTaskMeta(record) } } : {}),
+    pollIntervalMs: config.taskPollIntervalMs ?? DEFAULT_TASK_POLL_INTERVAL_MS,
+    ...(status === "working"
+      ? {
+          _meta: {
+            [MPAS_MCP_PROFILE_EXTENSION_ID]: buildMpasTaskMeta(
+              record,
+              config.coordinationCheckedAt !== undefined ? { coordinationCheckedAt: config.coordinationCheckedAt } : {},
+            ),
+          },
+        }
+      : {}),
   };
 }
 

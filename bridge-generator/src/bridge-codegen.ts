@@ -40,6 +40,7 @@ import {
   MemoryWorkflowStore,
   MpasProtocolServer,
   ProposerBridge,
+  bindStdioShutdown,
   loadPlugin as loadSdkPlugin,
 } from "@oma3/mpas";
 import type {
@@ -61,10 +62,16 @@ interface WorkflowConfig {
   dbPath?: string;
   /** Minimum post-resolution retention disclosed to clients. Default 86400. */
   resultRetentionSeconds?: number;
-  /** Background tick interval. Default 2000ms. */
+  /** @deprecated Ignored: the bridge polls Coordination only when a client observes a Task. */
   pollIntervalMs?: number;
-  /** Client-facing tasks/get polling hint. Default 5000ms. */
+  /** Client-facing tasks/get polling hint. Default 60000ms. */
   taskPollIntervalMs?: number;
+  /** Minimum time between Coordination polls. Default 10000ms; minimum 5000ms. */
+  coordinationRefreshMinIntervalMs?: number;
+  /** Local maintenance interval. Default 60000ms. */
+  maintenanceIntervalMs?: number;
+  /** Wait for in-flight work at shutdown. Default 5000ms. */
+  shutdownGraceMs?: number;
   /** Compatibility wait-tool maximum. Default 300 seconds. */
   maxWaitTimeoutSeconds?: number;
   /** Deployment assigns maintainer notification outside the proposing client. */
@@ -133,23 +140,29 @@ function log(level: "info" | "warn" | "error", msg: string, data?: object): void
 export class GeneratedBridge {
   private readonly bridgePromise: Promise<ProposerBridge>;
   private readonly store: WorkflowStore;
+  /** Aborts every in-flight HTTP request when the bridge shuts down. */
+  private readonly lifetime = new AbortController();
+  private shutdownPromise?: Promise<void>;
 
   constructor(config: BridgeConfig) {
     const plugin = requireValidatedPlugin(config.plugin);
     const keyManagerPromise = loadKeyManager(config.agentKey);
     const workflow = config.workflow ?? {};
     const submissionTimeoutMs = workflow.submissionTimeoutMs;
+    const signal = this.lifetime.signal;
     const actionEndpoint: WorkflowActionEndpoint = config.actionEndpoint
-      ? relayActionEndpoint(config.actionEndpoint, keyManagerPromise, submissionTimeoutMs)
+      ? relayActionEndpoint(config.actionEndpoint, keyManagerPromise, submissionTimeoutMs, signal)
       : new ActionEndpointClient({
           url: config.adapterUrl,
           signer: keyManagerPromise,
+          signal,
           ...(submissionTimeoutMs !== undefined ? { timeoutMs: submissionTimeoutMs } : {}),
         });
     const coordinationService: WorkflowCoordinationService = config.coordinationUrl
       ? new CoordinationServiceClient({
           url: config.coordinationUrl,
           signer: keyManagerPromise,
+          signal,
           ...(submissionTimeoutMs !== undefined ? { timeoutMs: submissionTimeoutMs } : {}),
         })
       : unconfiguredCoordinationService();
@@ -186,6 +199,11 @@ export class GeneratedBridge {
         resultRetentionSeconds: workflow.resultRetentionSeconds ?? 86_400,
         ...(workflow.pollIntervalMs !== undefined ? { pollIntervalMs: workflow.pollIntervalMs } : {}),
         ...(workflow.taskPollIntervalMs !== undefined ? { taskPollIntervalMs: workflow.taskPollIntervalMs } : {}),
+        ...(workflow.coordinationRefreshMinIntervalMs !== undefined
+          ? { coordinationRefreshMinIntervalMs: workflow.coordinationRefreshMinIntervalMs }
+          : {}),
+        ...(workflow.maintenanceIntervalMs !== undefined ? { maintenanceIntervalMs: workflow.maintenanceIntervalMs } : {}),
+        ...(workflow.shutdownGraceMs !== undefined ? { shutdownGraceMs: workflow.shutdownGraceMs } : {}),
         ...(workflow.maxWaitTimeoutSeconds !== undefined ? { maxWaitTimeoutSeconds: workflow.maxWaitTimeoutSeconds } : {}),
         ...(workflow.notificationAssignedElsewhere !== undefined
           ? { notificationAssignedElsewhere: workflow.notificationAssignedElsewhere }
@@ -209,7 +227,7 @@ export class GeneratedBridge {
     return bridge.handleToolCall(toolName, args);
   }
 
-  /** Startup reconciliation plus the background workflow loop. */
+  /** Startup reconciliation plus local maintenance; Coordination is polled only on Task observation. */
   async start(): Promise<void> {
     const bridge = await this.bridgePromise;
     await bridge.start();
@@ -221,6 +239,17 @@ export class GeneratedBridge {
       bridge.stop();
       this.store.close();
     });
+  }
+
+  /** Abort in-flight requests, let in-flight work settle, then close the store. Idempotent. */
+  shutdown(): Promise<void> {
+    if (!this.shutdownPromise) {
+      this.lifetime.abort();
+      this.shutdownPromise = this.bridgePromise
+        .then((bridge) => bridge.shutdown())
+        .finally(() => this.store.close());
+    }
+    return this.shutdownPromise;
   }
 
   async buildMcpServer(): Promise<MpasProtocolServer> {
@@ -268,10 +297,12 @@ function relayActionEndpoint(
   config: RelayActionEndpointConfig,
   keyManagerPromise: Promise<KeyManager>,
   timeoutMs: number | undefined,
+  signal: AbortSignal,
 ): WorkflowActionEndpoint {
   const client = new ActionRelayClient({
     url: config.url,
     signer: keyManagerPromise,
+    signal,
     ...(timeoutMs !== undefined ? { timeoutMs } : {}),
   });
   const recipients = [...new Set([config.verifierDid, ...(config.additionalRecipients ?? [])])];
@@ -310,6 +341,11 @@ export async function runBridge(argv = process.argv.slice(2)): Promise<void> {
   const server = await bridge.buildMcpServer();
   const transport = new StdioServerTransport();
 
+  // Exit when the MCP client goes away, even while requests are in flight.
+  bindStdioShutdown({
+    shutdown: () => bridge.shutdown(),
+    onTrigger: (reason) => log("info", "bridge_shutdown", { reason }),
+  });
   await bridge.start();
   await server.connect(transport);
 }

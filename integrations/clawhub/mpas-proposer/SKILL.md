@@ -115,14 +115,20 @@ handle its `authorizationState`:
   success yet.
 
 Use the harness-managed `tasks/get` operation to observe the existing Task.
-Treat it as read-only: polling does not advance the MPAS workflow, and the
-bridge continues coordination and resubmission independently. Respect the
-Task's polling and retention hints; continuous polling is unnecessary.
+The bridge doesn't watch for approvals on its own: it checks Coordination only
+when the Task is observed, at most once every few seconds, and an Action that
+nobody checks on expires. Expect a Maintainer to report an approval or
+rejection on the channel you used to notify them. When a Maintainer reports a
+decision, observe the Task once. Don't keep checking otherwise; respect the
+Task's polling hint. While authorization is required, `coordinationCheckedAt`
+in `_meta["org.oma3/mpas"]` shows when the bridge last checked. If it is older
+than the Maintainer's report, check again after a few seconds.
 
 When `mpas_wait_for_action_result` is present, pass the existing Action ID to
-that tool. A deferred result means the Action is still awaiting authorization
-or execution; use its status and message as progress information and call the
-wait tool again only when useful. A terminal native application result or MPAS
+that tool. Each call checks Coordination at most once. A deferred result means
+the Action is still awaiting authorization or execution; use its status and
+message as progress information. Call the wait tool again when a Maintainer
+reports a decision, not repeatedly. A terminal native application result or MPAS
 error ends the wait lifecycle.
 
 Do not repeat the application tool call to check progress because that creates

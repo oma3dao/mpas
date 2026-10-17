@@ -10,9 +10,19 @@ export interface MpasTaskMeta {
   disclosure: "transparent";
   requirements?: ApprovalRequirements;
   expiresAt: string;
+  /**
+   * When this bridge last completed a Coordination poll, or null if it has not
+   * polled since it started. Present only while approvals are awaited.
+   */
+  coordinationCheckedAt?: string | null;
 }
 
-export function buildMpasTaskMeta(record: WorkflowRecord): MpasTaskMeta {
+export interface MpasTaskMetaOptions {
+  /** Omit to leave `coordinationCheckedAt` out of the metadata. */
+  coordinationCheckedAt?: string | null;
+}
+
+export function buildMpasTaskMeta(record: WorkflowRecord, options: MpasTaskMetaOptions = {}): MpasTaskMeta {
   const pkg = actionPackageOf(record);
   const actionEnvelopeHash = pkg.approvalBundle.actionEnvelopeHash;
   if (
@@ -35,6 +45,9 @@ export function buildMpasTaskMeta(record: WorkflowRecord): MpasTaskMeta {
       ? { requirements: structuredClone(requirements) }
       : {}),
     expiresAt: record.expiresAt,
+    ...(record.state === "awaitingApprovals" && options.coordinationCheckedAt !== undefined
+      ? { coordinationCheckedAt: options.coordinationCheckedAt }
+      : {}),
   };
 }
 

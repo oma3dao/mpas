@@ -46,6 +46,8 @@ export interface ActionRelayClientConfig {
   timeoutMs?: number;
   /** Signature lifetime in seconds, subject to the MPAS HTTP profile maximum. */
   signatureLifetimeSeconds?: number;
+  /** Aborts every in-flight and future HTTP request, for example at process shutdown. */
+  signal?: AbortSignal;
   /** Native or server-side WebSocket adapter used for relay notifications. */
   webSocketFactory?: ActionRelayWebSocketFactory;
 }
@@ -97,10 +99,13 @@ export interface RelayNotificationPollConnection extends RelayNotificationConnec
 /** Network, timeout, or Action Relay 5xx failure that may be retried. */
 export class ActionRelayUnavailableError extends Error {
   readonly code = "ACTION_RELAY_UNAVAILABLE";
+  /** Server-requested delay from `Retry-After`, when present. */
+  readonly retryAfterMs?: number;
 
-  constructor(message: string, options?: ErrorOptions) {
+  constructor(message: string, options?: ErrorOptions & { retryAfterMs?: number }) {
     super(message, options);
     this.name = "ActionRelayUnavailableError";
+    this.retryAfterMs = options?.retryAfterMs;
   }
 }
 
@@ -144,9 +149,9 @@ export class ActionRelayClient {
           code,
           `Action Relay request failed with HTTP ${status} (${code}).`,
         ),
-        unavailable: ({ status, cause }) => status === undefined
+        unavailable: ({ status, cause, retryAfterMs }) => status === undefined
           ? new ActionRelayUnavailableError(`Action Relay is unavailable at ${this.url}.`, { cause })
-          : new ActionRelayUnavailableError(`Action Relay returned HTTP ${status}.`),
+          : new ActionRelayUnavailableError(`Action Relay returned HTTP ${status}.`, { retryAfterMs }),
         rejected: (status) => new ActionRelayResponseError(
           `Action Relay rejected the request with HTTP ${status}.`,
         ),

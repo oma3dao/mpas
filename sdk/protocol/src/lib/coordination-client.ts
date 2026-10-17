@@ -46,6 +46,8 @@ export interface CoordinationServiceClientConfig {
   signer?: MpasRfc9421Signer | PromiseLike<MpasRfc9421Signer>;
   /** Signature lifetime in seconds, subject to the MPAS HTTP profile maximum. */
   signatureLifetimeSeconds?: number;
+  /** Aborts every in-flight and future HTTP request, for example at process shutdown. */
+  signal?: AbortSignal;
   /** Native or server-side WebSocket adapter used for notification sessions. */
   webSocketFactory?: CoordinationWebSocketFactory;
   /** Participant DID used by participant-bound calls when no signer is configured. */
@@ -141,10 +143,13 @@ export interface CoordinationNotificationConnection {
 /** Network, timeout, or Coordination Service 5xx failure that may be retried. */
 export class CoordinationUnavailableError extends Error {
   readonly code = "COORDINATION_UNAVAILABLE";
+  /** Server-requested delay from `Retry-After`, when present. */
+  readonly retryAfterMs?: number;
 
-  constructor(message: string, options?: ErrorOptions) {
+  constructor(message: string, options?: ErrorOptions & { retryAfterMs?: number }) {
     super(message, options);
     this.name = "CoordinationUnavailable";
+    this.retryAfterMs = options?.retryAfterMs;
   }
 }
 
@@ -191,9 +196,9 @@ export class CoordinationServiceClient {
             `Coordination request ${failure} with HTTP ${status} (${code}).`,
           );
         },
-        unavailable: ({ status, cause }) => status === undefined
+        unavailable: ({ status, cause, retryAfterMs }) => status === undefined
           ? new CoordinationUnavailableError(`Coordination Service is unavailable at ${this.url}.`, { cause })
-          : new CoordinationUnavailableError(`Coordination Service returned HTTP ${status}.`),
+          : new CoordinationUnavailableError(`Coordination Service returned HTTP ${status}.`, { retryAfterMs }),
         rejected: (status) => new CoordinationResponseError(
           `Coordination Service rejected the request with HTTP ${status}.`,
         ),

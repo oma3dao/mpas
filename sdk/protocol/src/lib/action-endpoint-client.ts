@@ -12,6 +12,8 @@ import {
   parseActionRequestEnvelope,
   parseActionResponse,
 } from "./routing.js";
+import { abortableRequest } from "./client-transport.js";
+import { parseRetryAfterMs } from "./retry-backoff.js";
 import { deriveMpasAudience, signMpasRfc9421, type MpasRfc9421Signer } from "./rfc9421.js";
 
 /** Configuration for the common MPAS Action endpoint client. */
@@ -26,6 +28,8 @@ export interface ActionEndpointClientConfig {
   signer?: MpasRfc9421Signer | PromiseLike<MpasRfc9421Signer>;
   /** Signature lifetime in seconds, subject to the MPAS HTTP profile maximum. */
   signatureLifetimeSeconds?: number;
+  /** Aborts every in-flight and future request, for example at process shutdown. */
+  signal?: AbortSignal;
 }
 
 /** Input for constructing an {@link ActionRequest} around an Action Package. */
@@ -45,6 +49,8 @@ export interface ActionEndpointClientErrorOptions extends ErrorOptions {
   status?: number;
   /** MPAS error code returned inside an `MpasHttpError`, when available. */
   protocolCode?: string;
+  /** Server-requested delay from `Retry-After`, when present. */
+  retryAfterMs?: number;
 }
 
 /** Error returned for Action endpoint transport, HTTP, identity, or response failures. */
@@ -52,12 +58,14 @@ export class ActionEndpointClientError extends Error {
   readonly code = "ACTION_ENDPOINT_CLIENT_ERROR";
   readonly status?: number;
   readonly protocolCode?: string;
+  readonly retryAfterMs?: number;
 
   constructor(message: string, options: ActionEndpointClientErrorOptions = {}) {
     super(message, options);
     this.name = "ActionEndpointClientError";
     this.status = options.status;
     this.protocolCode = options.protocolCode;
+    this.retryAfterMs = options.retryAfterMs;
   }
 }
 
@@ -95,6 +103,7 @@ export class ActionEndpointClient {
   readonly timeoutMs: number;
   private readonly signer?: Promise<MpasRfc9421Signer>;
   private readonly signatureLifetimeSeconds?: number;
+  private readonly signal?: AbortSignal;
 
   /** Creates a client bound to one Action endpoint origin. */
   constructor(config: ActionEndpointClientConfig) {
@@ -104,6 +113,7 @@ export class ActionEndpointClient {
     this.timeoutMs = config.timeoutMs ?? 30_000;
     this.signer = config.signer ? Promise.resolve(config.signer) : undefined;
     this.signatureLifetimeSeconds = config.signatureLifetimeSeconds;
+    this.signal = config.signal;
   }
 
   /**
@@ -164,14 +174,13 @@ export class ActionEndpointClient {
       }));
     }
 
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
+    const abortable = abortableRequest(this.timeoutMs, this.signal);
     try {
       const response = await fetch(requestUrl, {
         method: "POST",
         headers,
         body: text,
-        signal: controller.signal,
+        signal: abortable.signal,
       });
       const responseText = await response.text();
       let parsed: unknown;
@@ -185,11 +194,13 @@ export class ActionEndpointClient {
       }
       if (!response.ok) {
         const error = parsed as Partial<MpasHttpError> | undefined;
+        const retryAfterMs = parseRetryAfterMs(response.headers.get("retry-after"));
         throw new ActionEndpointClientError(
           `Action endpoint returned HTTP ${response.status}.`,
           {
             status: response.status,
             protocolCode: error?.type === "MpasHttpError" ? error.error?.code : undefined,
+            ...(retryAfterMs !== undefined ? { retryAfterMs } : {}),
           },
         );
       }
@@ -208,7 +219,7 @@ export class ActionEndpointClient {
         { cause: error },
       );
     } finally {
-      clearTimeout(timeout);
+      abortable.dispose();
     }
   }
 }

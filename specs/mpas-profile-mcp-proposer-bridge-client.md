@@ -10,7 +10,7 @@
 
 **Depends on:** [MPAS Core Specification v0.2](./mpas-specification.md), [MPAS HTTP Profile](./mpas-profile-http.md), [MPAS MCP Execution Profile](./mpas-profile-mcp.md), and the official MCP extension `io.modelcontextprotocol/tasks`
 
-**Feature records:** [Official MCP Tasks integration](../docs/features/mcp-tasks/spec.md), [temporary conventional-client compatibility](../docs/features/mcp-client-compatibility/spec.md)
+**Feature records:** [Official MCP Tasks integration](../docs/features/mcp-tasks/spec.md), [temporary conventional-client compatibility](../docs/features/mcp-client-compatibility/spec.md), [reduced proposer-bridge polling](../docs/features/reduce-polling/spec.md)
 
 ---
 
@@ -182,10 +182,16 @@ interface MpasTaskMeta {
   disclosure: "transparent";
   requirements?: ApprovalRequirements;
   expiresAt: string;
+  coordinationCheckedAt?: string | null;
 }
 ```
 
 The value is stored at `_meta["org.oma3/mpas"]`.
+
+`coordinationCheckedAt` MAY be present only for `authorization_required`. It is
+the time this bridge process last completed a Coordination poll, or `null` if
+it has not polled since it started. It tells the client how fresh the
+authorization state is (Section 9).
 
 `actionId`, `actionEnvelopeHash`, and `expiresAt` identify the Task's current
 MPAS Action. They change together when the bridge retires an Action and
@@ -215,7 +221,10 @@ The bridge MUST use `readyForSubmission` in Task metadata and persisted workflow
 
 ## 6. Task Results
 
-`tasks/get` is read-only and MUST NOT advance an MPAS workflow.
+A `tasks/get` response reflects the bridge's local workflow state and MUST NOT
+wait on any remote service. A `tasks/get` for a workflow awaiting approvals MAY
+start a rate-limited Coordination poll (Section 9); that poll's results are
+applied in the background and appear in later responses.
 
 - A native upstream `CallToolResult` is returned unchanged in a completed
   Task's `result`.
@@ -263,10 +272,21 @@ Cancellation of an already-terminal visible Task is an acknowledged no-op.
 
 ## 9. Background Progress and Retention
 
-Task observation and MPAS progression are independent. The bridge MUST
-continue background Coordination polling, completed-package submission,
-startup reconciliation, and retry of transient adapter or Coordination
-failures until the current Action expires or the Task reaches a terminal state.
+Task observation and MPAS progression are independent. Until the current
+Action expires or the Task reaches a terminal state, the bridge MUST perform
+startup reconciliation, MUST submit a completed Action Package once
+Coordination reports it, and MUST retry transient adapter and Coordination
+failures with backoff.
+
+The bridge MUST poll Coordination only in response to a client observing a
+Task whose workflow awaits approvals. It MUST NOT poll Coordination on a timer
+or at startup. It MUST NOT have more than one Coordination poll in flight at a
+time, and it MUST rate-limit polls; a request within the limit receives the
+last known state. Task observation MUST NOT wait on Coordination. An Action
+that no client observes MAY expire without its approvals being collected.
+
+A stdio bridge MUST exit when its input stream ends or closes, including while
+requests are in flight.
 
 The bridge configures a logical Verifier Action endpoint independently from an
 optional Coordination Service. The Verifier endpoint may be direct or hosted
@@ -303,8 +323,8 @@ keepUntil = max(currentActionEnvelope.expiresAt, resolvedAt + resultRetention)
 ttlMs     = keepUntil - createdAt
 ```
 
-`pollIntervalMs` is a client hint and is independent of the bridge's internal
-background interval.
+`pollIntervalMs` is a client hint and is independent of the bridge's
+Coordination rate limit.
 
 ## 10. Versioning and Compatibility
 
@@ -324,6 +344,11 @@ does not identify the MPAS Core version, HTTP Profile version, MCP Execution
 Profile version, or negotiated MCP protocol version. A breaking change to the
 Task metadata schema, result interpretation, discovery requirements, or
 client-visible workflow responsibilities requires a new profile version.
+
+The [reduced proposer-bridge polling](../docs/features/reduce-polling/spec.md)
+revision of Sections 5, 6 and 9 keeps profile version 2. It adds one optional
+metadata member, and a client that observes its Task as Section 6 describes
+sees the same outcomes as before.
 
 ### 10.1 Temporary conventional-client compatibility annex
 

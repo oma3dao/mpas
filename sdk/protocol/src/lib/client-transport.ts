@@ -1,5 +1,6 @@
 import type { Did, MpasHttpError } from "../types/mpas.js";
 import { strictJsonParse } from "../utils/strict-json.js";
+import { parseRetryAfterMs } from "./retry-backoff.js";
 import {
   deriveMpasAudience,
   signMpasRfc9421,
@@ -38,6 +39,8 @@ export class MpasAuthError extends Error {
 interface TransportFailure {
   status?: number;
   cause?: unknown;
+  /** Server-requested delay from `Retry-After`, when present. */
+  retryAfterMs?: number;
 }
 
 interface MpasHttpTransportErrors {
@@ -53,6 +56,8 @@ export interface MpasHttpTransportConfig {
   timeoutMs?: number;
   signer?: MpasRfc9421Signer | PromiseLike<MpasRfc9421Signer>;
   signatureLifetimeSeconds?: number;
+  /** Aborts every in-flight and future request, for example at process shutdown. */
+  signal?: AbortSignal;
   errors: MpasHttpTransportErrors;
 }
 
@@ -63,6 +68,7 @@ export class MpasHttpTransport {
   private readonly timeoutMs: number;
   private readonly signerPromise?: Promise<MpasRfc9421Signer>;
   private readonly signatureLifetimeSeconds?: number;
+  private readonly signal?: AbortSignal;
   private readonly errors: MpasHttpTransportErrors;
 
   constructor(config: MpasHttpTransportConfig) {
@@ -71,6 +77,7 @@ export class MpasHttpTransport {
     this.timeoutMs = config.timeoutMs ?? 30_000;
     this.signerPromise = config.signer ? Promise.resolve(config.signer) : undefined;
     this.signatureLifetimeSeconds = config.signatureLifetimeSeconds;
+    this.signal = config.signal;
     this.errors = config.errors;
   }
 
@@ -102,13 +109,12 @@ export class MpasHttpTransport {
       }));
     }
 
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
+    const request = abortableRequest(this.timeoutMs, this.signal);
     let response: Response;
     try {
-      response = await fetch(requestUrl, { method: "POST", headers, body, signal: controller.signal });
+      response = await fetch(requestUrl, { method: "POST", headers, body, signal: request.signal });
     } catch (cause) {
-      clearTimeout(timeout);
+      request.dispose();
       throw this.errors.unavailable({ cause });
     }
 
@@ -118,7 +124,7 @@ export class MpasHttpTransport {
     } catch (cause) {
       throw this.errors.unavailable({ cause });
     } finally {
-      clearTimeout(timeout);
+      request.dispose();
     }
     if (!response.ok) {
       if (response.status === 401 || response.status === 403) {
@@ -127,7 +133,11 @@ export class MpasHttpTransport {
         throw this.errors.authentication(response.status, code);
       }
       if (response.status === 408 || response.status === 425 || response.status === 429 || response.status >= 500) {
-        throw this.errors.unavailable({ status: response.status });
+        const retryAfterMs = parseRetryAfterMs(response.headers.get("retry-after"));
+        throw this.errors.unavailable({
+          status: response.status,
+          ...(retryAfterMs !== undefined ? { retryAfterMs } : {}),
+        });
       }
       throw this.errors.rejected(response.status);
     }
@@ -160,6 +170,28 @@ export async function waitForPollInterval(intervalMs: number, signal?: AbortSign
       resolve();
     }, { once: true });
   });
+}
+
+/**
+ * One request's abort signal: fires on the per-request timeout or when the
+ * client's lifetime signal aborts. Call `dispose` once the request settles.
+ */
+export function abortableRequest(
+  timeoutMs: number,
+  lifetime?: AbortSignal,
+): { signal: AbortSignal; dispose(): void } {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  const abort = () => controller.abort(lifetime?.reason);
+  if (lifetime?.aborted) abort();
+  else lifetime?.addEventListener("abort", abort, { once: true });
+  return {
+    signal: controller.signal,
+    dispose() {
+      clearTimeout(timeout);
+      lifetime?.removeEventListener("abort", abort);
+    },
+  };
 }
 
 function parseMpasHttpError(text: string): MpasHttpError | undefined {

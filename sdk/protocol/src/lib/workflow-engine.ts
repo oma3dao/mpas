@@ -15,6 +15,7 @@ import type {
 import { CoordinationResponseError, MpasAuthError } from "./coordination-client.js";
 import { computeIdempotencyFingerprint } from "./routing.js";
 import { computeJsonHash } from "../utils/hash.js";
+import { backoffDelayMs, FAILURE_BACKOFF, PENDING_BACKOFF, retryAfterMsOf } from "./retry-backoff.js";
 import {
   TERMINAL_WORKFLOW_STATES,
   type CreateWorkflowInput,
@@ -108,6 +109,8 @@ export interface BridgeWorkflowEngineOptions {
    */
   claimLeaseMs?: number;
   now?: () => number;
+  /** Jitter source for retry backoff, in [0, 1). Default `Math.random`. */
+  random?: () => number;
 }
 
 /** Default Action/Coordination HTTP wait. Keep aligned with ActionEndpointClient. */
@@ -121,6 +124,21 @@ export type ProposeResult =
 
 /** Ledger rejection codes that mean "already dispatched; outcome not retrievable". */
 const REPLAY_CODES = new Set(["REPLAY_DETECTED", "ACTION_ID_HASH_MISMATCH"]);
+
+/** States whose next step is a remote submission or re-check by this bridge. */
+const RETRYABLE_STATES: ReadonlySet<WorkflowRecord["state"]> = new Set([
+  "created",
+  "submittingToCoordination",
+  "readyForSubmission",
+  "submittingToVerifier",
+  "awaitingVerifierResult",
+]);
+
+interface RetryEntry {
+  state: WorkflowRecord["state"];
+  failures: number;
+  notBefore: number;
+}
 
 type SubmissionPhase = "initial" | "completed";
 
@@ -142,7 +160,12 @@ export class BridgeWorkflowEngine {
   private readonly workerId: string;
   private readonly claimLeaseMs: number;
   private readonly now: () => number;
+  private readonly random: () => number;
   private readonly waiters = new Map<string, Set<(record: WorkflowRecord) => void>>();
+  /** In-memory retry backoff per Task; rebuilt by reconciliation after a restart. */
+  private readonly retrySchedule = new Map<string, RetryEntry>();
+  /** `Retry-After` from the latest failed remote call, consumed when scheduling. */
+  private readonly retryAfter = new Map<string, number>();
   /**
    * Per-Task outbound lanes. Each Task ID serializes that Task's initial,
    * replacement, Coordination, and completed submissions so the request
@@ -191,6 +214,7 @@ export class BridgeWorkflowEngine {
       );
     }
     this.now = options.now ?? (() => Date.now());
+    this.random = options.random ?? Math.random;
   }
 
   /**
@@ -206,52 +230,100 @@ export class BridgeWorkflowEngine {
       throw new Error("Task ID and Action ID must be distinct.");
     }
     const record = this.store.createWorkflow(input);
-    return this.dispatchOutbound(record.taskId, async () => {
+    const result = await this.dispatchOutbound(record.taskId, async () => {
       const current = this.mustGet(record.taskId);
       if (current.state !== "created") {
         return this.resultFromRecord(current);
       }
       if (!this.store.claimWorkflow(current.taskId, this.workerId, this.claimLeaseMs)) {
-        return { kind: "deferred", record: this.mustGet(current.taskId) };
+        return { kind: "deferred", record: this.mustGet(current.taskId) } as const;
       }
       return this.submitInitial(this.mustGet(current.taskId));
     });
+    this.updateRetrySchedule(record.taskId, "created");
+    return result;
   }
 
   /**
-   * One background tick: expiry sweep, coordination poll, and advancement of
-   * every workflow this worker can claim. Expiry and Coordination updates
-   * join each Task's outbound lane so they cannot terminate a submit that
-   * is still in flight.
+   * One unthrottled tick: expiry sweep, Coordination poll, and advancement of
+   * every workflow this worker can claim.
+   *
+   * @deprecated Bridges observe Coordination on demand through
+   * {@link refreshCoordination} and pace remote work with {@link maintain}.
    */
   async pollOnce(): Promise<void> {
     const expiry = this.sweepExpired();
+    try {
+      await this.refreshCoordination();
+    } catch {
+      // Coordination updates are one input to the engine. Independent
+      // Action retries must still run when this input is unavailable.
+    }
+    await this.advanceClaimable(false);
+    await expiry;
+  }
 
-    const hasCoordinationWork = this.store
-      .listRecoverableWorkflows()
-      .some((record) => record.state === "awaitingApprovals");
-    if (hasCoordinationWork) {
-      try {
-        const poll = await this.coordinationService.pollWork();
-        for (const update of poll.actionUpdates) {
-          await this.applyUpdate(update);
-        }
-      } catch (error) {
-        // Coordination updates are one input to the engine. Independent
-        // Action retries must still run when this input is unavailable.
-        if (permanentCoordinationFailure(error)) {
-          const resolution = coordinationFailureResolution(error);
-          for (const record of this.store.listRecoverableWorkflows()) {
-            if (record.state === "awaitingApprovals" && proposerDidOf(record) === this.proposerDid) {
-              this.resolveUnresolvable(record.taskId, resolution.errorCode, resolution.errorMessage);
-            }
-          }
+  /**
+   * Poll Coordination once and apply its updates (feature reduce-polling §4).
+   * Does nothing unless this proposer has a workflow awaiting approvals.
+   * Permanent failures resolve those workflows; retryable failures reject so
+   * the caller can back off. Coordination updates join each Task's outbound
+   * lane so they cannot terminate a submit that is still in flight.
+   */
+  async refreshCoordination(): Promise<void> {
+    if (!this.hasAwaitingApprovals()) {
+      return;
+    }
+    let poll: CoordinationPollResponse;
+    try {
+      poll = await this.coordinationService.pollWork();
+    } catch (error) {
+      if (!permanentCoordinationFailure(error)) {
+        throw error;
+      }
+      const resolution = coordinationFailureResolution(error);
+      for (const record of this.store.listRecoverableWorkflows()) {
+        if (record.state === "awaitingApprovals" && proposerDidOf(record) === this.proposerDid) {
+          this.resolveUnresolvable(record.taskId, resolution.errorCode, resolution.errorMessage);
         }
       }
+      return;
     }
+    for (const update of poll.actionUpdates) {
+      await this.applyUpdate(update);
+    }
+  }
 
-    await this.advanceClaimable();
+  /**
+   * Local maintenance plus due remote retries (feature reduce-polling §5):
+   * expiry sweep, then each claimable workflow whose backoff has elapsed.
+   * Never polls Coordination.
+   */
+  async maintain(): Promise<void> {
+    const expiry = this.sweepExpired();
+    await this.advanceClaimable(true);
     await expiry;
+  }
+
+  /** Whether this proposer has a workflow that Coordination could advance. */
+  hasAwaitingApprovals(): boolean {
+    return this.store
+      .listRecoverableWorkflows()
+      .some((record) => record.state === "awaitingApprovals" && proposerDidOf(record) === this.proposerDid);
+  }
+
+  /** Earliest time a scheduled remote retry is due, if any. */
+  nextRetryAt(): number | undefined {
+    let earliest: number | undefined;
+    for (const [taskId, entry] of this.retrySchedule) {
+      const record = this.store.getWorkflow(taskId);
+      if (!record || isTerminal(record) || !RETRYABLE_STATES.has(record.state)) {
+        this.retrySchedule.delete(taskId);
+        continue;
+      }
+      earliest = earliest === undefined ? entry.notBefore : Math.min(earliest, entry.notBefore);
+    }
+    return earliest;
   }
 
   /** Cooperatively cancel a visible workflow without advancing it. */
@@ -282,10 +354,10 @@ export class BridgeWorkflowEngine {
     return cancelled;
   }
 
-  /** Startup reconciliation (feature spec §9.4). Idempotent. */
+  /** Startup reconciliation (feature spec §9.4). Idempotent. Never polls Coordination. */
   async reconcile(): Promise<void> {
     await this.sweepExpired();
-    await this.advanceClaimable();
+    await this.advanceClaimable(false);
   }
 
   /**
@@ -321,6 +393,18 @@ export class BridgeWorkflowEngine {
     });
   }
 
+  /** Resolve every pending {@link waitForResult} with its current record, for shutdown. */
+  releaseWaiters(): void {
+    for (const [taskId, waiters] of this.waiters) {
+      const record = this.store.getWorkflow(taskId);
+      if (!record) continue;
+      this.waiters.delete(taskId);
+      for (const wake of waiters) {
+        wake(record);
+      }
+    }
+  }
+
   private async submitInitial(record: WorkflowRecord): Promise<ProposeResult> {
     const current = this.store.getWorkflow(record.taskId);
     if (!current || proposerDidOf(current) !== this.proposerDid || isTerminal(current) || current.state !== "created") {
@@ -339,6 +423,7 @@ export class BridgeWorkflowEngine {
       response = await this.actionEndpoint.submitActionRequest(request);
     } catch (error) {
       this.store.saveAdapterAttempt(record.taskId, attempt("initial", "unreachable", error));
+      this.noteRetryAfter(record.taskId, error);
       return { kind: "deferred", record: this.mustGet(record.taskId) };
     }
 
@@ -443,6 +528,7 @@ export class BridgeWorkflowEngine {
       }
       this.store.compareAndSetState(record.taskId, "submittingToCoordination", "awaitingApprovals");
     } catch (error) {
+      this.noteRetryAfter(record.taskId, error);
       const permanent = permanentCoordinationFailure(error);
       this.store.saveAdapterAttempt(
         record.taskId,
@@ -512,14 +598,54 @@ export class BridgeWorkflowEngine {
     });
   }
 
-  private async advanceClaimable(): Promise<void> {
+  /**
+   * Advance every claimable workflow. With `respectSchedule`, a workflow in
+   * backoff waits until its retry is due; without it, all are attempted.
+   */
+  private async advanceClaimable(respectSchedule: boolean): Promise<void> {
+    const nowMs = this.now();
     await Promise.all(
       this.store
         .listRecoverableWorkflows()
         .filter((record) => proposerDidOf(record) === this.proposerDid)
         .filter((record) => record.state !== "awaitingApprovals")
-        .map((record) => this.dispatchClaimable(record)),
+        .filter((record) => !respectSchedule || (this.retrySchedule.get(record.taskId)?.notBefore ?? 0) <= nowMs)
+        .map(async (record) => {
+          await this.dispatchClaimable(record);
+          this.updateRetrySchedule(record.taskId, record.state);
+        }),
     );
+  }
+
+  /**
+   * Back off a workflow whose remote step made no progress: a failed
+   * submission stays in its state, and a Verifier `pending` is re-checked.
+   * Any other outcome clears the backoff so the next step runs promptly.
+   */
+  private updateRetrySchedule(taskId: string, before: WorkflowRecord["state"]): void {
+    const retryAfterMs = this.retryAfter.get(taskId);
+    this.retryAfter.delete(taskId);
+    const current = this.store.getWorkflow(taskId);
+    if (!current || isTerminal(current) || !RETRYABLE_STATES.has(current.state)) {
+      this.retrySchedule.delete(taskId);
+      return;
+    }
+    const pending = current.state === "awaitingVerifierResult";
+    if (!pending && current.state !== before) {
+      this.retrySchedule.delete(taskId);
+      return;
+    }
+    const previous = this.retrySchedule.get(taskId);
+    const failures = previous?.state === current.state ? previous.failures + 1 : 1;
+    const delay = backoffDelayMs(failures, pending ? PENDING_BACKOFF : FAILURE_BACKOFF, this.random, retryAfterMs);
+    this.retrySchedule.set(taskId, { state: current.state, failures, notBefore: this.now() + delay });
+  }
+
+  private noteRetryAfter(taskId: string, error: unknown): void {
+    const retryAfterMs = retryAfterMsOf(error);
+    if (retryAfterMs !== undefined) {
+      this.retryAfter.set(taskId, retryAfterMs);
+    }
   }
 
   /**
@@ -612,6 +738,7 @@ export class BridgeWorkflowEngine {
       response = await this.actionEndpoint.submitActionRequest(request);
     } catch (error) {
       this.store.saveAdapterAttempt(current.taskId, attempt("completed", "unreachable", error));
+      this.noteRetryAfter(current.taskId, error);
       this.store.compareAndSetState(current.taskId, "submittingToVerifier", "readyForSubmission");
       return;
     }
