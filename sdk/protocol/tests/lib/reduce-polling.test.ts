@@ -25,9 +25,16 @@ import {
   computeHash,
 } from "../../src/index.js";
 import { BridgeShuttingDownError, ProposerBridge, SHUTDOWN_SETTLE_MS } from "../../src/lib/bridge-runtime.js";
+import { DEFAULT_ACTION_REQUEST_TIMEOUT_MS } from "../../src/lib/action-endpoint-client.js";
 import { backoffDelayMs, parseRetryAfterMs } from "../../src/lib/retry-backoff.js";
 import { bindStdioShutdown, type StdioShutdownHost } from "../../src/lib/stdio-lifecycle.js";
-import { BridgeWorkflowEngine, type WorkflowActionEndpoint, type WorkflowCoordinationService } from "../../src/lib/workflow-engine.js";
+import {
+  BridgeWorkflowEngine,
+  DEFAULT_CLAIM_LEASE_MS,
+  DEFAULT_SUBMISSION_TIMEOUT_MS,
+  type WorkflowActionEndpoint,
+  type WorkflowCoordinationService,
+} from "../../src/lib/workflow-engine.js";
 import { MemoryWorkflowStore } from "../../src/lib/workflow-store.js";
 
 const PROPOSER_DID = "did:jwk:proposer" as Did;
@@ -676,10 +683,17 @@ describe("bindStdioShutdown", () => {
   });
 });
 
-async function startServer(handler: (response: ServerResponse) => void): Promise<{ url: string; close(): Promise<void> }> {
+async function startServer(
+  handler: (response: ServerResponse) => void,
+  onBody?: (body: string) => void,
+): Promise<{ url: string; close(): Promise<void> }> {
   const server = createServer((request, res) => {
-    request.resume();
-    request.on("end", () => handler(res));
+    const chunks: Buffer[] = [];
+    request.on("data", (chunk: Buffer) => chunks.push(chunk));
+    request.on("end", () => {
+      onBody?.(Buffer.concat(chunks).toString("utf8"));
+      handler(res);
+    });
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const address = server.address();
@@ -2117,4 +2131,61 @@ describe("prompt Task return (profile 3)", () => {
     expect(bridge.handleTasksGet(value.taskId)).toMatchObject({ pollIntervalMs: 90_000, statusMessage: "Awaiting MPAS authorization." });
     await bridge.shutdown();
   });
+});
+
+describe("Verifier bounded wait for a joined dispatch (Core v0.3 §6.9.2 rule 3)", () => {
+  it("keeps the default Action request timeout above the reference adapter's join wait, and below the claim lease", () => {
+    // The reference adapter waits its 30-second dispatch timeout plus 5 seconds.
+    expect(DEFAULT_ACTION_REQUEST_TIMEOUT_MS).toBeGreaterThan(30_000 + 5_000);
+    expect(DEFAULT_SUBMISSION_TIMEOUT_MS).toBe(DEFAULT_ACTION_REQUEST_TIMEOUT_MS);
+    expect(DEFAULT_CLAIM_LEASE_MS).toBeGreaterThan(DEFAULT_SUBMISSION_TIMEOUT_MS);
+    expect(new ActionEndpointClient({ url: "https://verifier.example" }).timeoutMs).toBe(DEFAULT_ACTION_REQUEST_TIMEOUT_MS);
+    expect(new ActionRelayClient({ url: "https://relay.example", participantDid: PROPOSER_DID }).timeoutMs)
+      .toBe(DEFAULT_ACTION_REQUEST_TIMEOUT_MS);
+  });
+
+  it("retries a 503 timeout from a still-executing dispatch on the next check after Retry-After, with the same key", async () => {
+    const keys: (string | undefined)[] = [];
+    const server = await startServer((res) => {
+      const call = keys.length;
+      if (call === 1) {
+        res.writeHead(503, { "Content-Type": "application/mpas+json", "Retry-After": "2" });
+        res.end(JSON.stringify({ version: "1", type: "MpasHttpError", error: { code: "timeout", message: "still executing", retryable: true } }));
+        return;
+      }
+      res.writeHead(200, { "Content-Type": "application/mpas+json" });
+      res.end(JSON.stringify({
+        version: "1",
+        type: "ActionResponse",
+        verifier: { did: "did:jwk:verifier" },
+        result: "executed",
+        executionResult: { content: [{ type: "text", text: "done" }], isError: false },
+      }));
+    }, (body) => keys.push((JSON.parse(body) as { idempotencyKey?: string }).idempotencyKey));
+    try {
+      const store = new MemoryWorkflowStore();
+      const bridge = makeBridge({
+        endpoint: new ActionEndpointClient({ url: server.url }),
+        coordination: fakeCoordination(async () => emptyPoll()).service,
+        store,
+      });
+      const result = await bridge.handleToolCall("merge_pull_request", {});
+      if (result.resultType !== "task") throw new Error("Expected a Task.");
+      expect(result.pollIntervalMs).toBeGreaterThanOrEqual(1_900);
+      expect(attemptsOf(store, result.taskId).at(-1)).toMatchObject({ outcome: "unreachable", retryAfterMs: 2_000 });
+
+      bridge.handleTasksGet(result.taskId);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(keys).toHaveLength(1);
+
+      await new Promise((resolve) => setTimeout(resolve, 2_000));
+      bridge.handleTasksGet(result.taskId);
+      await vi.waitFor(() => expect(store.getWorkflow(result.taskId)).toMatchObject({ state: "resolved" }));
+      expect(keys).toHaveLength(2);
+      expect(keys[1]).toBe(keys[0]);
+      await bridge.shutdown();
+    } finally {
+      await server.close();
+    }
+  }, 10_000);
 });

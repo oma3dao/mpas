@@ -55,6 +55,14 @@ export interface ActionEndpointClientErrorOptions extends ErrorOptions {
   retryable?: boolean;
 }
 
+/**
+ * Default wait for one Action submission. It exceeds a Verifier's usual
+ * bounded wait for a duplicate that joins a dispatch in progress (the
+ * reference adapter waits its 30-second dispatch timeout plus 5 seconds), so
+ * the outcome normally arrives in one response (Core §6.9.2 rule 3).
+ */
+export const DEFAULT_ACTION_REQUEST_TIMEOUT_MS = 45_000;
+
 /** Error returned for Action endpoint transport, HTTP, identity, or response failures. */
 export class ActionEndpointClientError extends Error {
   readonly code = "ACTION_ENDPOINT_CLIENT_ERROR";
@@ -120,7 +128,7 @@ export class ActionEndpointClient {
     this.upstreamBinding = config.upstreamBinding === undefined ? undefined : structuredClone(config.upstreamBinding);
     this.url = config.url.replace(/\/+$/, "");
     this.audience = deriveMpasAudience(config.url);
-    this.timeoutMs = config.timeoutMs ?? 30_000;
+    this.timeoutMs = config.timeoutMs ?? DEFAULT_ACTION_REQUEST_TIMEOUT_MS;
     this.signer = config.signer ? Promise.resolve(config.signer) : undefined;
     this.signatureLifetimeSeconds = config.signatureLifetimeSeconds;
     this.signal = config.signal;

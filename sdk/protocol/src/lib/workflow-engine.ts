@@ -12,7 +12,7 @@ import type {
   CoordinationPollResponse,
   Did,
 } from "../types/mpas.js";
-import { ActionEndpointClientError } from "./action-endpoint-client.js";
+import { ActionEndpointClientError, DEFAULT_ACTION_REQUEST_TIMEOUT_MS } from "./action-endpoint-client.js";
 import { ActionRelayResponseError } from "./action-relay-client.js";
 import { AdapterRequestError, AdapterResponseError } from "./adapter-client.js";
 import { CoordinationResponseError, MpasAuthError } from "./coordination-client.js";
@@ -117,7 +117,7 @@ export interface BridgeWorkflowEngineOptions {
 }
 
 /** Default Action/Coordination HTTP wait. Keep aligned with ActionEndpointClient. */
-export const DEFAULT_SUBMISSION_TIMEOUT_MS = 30_000;
+export const DEFAULT_SUBMISSION_TIMEOUT_MS = DEFAULT_ACTION_REQUEST_TIMEOUT_MS;
 /** Default worker claim lease. Must exceed {@link DEFAULT_SUBMISSION_TIMEOUT_MS}. */
 export const DEFAULT_CLAIM_LEASE_MS = 60_000;
 

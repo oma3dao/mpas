@@ -8,6 +8,7 @@ import type {
   RelaySessionResponse,
   RelayWorkAvailable,
 } from "../types/mpas.js";
+import { DEFAULT_ACTION_REQUEST_TIMEOUT_MS } from "./action-endpoint-client.js";
 import { strictJsonParse } from "../utils/strict-json.js";
 import {
   parseActionRequestEnvelope,
@@ -139,7 +140,7 @@ export class ActionRelayClient {
 
   constructor(config: ActionRelayClientConfig) {
     this.url = config.url.replace(/\/+$/, "");
-    this.timeoutMs = config.timeoutMs ?? 30_000;
+    this.timeoutMs = config.timeoutMs ?? DEFAULT_ACTION_REQUEST_TIMEOUT_MS;
     this.transport = new MpasHttpTransport({
       ...config,
       timeoutMs: this.timeoutMs,

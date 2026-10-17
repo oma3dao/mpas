@@ -3,7 +3,7 @@
 **Status:** Draft v0.1
 **Profile Identifier:** `did:web:profiles.oma3.org:mcp`
 **Payload Format:** `mcp.toolsCall`
-**Depends on:** [MPAS Core Specification v0.2](./mpas-specification.md), [MPAS Application Plugin Profile v0.2](./mpas-profile-application-plugin.md)
+**Depends on:** [MPAS Core Specification v0.3](./mpas-specification.md), [MPAS Application Plugin Profile v0.2](./mpas-profile-application-plugin.md)
 **Related:** [MPAS MCP Proposer Bridge Profile](./mpas-profile-mcp-proposer-bridge-client.md), [MPAS JSON Verifier Policy Profile](./mpas-profile-policy-json.md), [MPAS HTTP Profile](./mpas-profile-http.md)
 
 ---

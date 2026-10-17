@@ -8,7 +8,7 @@
 
 **MCP protocol version:** `2026-07-28`
 
-**Depends on:** [MPAS Core Specification v0.2](./mpas-specification.md), [MPAS HTTP Profile](./mpas-profile-http.md), [MPAS MCP Execution Profile](./mpas-profile-mcp.md), and the official MCP extension `io.modelcontextprotocol/tasks`
+**Depends on:** [MPAS Core Specification v0.3](./mpas-specification.md), [MPAS HTTP Profile](./mpas-profile-http.md), [MPAS MCP Execution Profile](./mpas-profile-mcp.md), and the official MCP extension `io.modelcontextprotocol/tasks`
 
 **Feature records:** [Official MCP Tasks integration](../docs/features/mcp-tasks/spec.md), [temporary conventional-client compatibility](../docs/features/mcp-client-compatibility/spec.md), [reduced proposer-bridge polling](../docs/features/reduce-polling/spec.md)
 

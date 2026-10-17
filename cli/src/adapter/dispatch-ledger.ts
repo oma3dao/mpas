@@ -39,7 +39,11 @@ export type LedgerEvent =
 
 export type LedgerCheck =
   | { kind: "absent" }
-  | { kind: "pending" }
+  /**
+   * The same Action Envelope is executing. It MUST NOT be transmitted again;
+   * the submission joins the dispatch in progress (Core §6.9.2 rule 3).
+   */
+  | { kind: "executing" }
   | { kind: "reject"; code: "ACTION_ID_HASH_MISMATCH" | "REPLAY_DETECTED"; message: string };
 
 interface LedgerEntry {
@@ -147,7 +151,7 @@ export class DispatchLedger {
 
     // executing
     if (entry.envelopeHash === envelopeHash) {
-      return { kind: "pending" };
+      return { kind: "executing" };
     }
 
     return {

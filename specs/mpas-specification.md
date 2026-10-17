@@ -2,7 +2,8 @@
 
 ## Overview and Architecture
 
-**Status:** Draft v0.2
+**Status:** Draft v0.3
+**Revision v0.3:** Clarifies Section 6.9.2 rule 3. A submission of an Action that is already executing joins that dispatch and receives its outcome, rather than a `pending` response.
 **Intended venue:** MSF Economy and Trust Working Group / OMA3
 **Scope:** Multi-party approval and execution of high-impact digital actions across Web2, Web3, AI agents, cloud infrastructure, local applications, and future digital environments
 
@@ -1133,7 +1134,7 @@ Compute the Action Envelope hash and consult the dispatch ledger (Section 6.9):
 
 - If the `actionId` is **not in the ledger**: proceed with full stateless verification.
 - If the `actionId` is in the ledger with a **different** envelope hash: MUST reject.
-- If the `actionId` is in the ledger as **executing** with the same hash: MUST NOT transmit again; respond `pending`.
+- If the `actionId` is in the ledger as **executing** with the same hash: MUST NOT transmit again; the submission joins the dispatch in progress (Section 6.9.2 rule 3).
 - If the `actionId` is in the ledger as **resolved**: MUST reject as replay (any hash).
 
 The ledger entry itself is written later — only when the action is authorized for dispatch (Section 6.9.2), immediately before transmission.
@@ -1354,7 +1355,7 @@ For every submission the Verifier computes the Action Envelope hash and consults
    - Insufficient approvals → respond `additionalApprovalsRequired` and **record NOTHING**.
    - Authorized → perform fallible, side-effect-free preparation (credential resolution, target launch / connection establishment), then durably write `executing` BEFORE transmitting, then transmit.
 2. **`actionId` in the ledger, DIFFERENT envelope hash** — MUST reject; the ledger is unchanged.
-3. **`actionId` in the ledger, same hash, `executing`** — MUST NOT transmit again; respond `pending`.
+3. **`actionId` in the ledger, same hash, `executing`** — MUST NOT transmit again. The submission is the same Action, so it joins the dispatch in progress and receives that dispatch's outcome once it resolves. A binding MAY bound how long it holds a joined submission and then answer with its retryable timeout instead (the HTTP Profile's `503 timeout`); a retry joins again or, once the dispatch has resolved, is handled by rule 4. A Verifier MAY reject a joining submission that is not equivalent to the dispatched request under the binding's idempotency rules. (Core v0.2 required a `pending` response here.)
 4. **`actionId` in the ledger, `resolved`** — MUST reject as replay (any hash).
 
 **A. Dispatch sequencing.** All fallible, side-effect-free preparation — credential resolution, target process launch or connection establishment — MUST occur BEFORE the ledger write. A failure during preparation is a **stateless error**: nothing is recorded, no receipt is issued, and an identical retry simply retries. "Dispatch" is defined as transmission of the request; the `executing` entry is written immediately before transmission. (Consequence: "credential handle not found" and "target unavailable" are stateless rejections with no receipt and no ledger entry — they occur pre-ledger.)
@@ -1665,7 +1666,7 @@ Signature verification proves control of a key. It does not always prove that th
 
 ### 8.5 Replay, Expiration, and Reuse
 
-Replay protection is required for MPAS safety. The Action Envelope `actionId` must be globally unique or unique within its scope. Replay protection is governed by the dispatch ledger (Section 6.9): an `actionId` already present in the ledger is never dispatched again — a ledgered-with-different-hash or already-`resolved` submission MUST be rejected, and an identical `executing` retry receives `pending`. Verification itself is stateless and deterministic, so repeating a rejected submission simply repeats the verdict. A Verifier MUST retain ledger state for an `actionId` at least until `actionEnvelope.expiresAt` plus the deployment's timestamp tolerance. After receiving `additionalApprovalsRequired` or `rejected`, a conforming Proposer MUST NOT submit any subsequent Action Package that reuses that Action ID; this is a client construction rule rather than Verifier state. A replacement Action MUST have a new Action ID, new Action Envelope hash, fresh Proposer Approval, and fresh Signer Approvals. Previously collected Approvals never apply to the replacement Action because they bind to the earlier Action Envelope.
+Replay protection is required for MPAS safety. The Action Envelope `actionId` must be globally unique or unique within its scope. Replay protection is governed by the dispatch ledger (Section 6.9): an `actionId` already present in the ledger is never dispatched again — a ledgered-with-different-hash or already-`resolved` submission MUST be rejected, and an identical submission of an `executing` Action joins that dispatch and receives its outcome. Verification itself is stateless and deterministic, so repeating a rejected submission simply repeats the verdict. A Verifier MUST retain ledger state for an `actionId` at least until `actionEnvelope.expiresAt` plus the deployment's timestamp tolerance. After receiving `additionalApprovalsRequired` or `rejected`, a conforming Proposer MUST NOT submit any subsequent Action Package that reuses that Action ID; this is a client construction rule rather than Verifier state. A replacement Action MUST have a new Action ID, new Action Envelope hash, fresh Proposer Approval, and fresh Signer Approvals. Previously collected Approvals never apply to the replacement Action because they bind to the earlier Action Envelope.
 
 ### 8.6 Multiple Verifiers and Duplicate Execution
 
@@ -1703,7 +1704,7 @@ MPAS may interact with existing identity and authentication systems, including D
 
 ### 9.3 Signing and Signature Container Standards
 
-MPAS Core v0.2 defines JWS as the normative signature format. Implementations MUST follow JWT Best Current Practices (RFC 8725 / BCP 225) for JWS algorithm safety. Additional signature formats may be defined by future profiles.
+MPAS Core v0.3 defines JWS as the normative signature format. Implementations MUST follow JWT Best Current Practices (RFC 8725 / BCP 225) for JWS algorithm safety. Additional signature formats may be defined by future profiles.
 
 ### 9.4 Human Review and Clear Signing
 
@@ -1757,13 +1758,13 @@ Compatibility profiles must preserve the core MPAS security properties: canonica
 
 ### 9.10 Standards Alignment Summary
 
-The following table summarizes how MPAS Core v0.2 relates to adjacent standards:
+The following table summarizes how MPAS Core v0.3 relates to adjacent standards:
 
-| Standard                                  | Relationship to MPAS Core v0.2                                                                  |
+| Standard                                  | Relationship to MPAS Core v0.3                                                                  |
 | :---------------------------------------- | :---------------------------------------------------------------------------------------------- |
 | MCP (Model Context Protocol)              | First intended execution-profile target. Detailed MCP profile is separate/future.               |
 | OAuth RAR (RFC 9396) / GNAP (RFC 9635)    | Related authorization negotiation and structured authorization work. Not replaced by MPAS.      |
-| UCAN / ZCAP-LD                            | Relevant to future standing grants/delegation. Not Core v0.2 scope.                             |
+| UCAN / ZCAP-LD                            | Relevant to future standing grants/delegation. Not Core v0.3 scope.                             |
 | Verifiable Credentials / OMATrust         | Relevant to identity, role, key-binding, and trust attestations. Not mandatory Core dependency. |
 | Safe / ERC-4337 / EIP-1271 / EIP-712      | Future blockchain signature and execution profiles.                                             |
 | SCITT / Sigstore / in-toto / did:artifact | Relevant to future application plugin artifact identity, provenance, and audit.                 |
@@ -1810,7 +1811,7 @@ Future versions may define mappings to policy standards (OPA/Rego, Cedar, OpenFG
 
 ### 10.7 State Binding and Preconditions
 
-Future profiles may define hash-bound preconditions or state assertions, such as PR head SHA, object revision, ETag, account nonce, resource version, chain state root, or other state commitments that must hold at execution time. MPAS Core v0.2 does not define a generic precondition or state-root model.
+Future profiles may define hash-bound preconditions or state assertions, such as PR head SHA, object revision, ETag, account nonce, resource version, chain state root, or other state commitments that must hold at execution time. MPAS Core v0.3 does not define a generic precondition or state-root model.
 
 ### 10.8 Verifier-Bound Encrypted Action Packages
 
@@ -1912,7 +1913,7 @@ By standardizing how Actions are proposed, approved, verified, executed, and rec
 
 ### Design Principles
 
-1. **Strict Core v0.2 validation schema.** These schemas validate the MPAS Core v0.2 protocol objects. Core protocol objects are closed with `additionalProperties: false` unless the specification explicitly allows profile extension. The `target` sub-object is kept extensible because the spec explicitly states "Profiles MAY define additional `target.*` fields." All other Core objects are closed.
+1. **Strict Core v0.3 validation schema.** These schemas validate the MPAS Core v0.3 protocol objects. Core protocol objects are closed with `additionalProperties: false` unless the specification explicitly allows profile extension. The `target` sub-object is kept extensible because the spec explicitly states "Profiles MAY define additional `target.*` fields." All other Core objects are closed.
 
 2. **Shared definitions via `$defs`.** Common types (`Hash`, `DID`, `Timestamp`, `Decision`, `SignatureObject`, `Version`, `ActionId`) are defined once in the shared definitions schema and referenced throughout. This ensures consistency and simplifies maintenance.
 
@@ -1965,7 +1966,7 @@ The following structural constraints are derived from the entire specification �
 - `actionEnvelopeHash` required (Hash).
 - `decision` required — Core values: `propose`, `approve`, `reject`, `abstain`.
 - `signature` required (SignatureObject).
-- `createdAt` required — because v0.2 only defines Signature Approvals, and Signature Approvals MUST include `createdAt`.
+- `createdAt` required — because v0.3 only defines Signature Approvals, and Signature Approvals MUST include `createdAt`.
 - `expiresAt` optional (inherits `actionEnvelope.expiresAt` if absent).
 
 ### From Section 5.5.5 (Canonical Approval Payload)
@@ -1977,7 +1978,7 @@ The following structural constraints are derived from the entire specification �
 - `expiresAt` optional.
 
 ### From Section 5.5.5.2 (Signature Object)
-- `format` MUST be `"jws"` (only format in v0.2).
+- `format` MUST be `"jws"` (only format in v0.3).
 - `value` required — JWS Compact Serialization.
 - `payload` field MUST be omitted — enforced by `additionalProperties: false`.
 
@@ -2082,8 +2083,8 @@ All standalone schemas use `$ref` to definitions. The combined `mpas-base-0.2.sc
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://oma3.org/schemas/mpas/base/0.2/definitions.json",
-  "title": "MPAS Core v0.2 Shared Definitions",
-  "description": "Shared type definitions for MPAS Core v0.2 data structures.",
+  "title": "MPAS Core v0.3 Shared Definitions",
+  "description": "Shared type definitions for MPAS Core v0.3 data structures.",
   "$defs": {
     "DID": {
       "type": "string",
@@ -2118,16 +2119,16 @@ All standalone schemas use `$ref` to definitions. The combined `mpas-base-0.2.sc
     "Decision": {
       "type": "string",
       "enum": ["propose", "approve", "reject", "abstain"],
-      "description": "Core MPAS v0.2 decision values. Verifiers and Applications MAY define additional values under deployment-specific or profile-specific schemas."
+      "description": "Core MPAS v0.3 decision values. Verifiers and Applications MAY define additional values under deployment-specific or profile-specific schemas."
     },
     "SignatureObject": {
       "type": "object",
-      "description": "Approval signature object. Only JWS format is defined in v0.2.",
+      "description": "Approval signature object. Only JWS format is defined in v0.3.",
       "properties": {
         "format": {
           "type": "string",
           "const": "jws",
-          "description": "Signature format. MUST be 'jws' in Core v0.2."
+          "description": "Signature format. MUST be 'jws' in Core v0.3."
         },
         "value": {
           "type": "string",
@@ -2141,7 +2142,7 @@ All standalone schemas use `$ref` to definitions. The combined `mpas-base-0.2.sc
     "Version": {
       "type": "string",
       "const": "1",
-      "description": "MPAS protocol object version. MUST be '1' for Core v0.2."
+      "description": "MPAS protocol object version. MUST be '1' for Core v0.3."
     },
     "ActionId": {
       "type": "object",
@@ -2543,7 +2544,7 @@ All standalone schemas use `$ref` to definitions. The combined `mpas-base-0.2.sc
     "format": {
       "type": "string",
       "const": "jws",
-      "description": "Signature format. MUST be 'jws' in Core v0.2."
+      "description": "Signature format. MUST be 'jws' in Core v0.3."
     },
     "signature": {
       "type": "string",
@@ -2580,7 +2581,7 @@ All standalone schemas use `$ref` to definitions. The combined `mpas-base-0.2.sc
     "result": {
       "type": "string",
       "enum": ["executed", "rejected", "failed", "indeterminate", "expired", "cancelled", "revoked"],
-      "description": "Core v0.2 result values. `cancelled` is reserved for verifier-side signed cancellation (Section 6.9.6); `revoked` is reserved for standing authorization grants; neither is producible by dispatch in this version. Verifiers and Applications MAY define additional values under deployment-specific schemas."
+      "description": "Core v0.3 result values. `cancelled` is reserved for verifier-side signed cancellation (Section 6.9.6); `revoked` is reserved for standing authorization grants; neither is producible by dispatch in this version. Verifiers and Applications MAY define additional values under deployment-specific schemas."
     },
     "issuedAt": { "$ref": "definitions.json#/$defs/Timestamp" },
     "executionRef": {
@@ -2608,8 +2609,8 @@ All standalone schemas use `$ref` to definitions. The combined `mpas-base-0.2.sc
 | 7   | DID fields MUST be structurally valid DIDs                                                                                              | `pattern: "^did:[a-z0-9]+:[^\\s]+$"`                                  |
 | 8   | Timestamps MUST be RFC 3339 UTC ending in Z                                                                                             | `format: "date-time"` + `pattern: "Z$"`                               |
 | 9   | Approval MUST include `actionEnvelopeHash`, `decision`, `signature`, `createdAt`                                                        | `required` array                                                      |
-| 10  | Approval `decision` MUST be a Core v0.2 value                                                                                           | `enum: ["propose", "approve", "reject", "abstain"]`                   |
-| 11  | Signature `format` MUST be `"jws"` in v0.2                                                                                              | `const: "jws"`                                                        |
+| 10  | Approval `decision` MUST be a Core v0.3 value                                                                                           | `enum: ["propose", "approve", "reject", "abstain"]`                   |
+| 11  | Signature `format` MUST be `"jws"` in v0.3                                                                                              | `const: "jws"`                                                        |
 | 12  | JWS `value` MUST be JWS Compact Serialization                                                                                           | `pattern` for three dot-separated base64url segments                  |
 | 13  | Signature object MUST NOT have extra fields (no `payload`)                                                                              | `additionalProperties: false`                                         |
 | 14  | Approval Bundle `approvals` MUST be non-empty                                                                                           | `minItems: 1`                                                         |
@@ -2623,7 +2624,7 @@ All standalone schemas use `$ref` to definitions. The combined `mpas-base-0.2.sc
 | 22  | Execution Receipt `format` MUST be `"jws"`                                                                                              | `const: "jws"`                                                        |
 | 23  | Execution Receipt `signature` MUST be JWS Compact Serialization                                                                         | `pattern`                                                             |
 | 24  | Receipt Payload MUST include `issuerDid`, `actionEnvelopeHash`, `executionPayloadHash`, `result`, `issuedAt`                            | `required`                                                            |
-| 25  | Receipt Payload `result` MUST be a Core v0.2 value                                                                                      | `enum`                                                                |
+| 25  | Receipt Payload `result` MUST be a Core v0.3 value                                                                                      | `enum`                                                                |
 | 26  | Canonical Approval Payload `type` MUST be `"ApprovalPayload"`                                                                           | `const`                                                               |
 | 27  | `executionProfile.id` MUST be a DID                                                                                                     | `$ref` to DID definition                                              |
 | 28  | Core protocol objects MUST NOT contain undeclared fields                                                                                | `additionalProperties: false` (except `target`)                       |

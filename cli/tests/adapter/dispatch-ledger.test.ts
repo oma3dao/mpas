@@ -20,7 +20,7 @@ describe("DispatchLedger", () => {
     const second = { scope: "workspace B", value: "42" };
     ledger.authorizeDispatch(first, "hashA", expiresAt);
     expect(ledger.check(second, "hashB").kind).toBe("absent");
-    expect(ledger.check(first, "hashA").kind).toBe("pending");
+    expect(ledger.check(first, "hashA").kind).toBe("executing");
   });
 
   it("treats an unknown actionId as absent (full verification proceeds)", () => {
@@ -69,7 +69,7 @@ describe("DispatchLedger", () => {
     const second = ledger.authorizeDispatch(actionId, "hashA", expiresAt);
 
     expect(first.kind).toBe("absent"); // authorized to dispatch
-    expect(second.kind).toBe("pending"); // executing + same hash
+    expect(second.kind).toBe("executing"); // same hash: the duplicate joins (Core §6.9.2 rule 3)
   });
 
   it("rejects a different envelope hash once an actionId is in the ledger", () => {

@@ -280,6 +280,24 @@ sub-operations. Review and adjust:
 Do not change `applicationDid`, `policyProfileUrl`, or `executionProfile` —
 those are bound to the plugin and execution profile.
 
+### 5.4 Dispatch timeout
+
+`executionTarget.timeoutMs` (default 30000) is how long the adapter waits for
+the upstream MCP server to answer one tool call. When it expires, the adapter
+sends MCP's cancellation notification, stops waiting, and records the Action
+as `indeterminate`: the upstream may still have done the work, so the Action
+is never sent again and needs reconciling out of band.
+
+If the same Action is submitted again while it is executing, for example by
+a bridge retrying after a dropped connection, the duplicate joins the running
+call and receives its outcome; nothing is sent twice. The duplicate waits up
+to the dispatch timeout plus 5 seconds, which bridges' default 45-second
+request timeout covers. If you set `timeoutMs` well above 40 seconds, a
+duplicate can outlast that wait and receive `503 timeout` instead. A retry
+then joins again, but one that arrives just after the call finishes is
+rejected as a replay, and the bridge cannot recover the result. Keep
+`timeoutMs` within the bridges' request timeout where you can.
+
 ---
 
 ## 6. Store a credential

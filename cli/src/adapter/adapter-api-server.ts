@@ -1,6 +1,6 @@
 import Fastify, { type FastifyInstance, type FastifyReply, type RouteHandlerMethod } from "fastify";
 import type { JWK } from "jose";
-import { KeyManager, validateSignerIdentity, type MpasJwsSigner, parseActionRequest, parseActionRequestEnvelope, upstreamBindingMatches, upstreamDigestFromArgs, computeToolSurfaceHash, strictJsonParse, validateMcpPayloadStructure } from "@oma3/mpas";
+import { KeyManager, validateSignerIdentity, type MpasJwsSigner, parseActionRequest, parseActionRequestEnvelope, upstreamBindingMatches, upstreamDigestFromArgs, computeToolSurfaceHash, strictJsonParse, validateMcpPayloadStructure, computeIdempotencyFingerprint } from "@oma3/mpas";
 import { buildAuthorizationRequirements } from "../core/auth-requirements-builder.js";
 import { checkProposerAuthorization, evaluatePolicy, type PolicyConfig } from "../core/policy-engine.js";
 import { validatePayloadAgainstPlugin } from "../core/plugin-loader.js";
@@ -44,6 +44,28 @@ export interface HttpEndpointOptions {
   now?: number;
   traceLogger?: TraceLogger;
   toolSurfaceDrift?: Map<Did, ToolSurfaceDrift>;
+  /**
+   * Longest a duplicate submission waits for the dispatch it joined before
+   * the adapter answers `503 timeout`. Default: the execution target's
+   * dispatch timeout plus {@link JOIN_WAIT_MARGIN_MS}, so a duplicate normally
+   * receives the outcome in one response.
+   */
+  joinWaitMs?: number;
+}
+
+/** Dispatch timeout of an execution target that sets none (see dispatch/mcp-stdio.ts, dispatch/mcp-http.ts). */
+const DEFAULT_DISPATCH_TIMEOUT_MS = 30_000;
+/** Extra time a joined duplicate waits beyond the dispatch timeout, for receipt signing and persistence. */
+export const JOIN_WAIT_MARGIN_MS = 5_000;
+/** `Retry-After` sent with `503 timeout` when a joined dispatch is still executing. */
+export const STILL_EXECUTING_RETRY_AFTER_SECONDS = 2;
+
+/** A dispatch in progress in this process, which duplicate submissions join. */
+interface InFlightDispatch {
+  /** Idempotency fingerprint of the dispatched request; a joiner must match it. */
+  fingerprint: string;
+  outcome: Promise<ActionResponse>;
+  waitMs: number;
 }
 
 export function createAdapterApiServer(options: HttpEndpointOptions): FastifyInstance {
@@ -57,6 +79,48 @@ export function createAdapterApiServer(options: HttpEndpointOptions): FastifyIns
   const maxEnvelopeValidityMs = options.maxEnvelopeValidityMs ?? DEFAULT_MAX_ENVELOPE_VALIDITY_MS;
   const fixedNow = options.now;
   const trace = options.traceLogger ?? new TraceLogger("adapter");
+  const inFlight = new Map<string, InFlightDispatch>();
+
+  /**
+   * Join the dispatch in progress for this exact Action (Core §6.9.2 rule 3):
+   * never transmit again, and answer with that dispatch's outcome. The joiner
+   * must present the same request that was verified and dispatched, so it can
+   * only learn an outcome it was itself authorized to cause. If the outcome
+   * isn't ready within the bounded wait, answer `503 timeout` with
+   * `Retry-After`; a retry joins again or, once the dispatch has resolved,
+   * is rejected as a replay (rule 4).
+   *
+   * The dispatch is captured before anything is awaited, including `release`
+   * of the joiner's own unused resources: a dispatch that resolves meanwhile
+   * leaves `inFlight`, but the captured outcome still answers this joiner.
+   */
+  const joinDispatch = async (
+    reply: FastifyReply,
+    actionRequest: import("@oma3/mpas").ActionRequest,
+    pkg: ActionPackage,
+    envelopeHash: Hash,
+    release?: () => Promise<void>,
+  ) => {
+    const actionId = pkg.actionEnvelope.actionId.value;
+    const entry = inFlight.get(dispatchKey(pkg, envelopeHash));
+    const sameRequest = entry !== undefined && computeIdempotencyFingerprint(actionRequest) === entry.fingerprint;
+    await release?.();
+    if (!entry) {
+      trace.emit("dispatch", { actionId, result: "still_executing", reason: "not_in_this_process" });
+      return stillExecuting(reply, actionId);
+    }
+    if (!sameRequest) {
+      trace.emit("dispatch", { actionId, result: "conflict", reason: "join_request_differs" });
+      return mpasHttpError(reply, 409, "conflict", "A different request for this Action is already executing.");
+    }
+    trace.emit("dispatch", { actionId, result: "joined" });
+    const outcome = await settleWithin(entry.outcome, entry.waitMs);
+    if (outcome === undefined) {
+      trace.emit("dispatch", { actionId, result: "still_executing", reason: "join_wait_expired" });
+      return stillExecuting(reply, actionId);
+    }
+    return outcome;
+  };
 
   // Accept the canonical MPAS media type as well as application/json (profile MAY).
   // Both use strict parsing: duplicate JSON member names are malformed per MPAS
@@ -146,11 +210,10 @@ export function createAdapterApiServer(options: HttpEndpointOptions): FastifyIns
     }
 
     // Action Lifecycle: dispatch-ledger check. An actionId already in the ledger is
-    // never dispatched again.
+    // never dispatched again; a duplicate of an executing Action joins it.
     const ledgerCheck = ledger.check(pkg.actionEnvelope.actionId, envelopeHash.value);
-    if (ledgerCheck.kind === "pending") {
-      trace.emit("dispatch", { actionId, result: "pending", reason: "ledger_pending" });
-      return actionResponse(options, { result: "pending", actionEnvelopeHash: envelopeHash });
+    if (ledgerCheck.kind === "executing") {
+      return joinDispatch(reply, actionRequest, pkg, envelopeHash);
     }
     if (ledgerCheck.kind === "reject") {
       trace.emit("dispatch", { actionId, result: "rejected", reason: "ledger_reject", code: ledgerCheck.code });
@@ -364,59 +427,85 @@ export function createAdapterApiServer(options: HttpEndpointOptions): FastifyIns
     // `executing` immediately before transmission. Two submissions of the same
     // actionId can never both reach transmission.
     const authorize = ledger.authorizeDispatch(pkg.actionEnvelope.actionId, envelopeHash.value, pkg.actionEnvelope.expiresAt);
+    if (authorize.kind === "executing") {
+      return joinDispatch(reply, actionRequest, pkg, envelopeHash, () => prepared.session.close());
+    }
     if (authorize.kind !== "absent") {
       await prepared.session.close();
-      if (authorize.kind === "pending") {
-        trace.emit("dispatch", { actionId, result: "pending", reason: "ledger_race" });
-        return actionResponse(options, { result: "pending", actionEnvelopeHash: envelopeHash });
-      }
       trace.emit("dispatch", { actionId, result: "rejected", reason: "ledger_race", code: authorize.code });
       return rejection(pkg, options, envelopeHash, "rejected", authorize.code, authorize.message);
     }
 
-    // Structure was validated above; dispatch exactly what was signed.
-    const mcpOperation = payloadStructure.name;
-    const mcpArguments = payloadStructure.arguments;
-    trace.emit("mcp_call", {
-      actionId,
-      operation: mcpOperation,
-      targetType: loadedConfig.config.executionTarget.type,
-    });
+    const dispatchAndRecord = async (): Promise<ActionResponse> => {
+      // Structure was validated above; dispatch exactly what was signed.
+      const mcpOperation = payloadStructure.name;
+      const mcpArguments = payloadStructure.arguments;
+      trace.emit("mcp_call", {
+        actionId,
+        operation: mcpOperation,
+        targetType: loadedConfig.config.executionTarget.type,
+      });
 
-    let dispatchResult: McpDispatchResult;
+      let dispatchResult: McpDispatchResult;
+      try {
+        dispatchResult = await prepared.session.transmit(mcpOperation, mcpArguments);
+      } finally {
+        await prepared.session.close();
+      }
+
+      const classified = classifyDispatch(dispatchResult);
+      trace.emit("mcp_response", { actionId, result: classified.result, error: classified.error });
+
+      const receipt = await receiptFor(pkg, options, classified.result);
+
+      trace.emit("receipt_generated", { actionId, result: classified.result });
+      trace.emit("dispatch", { actionId, result: classified.result });
+
+      const response = actionResponse(options, {
+        result: classified.result,
+        actionEnvelopeHash: envelopeHash,
+        executionReceipt: receipt,
+        executionResult: classified.executionResult,
+        error: classified.error,
+        context: classified.error
+          ? diagnosticContext(
+              classified.error.code,
+              "tools/call",
+              loadedConfig.config.executionTarget.type,
+            )
+          : undefined,
+      });
+      // Persist the exact terminal response before returning it. The outbound
+      // Verifier worker can then recover the same bytes after a crash without
+      // changing the public rule that a resolved HTTP replay is rejected.
+      ledger.resolve(pkg.actionEnvelope.actionId, classified.result, response);
+      return response;
+    };
+
+    // Register the dispatch so duplicates join it rather than waiting blind.
+    let settleDispatch: { resolve(response: ActionResponse): void; reject(error: unknown): void } | undefined;
+    const outcome = new Promise<ActionResponse>((resolve, reject) => {
+      settleDispatch = { resolve, reject };
+    });
+    outcome.catch(() => {});
+    const key = dispatchKey(pkg, envelopeHash);
+    inFlight.set(key, {
+      fingerprint: computeIdempotencyFingerprint(actionRequest),
+      outcome,
+      waitMs: options.joinWaitMs ??
+        (loadedConfig.config.executionTarget.timeoutMs ?? DEFAULT_DISPATCH_TIMEOUT_MS) + JOIN_WAIT_MARGIN_MS,
+    });
     try {
-      dispatchResult = await prepared.session.transmit(mcpOperation, mcpArguments);
+      const response = await dispatchAndRecord();
+      settleDispatch!.resolve(response);
+      return response;
+    } catch (error) {
+      settleDispatch!.reject(error);
+      throw error;
     } finally {
-      await prepared.session.close();
+      inFlight.delete(key);
     }
 
-    const classified = classifyDispatch(dispatchResult);
-    trace.emit("mcp_response", { actionId, result: classified.result, error: classified.error });
-
-    const receipt = await receiptFor(pkg, options, classified.result);
-
-    trace.emit("receipt_generated", { actionId, result: classified.result });
-    trace.emit("dispatch", { actionId, result: classified.result });
-
-    const response = actionResponse(options, {
-      result: classified.result,
-      actionEnvelopeHash: envelopeHash,
-      executionReceipt: receipt,
-      executionResult: classified.executionResult,
-      error: classified.error,
-      context: classified.error
-        ? diagnosticContext(
-            classified.error.code,
-            "tools/call",
-            loadedConfig.config.executionTarget.type,
-          )
-        : undefined,
-    });
-    // Persist the exact terminal response before returning it. The outbound
-    // Verifier worker can then recover the same bytes after a crash without
-    // changing the public rule that a resolved HTTP replay is rejected.
-    ledger.resolve(pkg.actionEnvelope.actionId, classified.result, response);
-    return response;
   };
   app.post("/mpas/v1/verifier/action", actionHandler);
   app.post("/mpas/v1/action", actionHandler);
@@ -664,6 +753,45 @@ async function rejection(
     executionReceipt: await receiptFor(pkg, options, result),
     error: { code, message },
   });
+}
+
+/** Key of one Action Envelope's dispatch: the Action ID pair plus the envelope hash. */
+function dispatchKey(pkg: ActionPackage, envelopeHash: Hash): string {
+  const actionId = pkg.actionEnvelope.actionId;
+  return JSON.stringify([actionId.scope ?? null, actionId.value, envelopeHash.value]);
+}
+
+/** The promise's value if it fulfils within `ms`; undefined on timeout or rejection. */
+async function settleWithin<T>(promise: Promise<T>, ms: number): Promise<T | undefined> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<undefined>((resolve) => {
+    timer = setTimeout(() => resolve(undefined), ms);
+  });
+  try {
+    return await Promise.race([promise.catch(() => undefined), deadline]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * HTTP profile `503 timeout`: the joined dispatch hasn't resolved within the
+ * bounded wait. Not an ActionResponse; a retry with the same request joins
+ * again or, once resolved, is rejected as a replay.
+ */
+function stillExecuting(reply: FastifyReply, actionId: string) {
+  return reply
+    .code(503)
+    .header("retry-after", String(STILL_EXECUTING_RETRY_AFTER_SECONDS))
+    .send({
+      version: "1",
+      type: "MpasHttpError",
+      error: {
+        code: "timeout",
+        message: `Action ${actionId} is still executing at this Verifier. Retry the same request to keep waiting for its outcome.`,
+        retryable: true,
+      },
+    });
 }
 
 function mpasHttpError(reply: FastifyReply, status: number, code: string, message: string) {

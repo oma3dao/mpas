@@ -6,7 +6,7 @@
 
 **Depends on:** [MCP Tasks integration](../mcp-tasks/spec.md), [MPAS HTTP Profile](../../../specs/mpas-profile-http.md) §9.2
 
-**Normative output:** a revision of [MPAS MCP Proposer Bridge Profile](../../../specs/mpas-profile-mcp-proposer-bridge-client.md) §6 and §9 (proposed text in §8 below)
+**Normative output:** a revision of [MPAS MCP Proposer Bridge Profile](../../../specs/mpas-profile-mcp-proposer-bridge-client.md) §6 and §9 (proposed text in §8 below), and a clarification of [MPAS Core](../../../specs/mpas-specification.md) §6.9.2 rule 3 with the matching [HTTP Profile](../../../specs/mpas-profile-http.md) §6.5.1 text, both moving to v0.3 (§15)
 
 **Companion:** plan.md (to be written after this specification is reviewed)
 
@@ -724,8 +724,10 @@ Profile and docs:
 
 ## 12. Rollout
 
-1. Feature change: SDK §4–§7 and §14, the `bridge-generator` template, the
-   profile revision (§8.1, §8.2, §14.1) and the proposer skill (§14.4).
+1. Feature change: SDK §4–§7, §14 and §15, the `bridge-generator` template,
+   the profile revision (§8.1, §8.2, §14.1), the proposer skill (§14.4), the
+   Core and HTTP Profile v0.3 clarification and the reference credential
+   adapter's duplicate handling (§15).
 2. Release change, following the existing release process: publish
    `@oma3/mpas` 0.1.0-alpha.15 and adopt it across the repository. The CLI
    depends on the published SDK, so this change also gives
@@ -739,7 +741,9 @@ Profile and docs:
 Profile version 3 is a coordinated upgrade: bridges and the clients that
 declare `org.oma3/mpas` move together, because a version 3 bridge rejects
 version 2. Clients that use the conventional compatibility surface are
-unaffected. No Coordination Service or Verifier change is required.
+unaffected. No Coordination Service change is required. Credential adapters
+should be upgraded with the bridges (§15.5), but either side works with the
+other's previous release.
 
 Behavior change for users: an approved Action now executes only when the
 proposer's client checks on it. Release notes should say so.
@@ -761,6 +765,14 @@ proposer's client checks on it. Release notes should say so.
    settles within the budget. The Tasks extension lets the server choose
    between a direct result and a `CreateTaskResult` (§14.2).
 6. **Profile version:** `"3"`, matched exactly.
+7. **Executing duplicates:** join the dispatch in progress instead of
+   answering `pending`; Core rule 3 is clarified and Core moves to v0.3. No
+   new result values: `indeterminate` already covers an outcome nobody can
+   know (§15).
+8. **Terminal duplicates:** still rejected as a replay (Core rule 4
+   unchanged).
+9. **Joined wait:** the dispatch timeout plus 5 seconds, then `503 timeout`
+   with `Retry-After: 2`. Bridges wait 45 seconds by default.
 
 ---
 
@@ -872,3 +884,110 @@ Coordination polls are separate relationships. The guidance:
 - [ ] Shutdown tracks a submission that outlives the tool call.
 - [ ] Hints and status messages follow §14.3, including the retry-aligned
       hint and configuration overrides.
+
+---
+
+## 15. Duplicate Submissions of an Executing Action
+
+### 15.1 Problem
+
+A bridge sends the same Action again, with the same Action ID and idempotency
+key, when it doesn't know whether the first submission arrived: after a
+dropped connection, a request timeout, or a restart that interrupted a
+submission (§5.6). If the first submission is still executing, Core v0.2
+rule 3 required the Verifier to answer `pending`. The reference credential
+adapter did, and the bridge then re-checked on a backoff, each re-check
+another `pending` until the dispatch finished. Polling replaced an answer the
+Verifier already had: the duplicate is the same Action, so it can wait for
+the same outcome.
+
+### 15.2 Duplicate Rules
+
+| Ledger entry for the Action ID | Duplicate submission receives |
+|---|---|
+| None | Normal processing: verify, ledger, dispatch. |
+| `executing`, same envelope hash, equivalent request | Joins the dispatch and receives its `ActionResponse`, or `503 timeout` with `retryable: true` and `Retry-After: 2` if the dispatch hasn't resolved within the join wait. |
+| `executing`, same envelope hash, request differs under the idempotency rules (for example its `context`) | `409 conflict`. |
+| `executing` or `resolved`, different envelope hash | Rejected (unchanged). |
+| `resolved`, same envelope hash | Rejected as a replay (Core rule 4, unchanged). |
+
+A joined submission never causes a dispatch, and losing its connection has
+no effect on the dispatch. Only one `executing` event is logged. The reference
+adapter no longer returns `pending`. Joining is in-process: after an adapter
+restart there is nothing to join, and restart recovery already resolves an
+`executing` entry as `indeterminate` (Core §6.9).
+
+### 15.3 Bounded Wait and Timeouts
+
+| Timeout | Default | Where |
+|---|---|---|
+| Upstream dispatch (`executionTarget.timeoutMs`) | 30 s | Credential adapter |
+| Joined wait (`JOIN_WAIT_MARGIN_MS` added to the dispatch timeout) | dispatch timeout + 5 s | Credential adapter |
+| Action request (`DEFAULT_ACTION_REQUEST_TIMEOUT_MS`) | 45 s | SDK, for `ActionEndpointClient` and `ActionRelayClient`; the bridge's submission timeout follows it |
+| Claim lease (`DEFAULT_CLAIM_LEASE_MS`) | above the request timeout | SDK workflow engine |
+
+Ordered this way, a joined submission receives the outcome in one response:
+the dispatch resolves within its timeout, the join returns within 5 seconds
+after that, and the bridge is still waiting. On `503 timeout` the bridge
+records an `unreachable` attempt with the 2-second `Retry-After` and resends
+the same request when the Task is next checked (§5.2), which joins again.
+
+When the dispatch timeout expires, the adapter's MCP client sends
+`notifications/cancelled` for the call, stops waiting, and records the Action
+as `indeterminate`, as MCP's lifecycle guidance recommends for timed-out
+requests. The upstream may still have done the work, so the Action is never
+dispatched again and needs reconciling out of band.
+
+### 15.4 Trade-off
+
+An operator who sets a dispatch timeout above about 40 seconds makes the
+joined wait longer than a bridge's request timeout. A duplicate then times
+out at the bridge and is retried. A retry that arrives while the dispatch is
+executing joins again, but one that arrives just after it resolves is
+rejected as a replay, and the bridge can't recover the result; the Task ends
+with that rejection. The operator guide (`cli/guides/credential-adapter.md`
+§5.4) recommends keeping the dispatch timeout within the bridges' request
+timeout. Returning the stored outcome to a terminal duplicate would remove
+this case but changes Core rule 4, so it is out of scope.
+
+### 15.5 Specifications and Compatibility
+
+- **Core v0.3:** §6.9.2 rule 3 says an identical submission of an executing
+  Action joins the dispatch and receives its outcome; a binding may bound the
+  wait and answer with its retryable timeout, and may reject a joining
+  submission that isn't equivalent. §6.5 step 2a and the replay paragraph
+  match. Rule 4 is unchanged.
+- **HTTP Profile v0.3:** §6.5.1 replaces "Idempotency and `pending`" with the
+  duplicate rules above. Clients still accept `pending` from v0.2 Verifiers
+  and from asynchronous Verifiers, so the bridge keeps its legacy `pending`
+  handling (§5.2).
+- **MCP profiles:** cite Core v0.3. The proposer bridge profile version stays
+  `"3"`; this changes no MCP-visible behavior.
+- **Relay path:** a relayed duplicate joins the same way. The relay worker
+  already treats a 5xx from the adapter as retry-later.
+- **Mixed versions:** a new bridge against an old adapter receives `pending`
+  and re-checks; an old bridge against a new adapter receives the outcome, or
+  a retryable `503 timeout` that it already retries.
+
+### 15.6 Acceptance Criteria
+
+- [ ] A duplicate of an executing Action, sent directly or in a relay
+      `DeliveryEnvelope`, receives the same outcome as the original; the
+      upstream tool is called once and one `executing` event is logged.
+- [ ] A duplicate that passes the early ledger check and loses the dispatch
+      gate still receives the outcome when the dispatch resolves while it
+      closes its own unused upstream session: the joiner captures the
+      dispatch before awaiting anything.
+- [ ] A duplicate whose request differs (a different `context`) receives
+      `409 conflict`.
+- [ ] A duplicate still waiting at the join bound receives `503 timeout` with
+      `retryable: true` and `Retry-After: 2`; once the dispatch resolves, the
+      same request is rejected as a replay.
+- [ ] On dispatch timeout the upstream MCP server receives
+      `notifications/cancelled` and the Action is recorded as
+      `indeterminate`.
+- [ ] The default Action request timeout is 45 seconds, above the adapter's
+      default joined wait and below the claim lease.
+- [ ] A bridge that receives `503 timeout` with `Retry-After: 2` doesn't
+      resend before the delay, then resends with the same idempotency key
+      and resolves the Task.
