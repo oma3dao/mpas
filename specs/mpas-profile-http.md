@@ -1,6 +1,7 @@
 # MPAS HTTP Profile
 
-**Status:** Draft v0.2
+**Status:** Draft v0.3
+**Revision v0.3:** A duplicate of an executing Action joins the dispatch in progress and receives its outcome, or `503 timeout` after the Verifier's bounded wait, rather than `pending` (§6.5.1; MPAS Core v0.3 §6.9.2 rule 3).
 **Companion to:** MPAS Core Specification  
 **Scope:** HTTP transport profile for MPAS Action Package submission, Action Relay delivery, Signer approval requests, Coordination Service workflows, polling, and receipt distribution.
 **Normative keywords:** The key words **MUST**, **MUST NOT**, **REQUIRED**, **SHOULD**, **SHOULD NOT**, **RECOMMENDED**, **MAY**, and **OPTIONAL** are to be interpreted as described in RFC 2119 and RFC 8174.
@@ -774,7 +775,7 @@ Diagnostic content MUST be sanitized and resource-bounded. It MUST NOT contain c
 | `notSupported`                | The Verifier does not support the requested Application, operation, payload format, or verification mode.                                                 |
 | `malformed`                   | The Action Package is structurally invalid, not canonicalizable, or has invalid hash bindings.                                                            |
 | `policyUnavailable`           | The Verifier cannot determine applicable policy at this time.                                                                                             |
-| `pending`                     | The action has been accepted and is executing or awaiting execution. No second dispatch will occur for an identical retry.                                 |
+| `pending`                     | The action has been accepted and is executing or awaiting execution. No second dispatch will occur for an identical retry. Returned by an asynchronous Verifier to the original submission; a duplicate that joins a dispatch in progress receives the dispatch's outcome instead (§6.5.1). |
 | `failed`                      | Execution was attempted but failed definitively. An Execution Receipt SHOULD be present.                                                                  |
 | `indeterminate`               | Execution was dispatched but the outcome could not be confirmed. An Execution Receipt SHOULD be present.                                                  |
 | `expired`                     | The Action expired before execution. An Execution Receipt SHOULD be present.                                                                              |
@@ -788,7 +789,7 @@ The ActionResponse `result` values are a projection of the Core Action Lifecycle
 
 | Wire Result                   | Core Lifecycle Mapping                                                                                                        |
 | ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| `pending`                     | `executing` ledger entry — dispatch is in progress; an identical retry triggers no second dispatch.                          |
+| `pending`                     | `executing` ledger entry — dispatch is in progress and an asynchronous Verifier answers before it completes. An identical submission triggers no second dispatch; it joins the dispatch (below). |
 | `additionalApprovalsRequired` | Stateless response — no ledger entry; verification deterministically reports unmet policy. A conforming client retires this Action ID after receiving the response. |
 | `rejected`                    | Stateless response — no ledger entry; deterministic rejection (invalid signature, unknown application, disabled operation, resource restriction, policy denial). Repeatable. |
 | `expired`                     | Stateless response — no ledger entry; the envelope is past `expiresAt`. Repeatable.                                            |
@@ -799,7 +800,9 @@ The ActionResponse `result` values are a projection of the Core Action Lifecycle
 | `failed`                      | `resolved(failed)` ledger entry — terminal.                                                                                   |
 | `indeterminate`               | `resolved(indeterminate)` ledger entry — terminal. Callers MUST NOT auto-retry; reconciliation is out of band.               |
 
-**Idempotency and `pending`:** When a Verifier receives an identical retry (same `actionId`, same envelope hash) whose ledger entry is `executing`, it MUST return `pending` and MUST NOT transmit again. This ties the HTTP profile's Idempotency-Key guidance to the Core lifecycle: the idempotency guarantee is that an `executing` action cannot be double-dispatched. A submission with the same `actionId` but a different envelope hash, or against a `resolved` entry, MUST be rejected.
+**Duplicates of an executing Action:** When a Verifier receives a submission with the same `actionId` and envelope hash as an `executing` ledger entry, it MUST NOT transmit again. The submission is the same Action: it joins the dispatch in progress and receives the same `ActionResponse` when the dispatch resolves (MPAS Core v0.3 §6.9.2 rule 3). The Verifier bounds how long it holds a joined submission. If the dispatch has not resolved by then, it returns `503 timeout` with `retryable: true` and SHOULD include `Retry-After`; this is not an `ActionResponse`. A retry with the same request joins again or, once the dispatch has resolved, is rejected as a replay. A Verifier SHOULD make that bound cover its dispatch timeout, so a joined submission normally receives the outcome in one response, and a client's request timeout SHOULD exceed the bound. A Verifier MAY reject with `409 conflict` a joining submission that is not equivalent to the dispatched request (§4.5); a joiner then learns only an outcome it presented the same authorized request for. Losing a joined connection never causes a dispatch. A submission with the same `actionId` but a different envelope hash, or against a `resolved` entry, MUST be rejected.
+
+Profile v0.2 required `pending` for this case. Clients SHOULD still accept `pending` from Verifiers that implement v0.2 or answer asynchronously, and re-check later with the same request.
 
 Before an `ActionResponse` is received, a transport retry or retryable `503 timeout` repeats the exact request with the same Action ID and idempotency key. After receiving `additionalApprovalsRequired` or `rejected`, a conforming client MUST NOT submit any subsequent Action Package that reuses that Action ID. For additional approvals it constructs a new Action, not a retry, and uses a new idempotency key.
 
@@ -1151,7 +1154,7 @@ Coordination Service endpoints:
 
 Implementations **MAY** expose unauthenticated relay and coordination health endpoints for deployment probes. These are not protocol endpoints.
 
-A separate receipt endpoint is not required in v0.2. A Verifier returns a receipt in `ActionResponse`; a client may report the result to its workflow service under deployment-specific behavior.
+A separate receipt endpoint is not required in v0.3. A Verifier returns a receipt in `ActionResponse`; a client may report the result to its workflow service under deployment-specific behavior.
 
 For migration, a Coordination Service **SHOULD** temporarily accept `POST /mpas/v1/coordination/action` as a deprecated alias of `POST /mpas/v1/coordination/workflow`. The alias accepts the same request, returns the same response, and enters the same DID-scoped idempotency domain; it does not create a second workflow or mutation namespace. New clients **MUST** use `/mpas/v1/coordination/workflow`.
 

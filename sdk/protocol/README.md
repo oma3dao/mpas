@@ -67,7 +67,7 @@ the published alpha API. New integrations should use the canonical names above.
 - `KeyManager` — load Ed25519 or P-256 keys, preserve `did:jwk`, sign/verify JWS and raw bytes
 - `deriveDidJwk`, `didJwkToJwk`, `didJwkToKid`, `generateEd25519Key`, `generateP256Key`, `generateMpasKey` — DID and key utilities
 
-### Proposer Bridge Runtime (`lib/bridge-runtime.ts`, `lib/mcp-protocol-server.ts`, `lib/mcp-tasks-server.ts`, `lib/mcp-compatibility-server.ts`, `lib/workflow-engine.ts`, `lib/workflow-store.ts`)
+### Proposer Bridge Runtime (`lib/bridge-runtime.ts`, `lib/mcp-protocol-server.ts`, `lib/mcp-tasks-server.ts`, `lib/mcp-compatibility-server.ts`, `lib/workflow-engine.ts`, `lib/workflow-store.ts`, `lib/stdio-lifecycle.ts`)
 
 Build asynchronous proposer bridges with wire-level detection for MCP 2026-07-28
 Tasks clients and conventional MCP clients:
@@ -75,13 +75,18 @@ Tasks clients and conventional MCP clients:
 - `MpasProtocolServer` — single transport owner that locks each connection to Tasks or compatibility mode from its handshake
 - `MpasTasksServer` — MCP discovery, exact upstream tools, and official `tasks/*` operations
 - `MpasCompatibilityServer` — conventional initialization, deferred results, and `mpas_wait_for_action_result`
-- `ProposerBridge` — creates Actions and maps one durable MPAS workflow to either client presentation
-- `BridgeWorkflowEngine` — background workflow: initial Action submission, replacement-Action coordination, completed Action submission, and restart recovery
+- `ProposerBridge` — creates Actions, maps one durable MPAS workflow to either client presentation, and advances it when a client checks the Task
+- `BridgeWorkflowEngine` — workflow steps: initial Action submission, replacement-Action coordination, completed Action submission, durable retry backoff, and restart recovery
 - `WorkflowStore`, `MemoryWorkflowStore` — durable-store contract and in-memory reference (no database dependency)
+- `bindStdioShutdown` — exits a stdio bridge when its MCP client goes away
 
 A proposer bridge is dedicated to one MCP client or agent identity and holds
 one private key for one proposer DID. Independent clients require independent
 bridge instances, keys, DIDs, and workflow authorization contexts.
+
+The bridge implements MPAS proposer-bridge profile version `"3"`
+(`MPAS_MCP_PROFILE_VERSION`). See [Alpha 15 Proposer Bridge
+Changes](#alpha-15-proposer-bridge-changes).
 
 ### Bridge Generation
 
@@ -142,6 +147,83 @@ implementations must be updated before adopting this release:
 - Reject duplicate Action IDs and reject `taskId === actionId`. Retries of one
   Action must reuse its stored idempotency key; a replacement Action must use a
   new key.
+
+## Alpha 15 Proposer Bridge Changes
+
+Alpha 15 moves proposer bridges to MPAS proposer-bridge profile version `"3"`
+and changes when a bridge does remote work. The API changes are additive, and
+`WorkflowStore` implementations need no changes. Bridges and the clients that
+declare `org.oma3/mpas` must upgrade together. The profile version doesn't
+apply to clients that use the conventional compatibility surface.
+
+- **Profile version 3.** The bridge advertises and requires `org.oma3/mpas`
+  version `"3"`, matched exactly. Any other declared version is rejected with
+  JSON-RPC `-32021`, whose `data.requiredCapabilities` names `"3"`. Task
+  metadata carries `version: "3"`.
+- **No background polling.** The bridge polls the Coordination Service and
+  retries failed submissions only when a client checks a Task, with
+  `tasks/get` or `mpas_wait_for_action_result`. Polls are single-flight and at
+  least `coordinationRefreshMinIntervalMs` apart (default 10 seconds, minimum
+  5), and one poll serves every pending Task of the proposer. An approved
+  Action executes when the proposer's client next checks it. The
+  `pollIntervalMs` option is deprecated and ignored.
+- **Prompt results.** `tools/call` waits up to one second
+  (`TOOL_CALL_FAST_PATH_MS`). An Action that finishes in time returns its
+  native result, or a completed error result, directly. Otherwise a Tasks
+  client receives a `CreateTaskResult`, and the submission continues under the
+  same Task ID and idempotency key.
+- **Polling hints.** A Task's `pollIntervalMs` is 60 seconds while approvals
+  are awaited (`taskPollIntervalMs`) and 2 seconds while the bridge has work to
+  do (`processingTaskPollIntervalMs`), never shorter than the time until a
+  scheduled retry.
+- **Durable retries.** A failed submission, or one with an unknown outcome,
+  records when it may be retried (exponential backoff with full jitter,
+  honoring `Retry-After`) in the `WorkflowStore`, so a restarted bridge
+  doesn't retry early. A retry resends the identical request with the same
+  idempotency key. An HTTP failure is retryable when its `MpasHttpError` body
+  says `retryable: true`, or, without that flag, for status 408, 425, 429 and
+  5xx.
+- **Shutdown.** `ProposerBridge.shutdown(graceMs, { abortInFlight })` stops
+  new remote work and lets requests already sent finish for up to
+  `shutdownGraceMs` (default 5 seconds). It then calls `abortInFlight` and
+  waits briefly for the aborted calls to be recorded. An aborted call is
+  recorded as an unknown outcome; after a restart it is resent with the same
+  idempotency key when its Task is next checked. Unfinished Tasks keep their
+  IDs. Bridge calls made once shutdown has begun throw
+  `BridgeShuttingDownError`.
+- **Request timeout.** `ActionEndpointClient` and `ActionRelayClient` default
+  to 45 seconds (`DEFAULT_ACTION_REQUEST_TIMEOUT_MS`). A Verifier that receives
+  a duplicate of an Action it is still executing holds the duplicate until the
+  dispatch resolves, then returns the same outcome (MPAS Core v0.3 §6.9.2
+  rule 3); the default covers the reference credential adapter's wait of its
+  30-second dispatch timeout plus 5 seconds.
+
+A stdio bridge binds `bindStdioShutdown` so it exits when stdin ends or
+closes, when writing to stdout fails (for example `EPIPE`), or on SIGTERM,
+SIGINT or SIGHUP. Bind it and connect the transport before awaiting startup
+work that depends on the network, so the end of stdin is seen from the start:
+
+```typescript
+import { bindStdioShutdown, DEFAULT_SHUTDOWN_GRACE_MS, type ProposerBridge } from "@oma3/mpas";
+
+declare const bridge: ProposerBridge;
+declare const http: AbortController; // aborts the bridge's HTTP clients
+declare const store: { close(): void };
+declare function connectStdioTransport(): Promise<void>;
+
+bindStdioShutdown({
+  shutdown: async () => {
+    await bridge.shutdown(DEFAULT_SHUTDOWN_GRACE_MS, { abortInFlight: () => http.abort() });
+    store.close();
+  },
+  forceExitAfterMs: DEFAULT_SHUTDOWN_GRACE_MS + 1_000,
+});
+await connectStdioTransport();
+await bridge.start();
+```
+
+The process exits with code 0 once `shutdown` resolves, or 1 if it rejects or
+outlasts `forceExitAfterMs`.
 
 ## Routing and Delivery
 

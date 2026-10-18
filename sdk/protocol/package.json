@@ -1,7 +1,7 @@
 {
   "name": "@oma3/mpas",
-  "version": "0.1.0-alpha.14",
-  "description": "MPAS protocol SDK \u2014 types, verification, policy evaluation, receipts, and protocol primitives",
+  "version": "0.1.0-alpha.15",
+  "description": "MPAS protocol SDK — types, verification, policy evaluation, receipts, and protocol primitives",
   "license": "Apache-2.0",
   "type": "module",
   "main": "./dist/index.js",
@@ -158,7 +158,7 @@
     "@types/node": "^22.15.29",
     "tsx": "^4.20.3",
     "typescript": "^5.8.3",
-    "vitest": "^3.2.2"
+    "vitest": "5.0.3"
   },
   "engines": {
     "node": ">=22"

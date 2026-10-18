@@ -12,9 +12,13 @@ import type {
   CoordinationPollResponse,
   Did,
 } from "../types/mpas.js";
+import { ActionEndpointClientError, DEFAULT_ACTION_REQUEST_TIMEOUT_MS } from "./action-endpoint-client.js";
+import { ActionRelayResponseError } from "./action-relay-client.js";
+import { AdapterRequestError, AdapterResponseError } from "./adapter-client.js";
 import { CoordinationResponseError, MpasAuthError } from "./coordination-client.js";
-import { computeIdempotencyFingerprint } from "./routing.js";
+import { computeIdempotencyFingerprint, RoutingValidationError } from "./routing.js";
 import { computeJsonHash } from "../utils/hash.js";
+import { backoffDelayMs, FAILURE_BACKOFF, PENDING_BACKOFF, retryAfterMsOf } from "./retry-backoff.js";
 import {
   TERMINAL_WORKFLOW_STATES,
   type CreateWorkflowInput,
@@ -108,12 +112,24 @@ export interface BridgeWorkflowEngineOptions {
    */
   claimLeaseMs?: number;
   now?: () => number;
+  /** Jitter source for retry backoff, in [0, 1). Default `Math.random`. */
+  random?: () => number;
 }
 
 /** Default Action/Coordination HTTP wait. Keep aligned with ActionEndpointClient. */
-export const DEFAULT_SUBMISSION_TIMEOUT_MS = 30_000;
+export const DEFAULT_SUBMISSION_TIMEOUT_MS = DEFAULT_ACTION_REQUEST_TIMEOUT_MS;
 /** Default worker claim lease. Must exceed {@link DEFAULT_SUBMISSION_TIMEOUT_MS}. */
 export const DEFAULT_CLAIM_LEASE_MS = 60_000;
+
+export interface ProposeOptions {
+  /**
+   * Called as soon as the Action is known to be deferred, before any further
+   * remote call: the Verifier required approvals, the replacement Action is
+   * persisted, and Coordination creation is about to start. Lets a caller
+   * return a Task without waiting for that creation.
+   */
+  onDeferred?: () => void;
+}
 
 export type ProposeResult =
   | { kind: "settled"; record: WorkflowRecord; actionResponse: ActionResponse }
@@ -121,6 +137,35 @@ export type ProposeResult =
 
 /** Ledger rejection codes that mean "already dispatched; outcome not retrievable". */
 const REPLAY_CODES = new Set(["REPLAY_DETECTED", "ACTION_ID_HASH_MISMATCH"]);
+
+/** Remote call recorded in a workflow's durable attempt log. */
+type AttemptStage = "initial" | "coordination" | "completed";
+
+/**
+ * Outcome of one remote call (feature reduce-polling §5.2):
+ * - `responded`: a definitive response was received and persisted;
+ * - `pending`: the Verifier answered `pending` (legacy); re-check later;
+ * - `unreachable`: a transient failure or unknown outcome; retry later;
+ * - `interrupted`: shutdown cut the call short; outcome unknown, no backoff;
+ * - `rejected`: a permanent failure; the workflow stops.
+ */
+type AttemptOutcome = "responded" | "pending" | "unreachable" | "interrupted" | "rejected";
+
+/**
+ * One durable attempt-log entry. `notBefore` is the earliest time the call may
+ * be retried, so backoff survives a restart.
+ */
+interface AttemptRecord {
+  stage: AttemptStage;
+  outcome: AttemptOutcome;
+  at: string;
+  message?: string;
+  retryAfterMs?: number;
+  consecutive?: number;
+  notBefore?: string;
+}
+
+const ATTEMPT_OUTCOMES: ReadonlySet<string> = new Set(["responded", "pending", "unreachable", "interrupted", "rejected"]);
 
 type SubmissionPhase = "initial" | "completed";
 
@@ -142,7 +187,14 @@ export class BridgeWorkflowEngine {
   private readonly workerId: string;
   private readonly claimLeaseMs: number;
   private readonly now: () => number;
+  private readonly random: () => number;
   private readonly waiters = new Map<string, Set<(record: WorkflowRecord) => void>>();
+  /** One observation-driven operation per Task (see {@link advanceTask}). */
+  private readonly advancing = new Map<string, Promise<void>>();
+  /** Set by {@link stop}: no new remote call starts after shutdown begins. */
+  private stopped = false;
+  /** Set by {@link markInFlightAborted}: shutdown is aborting calls still in flight. */
+  private inFlightAborted = false;
   /**
    * Per-Task outbound lanes. Each Task ID serializes that Task's initial,
    * replacement, Coordination, and completed submissions so the request
@@ -191,6 +243,7 @@ export class BridgeWorkflowEngine {
       );
     }
     this.now = options.now ?? (() => Date.now());
+    this.random = options.random ?? Math.random;
   }
 
   /**
@@ -198,7 +251,7 @@ export class BridgeWorkflowEngine {
    * workflow before the first adapter submission (§9.2 commit point 1), so a
    * deferred result can be returned even when the adapter is unreachable.
    */
-  async propose(input: CreateWorkflowInput): Promise<ProposeResult> {
+  async propose(input: CreateWorkflowInput, options: ProposeOptions = {}): Promise<ProposeResult> {
     if (proposerDidOfPackage(input.actionPackage) !== this.proposerDid) {
       throw new Error("Action Package proposer DID does not match this bridge identity.");
     }
@@ -206,52 +259,177 @@ export class BridgeWorkflowEngine {
       throw new Error("Task ID and Action ID must be distinct.");
     }
     const record = this.store.createWorkflow(input);
-    return this.dispatchOutbound(record.taskId, async () => {
+    const result = await this.dispatchOutbound(record.taskId, async () => {
       const current = this.mustGet(record.taskId);
       if (current.state !== "created") {
         return this.resultFromRecord(current);
       }
-      if (!this.store.claimWorkflow(current.taskId, this.workerId, this.claimLeaseMs)) {
-        return { kind: "deferred", record: this.mustGet(current.taskId) };
+      if (this.stopped) {
+        // Recorded but never sent; resumes on a later observation.
+        return { kind: "deferred", record: current } as const;
       }
-      return this.submitInitial(this.mustGet(current.taskId));
+      if (!this.store.claimWorkflow(current.taskId, this.workerId, this.claimLeaseMs)) {
+        return { kind: "deferred", record: this.mustGet(current.taskId) } as const;
+      }
+      return this.submitInitial(this.mustGet(current.taskId), options.onDeferred);
     });
+    return result;
   }
 
   /**
-   * One background tick: expiry sweep, coordination poll, and advancement of
-   * every workflow this worker can claim. Expiry and Coordination updates
-   * join each Task's outbound lane so they cannot terminate a submit that
-   * is still in flight.
+   * Begin shutdown: no new remote call starts after this (feature
+   * reduce-polling §6.2). Calls already sent may finish and persist their
+   * outcomes; a late Coordination response may still update durable state,
+   * but starts no Verifier submission.
+   */
+  stop(): void {
+    this.stopped = true;
+  }
+
+  /**
+   * Note that shutdown is about to abort the calls still in flight, once its
+   * grace period has expired. From then on, a call that fails without an HTTP
+   * response is recorded as `interrupted`. A response received at any time,
+   * including during the grace period, keeps its normal classification and
+   * backoff, so a `503` with `Retry-After` keeps its delay.
+   */
+  markInFlightAborted(): void {
+    this.inFlightAborted = true;
+  }
+
+  /** Whether this workflow's last remote call failed or was interrupted and awaits a retry. */
+  awaitingRetry(record: WorkflowRecord): boolean {
+    const outcome = lastAttempt(record)?.outcome;
+    return outcome === "unreachable" || outcome === "interrupted";
+  }
+
+  /**
+   * Earliest time this workflow's next remote call may run, from its durable
+   * attempt log, or undefined if it may run now.
+   */
+  retryNotBefore(record: WorkflowRecord): number | undefined {
+    const last = lastAttempt(record);
+    if (!last || (last.outcome !== "unreachable" && last.outcome !== "pending") || last.notBefore === undefined) {
+      return undefined;
+    }
+    const notBefore = Date.parse(last.notBefore);
+    return Number.isFinite(notBefore) ? notBefore : undefined;
+  }
+
+  /**
+   * One unthrottled tick: expiry sweep, Coordination poll, and advancement of
+   * every workflow this worker can claim, ignoring backoff.
+   *
+   * @deprecated Bridges progress on observation through
+   * {@link refreshCoordination} and {@link advanceTask}.
    */
   async pollOnce(): Promise<void> {
     const expiry = this.sweepExpired();
-
-    const hasCoordinationWork = this.store
-      .listRecoverableWorkflows()
-      .some((record) => record.state === "awaitingApprovals");
-    if (hasCoordinationWork) {
-      try {
-        const poll = await this.coordinationService.pollWork();
-        for (const update of poll.actionUpdates) {
-          await this.applyUpdate(update);
-        }
-      } catch (error) {
-        // Coordination updates are one input to the engine. Independent
-        // Action retries must still run when this input is unavailable.
-        if (permanentCoordinationFailure(error)) {
-          const resolution = coordinationFailureResolution(error);
-          for (const record of this.store.listRecoverableWorkflows()) {
-            if (record.state === "awaitingApprovals" && proposerDidOf(record) === this.proposerDid) {
-              this.resolveUnresolvable(record.taskId, resolution.errorCode, resolution.errorMessage);
-            }
-          }
-        }
-      }
+    try {
+      await this.refreshCoordination({ advanceReady: false });
+    } catch {
+      // Coordination updates are one input to the engine. Independent
+      // Action retries must still run when this input is unavailable.
     }
-
     await this.advanceClaimable();
     await expiry;
+  }
+
+  /**
+   * Poll Coordination once and apply its updates (feature reduce-polling §4).
+   * Does nothing unless this proposer has a workflow awaiting approvals.
+   * Permanent failures resolve those workflows; retryable failures reject so
+   * the caller can back off. Coordination updates join each Task's outbound
+   * lane so they cannot terminate a submit that is still in flight.
+   *
+   * Directly dependent work follows: each workflow this poll newly moved from
+   * `awaitingApprovals` to `readyForSubmission` has its completed package
+   * submitted, whichever Task was observed. With `advanceReady: false` the
+   * caller does that instead, using the returned Task IDs. After {@link stop},
+   * no poll starts and no submission follows.
+   */
+  async refreshCoordination(options: { advanceReady?: boolean } = {}): Promise<string[]> {
+    if (this.stopped || !this.hasAwaitingApprovals()) {
+      return [];
+    }
+    let poll: CoordinationPollResponse;
+    try {
+      poll = await this.coordinationService.pollWork();
+    } catch (error) {
+      if (!permanentCoordinationFailure(error)) {
+        throw error;
+      }
+      const resolution = coordinationFailureResolution(error);
+      for (const record of this.store.listRecoverableWorkflows()) {
+        if (record.state === "awaitingApprovals" && proposerDidOf(record) === this.proposerDid) {
+          this.resolveUnresolvable(record.taskId, resolution.errorCode, resolution.errorMessage);
+        }
+      }
+      return [];
+    }
+    // Only a transition this poll applied, from awaitingApprovals to
+    // readyForSubmission, is newly approved work. A repeated ready update for
+    // a workflow whose submission already failed is not, and is retried only
+    // when that Task itself is observed.
+    const ready: string[] = [];
+    for (const update of poll.actionUpdates) {
+      const applied = await this.applyUpdate(update);
+      if (applied?.newlyReady) ready.push(applied.taskId);
+    }
+    if (options.advanceReady !== false) {
+      await Promise.all(ready.map((taskId) => this.advanceTask(taskId)));
+    }
+    return ready;
+  }
+
+  /**
+   * Run one observed Task's next remote step if it is due (feature
+   * reduce-polling §5): a failed submission's retry, a Verifier `pending`
+   * re-check, or a completed package's submission. At most one such
+   * operation per Task is in flight; another observation joins it rather
+   * than queuing a second attempt. Eligibility is checked when the operation
+   * runs, inside the Task's lane, and its outcome is recorded before the lane
+   * is released.
+   */
+  advanceTask(taskId: string): Promise<void> {
+    const running = this.advancing.get(taskId);
+    if (running) return running;
+    const operation = this.dispatchClaimable(taskId, true);
+    const tracked = operation.finally(() => {
+      if (this.advancing.get(taskId) === tracked) this.advancing.delete(taskId);
+    });
+    this.advancing.set(taskId, tracked);
+    return tracked;
+  }
+
+  /**
+   * Resolve an overdue workflow as expired now, so a reader never sees it as
+   * still working. Leaves a workflow alone while an operation holds its lane.
+   */
+  expireIfOverdue(taskId: string): void {
+    if (this.outboundTails.has(taskId)) return;
+    const current = this.store.getWorkflow(taskId);
+    if (!current || isTerminal(current) || proposerDidOf(current) !== this.proposerDid) return;
+    if (Date.parse(current.expiresAt) >= this.now()) return;
+    if (this.store.claimWorkflow(taskId, this.workerId, this.claimLeaseMs)) {
+      this.resolveUnresolvable(
+        taskId,
+        "ACTION_EXPIRED_BEFORE_RESOLUTION",
+        "The Action Envelope expired without a terminal Verifier response.",
+      );
+    }
+  }
+
+  /** Local cleanup: resolve every overdue workflow as expired. Never contacts a remote service. */
+  expireOverdue(): Promise<void> {
+    return this.sweepExpired();
+  }
+
+  /** Whether this proposer has a workflow that Coordination could advance. */
+  hasAwaitingApprovals(): boolean {
+    return this.store
+      .listRecoverableWorkflows()
+      .some((record) => record.state === "awaitingApprovals" && proposerDidOf(record) === this.proposerDid);
   }
 
   /** Cooperatively cancel a visible workflow without advancing it. */
@@ -282,7 +460,13 @@ export class BridgeWorkflowEngine {
     return cancelled;
   }
 
-  /** Startup reconciliation (feature spec §9.4). Idempotent. */
+  /**
+   * Full recovery pass: expire overdue workflows and immediately resume every
+   * interrupted submission, ignoring backoff. Idempotent. The proposer bridge
+   * runtime does not call this at startup; it expires locally with
+   * {@link expireOverdue} and resumes each Task on observation
+   * (feature reduce-polling §6.3).
+   */
   async reconcile(): Promise<void> {
     await this.sweepExpired();
     await this.advanceClaimable();
@@ -321,12 +505,24 @@ export class BridgeWorkflowEngine {
     });
   }
 
-  private async submitInitial(record: WorkflowRecord): Promise<ProposeResult> {
+  /** Resolve every pending {@link waitForResult} with its current record, for shutdown. */
+  releaseWaiters(): void {
+    for (const [taskId, waiters] of this.waiters) {
+      const record = this.store.getWorkflow(taskId);
+      if (!record) continue;
+      this.waiters.delete(taskId);
+      for (const wake of waiters) {
+        wake(record);
+      }
+    }
+  }
+
+  private async submitInitial(record: WorkflowRecord, onDeferred?: () => void): Promise<ProposeResult> {
     const current = this.store.getWorkflow(record.taskId);
     if (!current || proposerDidOf(current) !== this.proposerDid || isTerminal(current) || current.state !== "created") {
       return this.resultFromRecord(current ?? record);
     }
-    if (!this.holdClaim(current.taskId)) {
+    if (this.stopped || !this.holdClaim(current.taskId)) {
       return this.resultFromRecord(this.mustGet(current.taskId));
     }
 
@@ -338,7 +534,7 @@ export class BridgeWorkflowEngine {
       }
       response = await this.actionEndpoint.submitActionRequest(request);
     } catch (error) {
-      this.store.saveAdapterAttempt(record.taskId, attempt("initial", "unreachable", error));
+      this.recordFailure(record.taskId, "initial", error, "ACTION_SUBMISSION_REJECTED");
       return { kind: "deferred", record: this.mustGet(record.taskId) };
     }
 
@@ -348,14 +544,17 @@ export class BridgeWorkflowEngine {
 
     switch (response.result) {
       case "additionalApprovalsRequired": {
+        this.recordAttempt(record.taskId, "initial", "responded");
         this.store.saveLastActionResponse(record.taskId, response);
-        return this.replaceAndSubmitToCoordination(this.mustGet(record.taskId), "created", response);
+        return this.replaceAndSubmitToCoordination(this.mustGet(record.taskId), "created", response, onDeferred);
       }
       case "pending":
+        this.recordAttempt(record.taskId, "initial", "pending");
         this.store.saveLastActionResponse(record.taskId, response);
         this.store.compareAndSetState(record.taskId, "created", "awaitingVerifierResult");
         return { kind: "deferred", record: this.mustGet(record.taskId) };
       default:
+        this.recordAttempt(record.taskId, "initial", "responded");
         return this.settle(record.taskId, response);
     }
   }
@@ -364,6 +563,7 @@ export class BridgeWorkflowEngine {
     record: WorkflowRecord,
     fromState: "created" | "submittingToVerifier",
     response: ActionResponse,
+    onDeferred?: () => void,
   ): Promise<ProposeResult> {
     const verifierRequirements = response.authorizationRequirements;
     if (verifierRequirements?.result !== "additionalApprovalsRequired") {
@@ -419,11 +619,16 @@ export class BridgeWorkflowEngine {
       return { kind: "deferred", record: this.mustGet(record.taskId) };
     }
 
+    // The replacement Action is persisted and the outcome is known to be
+    // deferred; Coordination creation follows.
+    onDeferred?.();
     return this.submitToCoordination(this.mustGet(record.taskId));
   }
 
   private async submitToCoordination(record: WorkflowRecord): Promise<ProposeResult> {
-    if (!this.holdClaim(record.taskId)) {
+    if (this.stopped || !this.holdClaim(record.taskId)) {
+      // After stop: the Verifier's response is persisted, the Coordination
+      // workflow is not yet created, and creation resumes on observation.
       return this.resultFromRecord(this.mustGet(record.taskId));
     }
     try {
@@ -441,27 +646,34 @@ export class BridgeWorkflowEngine {
         }
         return { kind: "deferred", record: this.mustGet(record.taskId) };
       }
+      this.recordAttempt(record.taskId, "coordination", "responded");
       this.store.compareAndSetState(record.taskId, "submittingToCoordination", "awaitingApprovals");
     } catch (error) {
-      const permanent = permanentCoordinationFailure(error);
-      this.store.saveAdapterAttempt(
-        record.taskId,
-        attempt("coordination", permanent ? "rejected" : "unreachable", error),
-      );
-      if (permanent) {
+      if (permanentCoordinationFailure(error)) {
+        this.recordAttempt(record.taskId, "coordination", "rejected", error);
         const resolution = coordinationFailureResolution(error);
         this.resolveUnresolvable(record.taskId, resolution.errorCode, resolution.errorMessage);
+      } else {
+        this.recordFailure(record.taskId, "coordination", error, "COORDINATION_REQUEST_REJECTED");
       }
     }
     return { kind: "deferred", record: this.mustGet(record.taskId) };
   }
 
-  private async applyUpdate(update: CoordinationActionUpdate): Promise<void> {
+  /**
+   * Apply one update to this proposer's matching workflow. `newlyReady` is
+   * true only when this update moved it from `awaitingApprovals` to
+   * `readyForSubmission`, decided inside the Task's serialized lane.
+   */
+  private async applyUpdate(
+    update: CoordinationActionUpdate,
+  ): Promise<{ taskId: string; newlyReady: boolean } | undefined> {
     const actionId = update.actionRef.actionId.value;
     const record = this.store.getWorkflowByActionId(actionId);
     if (!record || proposerDidOf(record) !== this.proposerDid || isTerminal(record)) {
-      return;
+      return undefined;
     }
+    let newlyReady = false;
 
     await this.dispatchOutbound(record.taskId, async () => {
       const current = this.store.getWorkflow(record.taskId);
@@ -480,8 +692,9 @@ export class BridgeWorkflowEngine {
               );
               break;
             }
+            if (current.state !== "awaitingApprovals") break;
             this.store.saveCompletedPackage(current.taskId, update.actionPackage);
-            this.store.compareAndSetState(current.taskId, "awaitingApprovals", "readyForSubmission");
+            newlyReady = this.store.compareAndSetState(current.taskId, "awaitingApprovals", "readyForSubmission");
           }
           break;
         case "expired":
@@ -510,27 +723,96 @@ export class BridgeWorkflowEngine {
           break;
       }
     });
+    return { taskId: record.taskId, newlyReady };
   }
 
+  /** Advance every claimable workflow, ignoring backoff ({@link pollOnce}, {@link reconcile}). */
   private async advanceClaimable(): Promise<void> {
     await Promise.all(
       this.store
         .listRecoverableWorkflows()
         .filter((record) => proposerDidOf(record) === this.proposerDid)
         .filter((record) => record.state !== "awaitingApprovals")
-        .map((record) => this.dispatchClaimable(record)),
+        .map((record) => this.dispatchClaimable(record.taskId, false)),
     );
   }
 
   /**
-   * Enqueue one recoverable row on its Task lane. Claim and submit happen
-   * only after joining that lane, so a concurrent `propose` for the same
-   * Task cannot double-submit, and other Tasks are not blocked.
+   * Append one remote call's outcome to the durable attempt log. A retryable
+   * failure or a Verifier `pending` also records when the call may next run
+   * (exponential backoff with jitter, honoring `Retry-After`), so the
+   * schedule follows the last attempted call and survives a restart.
    */
-  private async dispatchClaimable(record: WorkflowRecord): Promise<void> {
-    await this.dispatchOutbound(record.taskId, async () => {
-      const current = this.store.getWorkflow(record.taskId);
-      if (!current || isTerminal(current)) {
+  private recordAttempt(taskId: string, stage: AttemptStage, outcome: AttemptOutcome, error?: unknown): void {
+    const record = this.store.getWorkflow(taskId);
+    const previous = record ? lastAttempt(record) : undefined;
+    const entry: AttemptRecord = { stage, outcome, at: new Date(this.now()).toISOString() };
+    if (error !== undefined) entry.message = error instanceof Error ? error.message : String(error);
+    if (outcome === "unreachable" || outcome === "pending") {
+      const consecutive = previous?.outcome === outcome ? (previous.consecutive ?? 1) + 1 : 1;
+      const retryAfterMs = outcome === "unreachable" ? retryAfterMsOf(error) : undefined;
+      const delay = backoffDelayMs(
+        consecutive,
+        outcome === "unreachable" ? FAILURE_BACKOFF : PENDING_BACKOFF,
+        this.random,
+        retryAfterMs,
+      );
+      entry.consecutive = consecutive;
+      if (retryAfterMs !== undefined) entry.retryAfterMs = retryAfterMs;
+      entry.notBefore = new Date(this.now() + delay).toISOString();
+    }
+    this.store.saveAdapterAttempt(taskId, entry);
+  }
+
+  /**
+   * Record a failed remote call by class (feature reduce-polling §5.5): a
+   * permanent failure surfaces and stops the workflow; a call that the
+   * shutdown abort cut short, with no HTTP response, has an unknown outcome
+   * and no backoff; anything else, including any response received during
+   * the shutdown grace period, is a transient failure or unknown outcome,
+   * retried with the same key after its backoff.
+   */
+  private recordFailure(taskId: string, stage: AttemptStage, error: unknown, permanentCode: string): void {
+    if (isPermanentRemoteFailure(error)) {
+      this.recordAttempt(taskId, stage, "rejected", error);
+      this.resolveUnresolvable(
+        taskId,
+        permanentCode,
+        error instanceof Error ? error.message : "The request was permanently rejected.",
+      );
+      return;
+    }
+    const interrupted = this.inFlightAborted && httpStatusOf(error) === undefined;
+    this.recordAttempt(taskId, stage, interrupted ? "interrupted" : "unreachable", error);
+  }
+
+  /**
+   * Enqueue one recoverable row on its Task lane. Expiry, backoff, claim and
+   * submit are all decided only after joining that lane, so a concurrent
+   * operation for the same Task cannot double-submit or retry early, and
+   * other Tasks are not blocked. The attempt's outcome is recorded before
+   * the lane is released.
+   */
+  private async dispatchClaimable(taskId: string, respectSchedule: boolean): Promise<void> {
+    await this.dispatchOutbound(taskId, async () => {
+      const current = this.store.getWorkflow(taskId);
+      if (!current || isTerminal(current) || proposerDidOf(current) !== this.proposerDid) {
+        return;
+      }
+      if (Date.parse(current.expiresAt) < this.now()) {
+        if (this.store.claimWorkflow(taskId, this.workerId, this.claimLeaseMs)) {
+          this.resolveUnresolvable(
+            taskId,
+            "ACTION_EXPIRED_BEFORE_RESOLUTION",
+            "The Action Envelope expired without a terminal Verifier response.",
+          );
+        }
+        return;
+      }
+      if (this.stopped) {
+        return;
+      }
+      if (respectSchedule && (this.retryNotBefore(current) ?? 0) > this.now()) {
         return;
       }
       switch (current.state) {
@@ -587,7 +869,7 @@ export class BridgeWorkflowEngine {
     if (!current || proposerDidOf(current) !== this.proposerDid || isTerminal(current)) {
       return;
     }
-    if (!this.holdClaim(current.taskId)) {
+    if (this.stopped || !this.holdClaim(current.taskId)) {
       return;
     }
     const pkg = current.completedPackage ?? current.actionPackage;
@@ -611,7 +893,7 @@ export class BridgeWorkflowEngine {
       if (!request) return;
       response = await this.actionEndpoint.submitActionRequest(request);
     } catch (error) {
-      this.store.saveAdapterAttempt(current.taskId, attempt("completed", "unreachable", error));
+      this.recordFailure(current.taskId, "completed", error, "ACTION_SUBMISSION_REJECTED");
       this.store.compareAndSetState(current.taskId, "submittingToVerifier", "readyForSubmission");
       return;
     }
@@ -620,6 +902,7 @@ export class BridgeWorkflowEngine {
       return;
     }
 
+    this.recordAttempt(current.taskId, "completed", response.result === "pending" ? "pending" : "responded");
     if (response.result === "pending") {
       this.store.saveLastActionResponse(current.taskId, response);
       this.store.compareAndSetState(current.taskId, "submittingToVerifier", "awaitingVerifierResult");
@@ -664,7 +947,7 @@ export class BridgeWorkflowEngine {
     if (this.upstreamBinding !== undefined) request.upstreamBinding = structuredClone(this.upstreamBinding);
     const requestFingerprint = computeIdempotencyFingerprint(request);
     const bindings = record.adapterAttempts.filter(isSubmissionIdempotencyBinding)
-      .filter((binding) => binding.stage === phase);
+      .filter((binding) => binding.stage === phase && binding.idempotencyKey === record.actionIdempotencyKey);
     const binding = bindings[0];
 
     if (binding) {
@@ -866,11 +1149,43 @@ function sameHash(left: { alg: string; value: string }, right: { alg: string; va
   return left.alg === right.alg && left.value === right.value;
 }
 
-function attempt(stage: string, outcome: string, error: unknown): unknown {
-  return {
-    stage,
-    outcome,
-    message: error instanceof Error ? error.message : String(error),
-    at: new Date().toISOString(),
-  };
+/** The HTTP status of the response behind a client error, if a response was received. */
+function httpStatusOf(error: unknown): number | undefined {
+  if (typeof error !== "object" || error === null) return undefined;
+  const status = (error as { status?: unknown }).status;
+  return typeof status === "number" ? status : undefined;
+}
+
+/** The most recent remote-call outcome in a workflow's attempt log. */
+function lastAttempt(record: WorkflowRecord): AttemptRecord | undefined {
+  for (let index = record.adapterAttempts.length - 1; index >= 0; index -= 1) {
+    const entry = record.adapterAttempts[index];
+    if (
+      typeof entry === "object" && entry !== null && !Array.isArray(entry) &&
+      ATTEMPT_OUTCOMES.has(String((entry as { outcome?: unknown }).outcome))
+    ) {
+      return entry as AttemptRecord;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Failures that a retry cannot fix: authentication and authorization,
+ * explicit non-retryable rejections, protocol and validation errors. Every
+ * HTTP client classifies HTTP failures with the same rule
+ * (`isRetryableHttpFailure`): an `MpasHttpError` `retryable` flag wins,
+ * otherwise 408, 425, 429 and 5xx are retryable.
+ * Anything else is a transient failure or an unknown outcome, which the
+ * idempotency contract makes safe to retry with the same key and request.
+ */
+function isPermanentRemoteFailure(error: unknown): boolean {
+  if (error instanceof MpasAuthError) return true;
+  if (error instanceof CoordinationResponseError) return true;
+  if (error instanceof ActionRelayResponseError) return true;
+  if (error instanceof RoutingValidationError) return true;
+  if (error instanceof ActionEndpointClientError) return error.retryable === false;
+  if (error instanceof AdapterResponseError) return true;
+  if (error instanceof AdapterRequestError) return !error.retryable;
+  return false;
 }

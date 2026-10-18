@@ -8,6 +8,7 @@ import type {
   RelaySessionResponse,
   RelayWorkAvailable,
 } from "../types/mpas.js";
+import { DEFAULT_ACTION_REQUEST_TIMEOUT_MS } from "./action-endpoint-client.js";
 import { strictJsonParse } from "../utils/strict-json.js";
 import {
   parseActionRequestEnvelope,
@@ -46,6 +47,8 @@ export interface ActionRelayClientConfig {
   timeoutMs?: number;
   /** Signature lifetime in seconds, subject to the MPAS HTTP profile maximum. */
   signatureLifetimeSeconds?: number;
+  /** Aborts every in-flight and future HTTP request, for example at process shutdown. */
+  signal?: AbortSignal;
   /** Native or server-side WebSocket adapter used for relay notifications. */
   webSocketFactory?: ActionRelayWebSocketFactory;
 }
@@ -97,10 +100,16 @@ export interface RelayNotificationPollConnection extends RelayNotificationConnec
 /** Network, timeout, or Action Relay 5xx failure that may be retried. */
 export class ActionRelayUnavailableError extends Error {
   readonly code = "ACTION_RELAY_UNAVAILABLE";
+  /** Server-requested delay from `Retry-After`, when present. */
+  readonly retryAfterMs?: number;
+  /** HTTP status of the response, when one was received. */
+  readonly status?: number;
 
-  constructor(message: string, options?: ErrorOptions) {
+  constructor(message: string, options?: ErrorOptions & { retryAfterMs?: number; status?: number }) {
     super(message, options);
     this.name = "ActionRelayUnavailableError";
+    this.retryAfterMs = options?.retryAfterMs;
+    this.status = options?.status;
   }
 }
 
@@ -131,7 +140,7 @@ export class ActionRelayClient {
 
   constructor(config: ActionRelayClientConfig) {
     this.url = config.url.replace(/\/+$/, "");
-    this.timeoutMs = config.timeoutMs ?? 30_000;
+    this.timeoutMs = config.timeoutMs ?? DEFAULT_ACTION_REQUEST_TIMEOUT_MS;
     this.transport = new MpasHttpTransport({
       ...config,
       timeoutMs: this.timeoutMs,
@@ -144,9 +153,9 @@ export class ActionRelayClient {
           code,
           `Action Relay request failed with HTTP ${status} (${code}).`,
         ),
-        unavailable: ({ status, cause }) => status === undefined
+        unavailable: ({ status, cause, retryAfterMs }) => status === undefined
           ? new ActionRelayUnavailableError(`Action Relay is unavailable at ${this.url}.`, { cause })
-          : new ActionRelayUnavailableError(`Action Relay returned HTTP ${status}.`),
+          : new ActionRelayUnavailableError(`Action Relay returned HTTP ${status}.`, { retryAfterMs, status }),
         rejected: (status) => new ActionRelayResponseError(
           `Action Relay rejected the request with HTTP ${status}.`,
         ),

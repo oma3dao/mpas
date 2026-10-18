@@ -7,6 +7,9 @@ import {
   buildCreateTaskResult,
   buildGetTaskResult,
   buildUpdateTaskResult,
+  hasCompleteToolCallResult,
+  DEFAULT_PROCESSING_POLL_INTERVAL_MS,
+  DEFAULT_TASK_POLL_INTERVAL_MS,
   type TaskResultConfig,
 } from "./bridge-tasks.js";
 import type {
@@ -16,6 +19,7 @@ import type {
   UpdateTaskResult,
 } from "./mcp-tasks-extension.js";
 import { workflowProposerDid } from "./mpas-task-meta.js";
+import { backoffDelayMs, FAILURE_BACKOFF, retryAfterMsOf } from "./retry-backoff.js";
 import {
   MPAS_WAIT_TOOL_NAME,
   buildCompatibilityError,
@@ -64,10 +68,31 @@ export interface ProposerBridgeOptions {
   coordination?: WorkflowCoordination;
   proposerDid: Did;
   resultRetentionSeconds: number;
-  /** Background MPAS engine tick interval. Default 2000ms. */
+  /**
+   * @deprecated Ignored. Bridges no longer poll on a timer; see
+   * {@link coordinationRefreshMinIntervalMs} (feature reduce-polling §7).
+   */
   pollIntervalMs?: number;
-  /** Client-facing tasks/get polling hint. Default 5000ms. */
+  /**
+   * Client-facing polling hint while approvals are awaited, and for finished
+   * Tasks. Default {@link DEFAULT_TASK_POLL_INTERVAL_MS} (60000ms).
+   */
   taskPollIntervalMs?: number;
+  /**
+   * Client-facing polling hint while the bridge itself has work to do for a
+   * Task (submitting, registering with Coordination, awaiting the Verifier).
+   * After a failure the hint is never shorter than the time until the retry
+   * is allowed. Default {@link DEFAULT_PROCESSING_POLL_INTERVAL_MS} (2000ms).
+   */
+  processingTaskPollIntervalMs?: number;
+  /**
+   * Minimum time between Coordination polls started by client observation.
+   * Default {@link DEFAULT_COORDINATION_REFRESH_MIN_INTERVAL_MS}; values below
+   * {@link MIN_COORDINATION_REFRESH_INTERVAL_MS} are raised to it.
+   */
+  coordinationRefreshMinIntervalMs?: number;
+  /** Default wait in {@link ProposerBridge.shutdown}. Default {@link DEFAULT_SHUTDOWN_GRACE_MS}. */
+  shutdownGraceMs?: number;
   /** Legacy wait-tool maximum. Default 300 seconds. */
   maxWaitTimeoutSeconds?: number;
   /** Deployment assigns maintainer notification outside the proposing client. */
@@ -85,6 +110,28 @@ export interface ProposerBridgeOptions {
    */
   claimLeaseMs?: number;
   now?: () => number;
+  /** Jitter source for backoff, in [0, 1). Default `Math.random`. */
+  random?: () => number;
+}
+
+/** Default minimum time between Coordination polls (feature reduce-polling §4.2). */
+export const DEFAULT_COORDINATION_REFRESH_MIN_INTERVAL_MS = 10_000;
+/** Smallest accepted {@link ProposerBridgeOptions.coordinationRefreshMinIntervalMs}. */
+export const MIN_COORDINATION_REFRESH_INTERVAL_MS = 5_000;
+/** Minimum time between local cleanups triggered by client activity (feature reduce-polling §5.2). */
+export const LOCAL_CLEANUP_MIN_INTERVAL_MS = 10_000;
+/** Default shutdown grace (feature reduce-polling §6.2). */
+export const DEFAULT_SHUTDOWN_GRACE_MS = 5_000;
+/** How long shutdown waits for aborted calls to record their interruption. */
+export const SHUTDOWN_SETTLE_MS = 500;
+/** Longest a tool call waits for its initial submission before returning a Task (feature reduce-polling §14.2). */
+export const TOOL_CALL_FAST_PATH_MS = 1_000;
+
+export class BridgeShuttingDownError extends Error {
+  constructor() {
+    super("The MPAS bridge is shutting down.");
+    this.name = "BridgeShuttingDownError";
+  }
 }
 
 export class TaskNotFoundError extends Error {
@@ -111,8 +158,20 @@ export class ProposerBridge {
   private readonly compatibilityResultConfig: CompatibilityResultOptions;
   private readonly compatibilityTools: BridgeUpstreamTool[];
   private readonly maxWaitTimeoutSeconds: number;
-  private readonly pollIntervalMs: number;
-  private ticker?: ReturnType<typeof setInterval>;
+  private readonly now: () => number;
+  private readonly random: () => number;
+  private readonly refreshMinIntervalMs: number;
+  private readonly shutdownGraceMs: number;
+  private closed = false;
+  private lastCleanupAt = Number.NEGATIVE_INFINITY;
+  /** Work started by a request that may outlive it, tracked for shutdown. */
+  private readonly background = new Set<Promise<unknown>>();
+  private refreshInFlight?: Promise<void>;
+  private refreshNotBefore = 0;
+  private refreshFailures = 0;
+  private coordinationCheckedAt: string | null = null;
+  private readonly active = new Set<Promise<unknown>>();
+  private shutdownPromise?: Promise<void>;
 
   constructor(options: ProposerBridgeOptions) {
     this.tools = structuredClone(options.tools);
@@ -121,7 +180,8 @@ export class ProposerBridge {
     this.proposerDid = options.proposerDid;
     this.resultConfig = {
       resultRetentionSeconds: options.resultRetentionSeconds,
-      taskPollIntervalMs: options.taskPollIntervalMs ?? 5_000,
+      taskPollIntervalMs: options.taskPollIntervalMs ?? DEFAULT_TASK_POLL_INTERVAL_MS,
+      processingPollIntervalMs: options.processingTaskPollIntervalMs ?? DEFAULT_PROCESSING_POLL_INTERVAL_MS,
     };
     this.compatibilityResultConfig = {
       resultRetentionSeconds: options.resultRetentionSeconds,
@@ -134,7 +194,16 @@ export class ProposerBridge {
     this.compatibilityTools = buildCompatibilityToolDefinitions(this.tools, {
       maxTimeoutSeconds: this.maxWaitTimeoutSeconds,
     });
-    this.pollIntervalMs = options.pollIntervalMs ?? 2_000;
+    if (options.pollIntervalMs !== undefined) {
+      warnPollIntervalDeprecated();
+    }
+    this.now = options.now ?? (() => Date.now());
+    this.random = options.random ?? Math.random;
+    this.refreshMinIntervalMs = Math.max(
+      MIN_COORDINATION_REFRESH_INTERVAL_MS,
+      options.coordinationRefreshMinIntervalMs ?? DEFAULT_COORDINATION_REFRESH_MIN_INTERVAL_MS,
+    );
+    this.shutdownGraceMs = options.shutdownGraceMs ?? DEFAULT_SHUTDOWN_GRACE_MS;
     this.engine = new BridgeWorkflowEngine({
       store: options.store,
       ...(options.actionEndpoint !== undefined ? { actionEndpoint: options.actionEndpoint } : {}),
@@ -148,6 +217,7 @@ export class ProposerBridge {
       submissionTimeoutMs: options.submissionTimeoutMs ?? inferredSubmissionTimeoutMs(options),
       ...(options.claimLeaseMs !== undefined ? { claimLeaseMs: options.claimLeaseMs } : {}),
       ...(options.now !== undefined ? { now: options.now } : {}),
+      ...(options.random !== undefined ? { random: options.random } : {}),
     });
   }
 
@@ -161,77 +231,280 @@ export class ProposerBridge {
     return structuredClone(this.compatibilityTools);
   }
 
-  /** Return a normal tool result on the fast path; expose a Task only when deferred. */
-  async handleToolCall(toolName: string, args: object): Promise<TasksToolCallResult> {
-    const outcome = await this.proposeToolCall(toolName, args);
-    return outcome.kind === "settled"
-      ? buildCompleteToolCallResult(outcome.record)
-      : buildCreateTaskResult(outcome.record, this.resultConfig);
+  /**
+   * Return the final tool result directly when the Action reaches a terminal
+   * outcome within the fast path, including an error that ended it (feature
+   * reduce-polling §14.2); expose a Task only while it is still working.
+   */
+  handleToolCall(toolName: string, args: object): Promise<TasksToolCallResult> {
+    return this.track(async () => {
+      this.cleanupLocal();
+      const outcome = await this.proposeToolCall(toolName, args);
+      const record = this.store.getWorkflow(outcome.record.taskId) ?? outcome.record;
+      return hasCompleteToolCallResult(record)
+        ? buildCompleteToolCallResult(record)
+        : buildCreateTaskResult(record, this.taskResultConfig(record));
+    });
   }
 
   /** Legacy application and reserved wait-tool dispatch over the same workflow. */
-  async handleCompatibilityToolCall(toolName: string, args: object): Promise<CompatibilityToolResult> {
-    if (toolName === MPAS_WAIT_TOOL_NAME) {
-      return this.handleCompatibilityWait(args);
-    }
-    if (!this.tools.some((tool) => tool.name === toolName)) {
-      return buildCompatibilityError("UNKNOWN_TOOL", `Unknown tool: ${toolName}`, false);
-    }
+  handleCompatibilityToolCall(toolName: string, args: object): Promise<CompatibilityToolResult> {
+    return this.track(async () => {
+      if (toolName === MPAS_WAIT_TOOL_NAME) {
+        return this.handleCompatibilityWait(args);
+      }
+      this.cleanupLocal();
+      if (!this.tools.some((tool) => tool.name === toolName)) {
+        return buildCompatibilityError("UNKNOWN_TOOL", `Unknown tool: ${toolName}`, false);
+      }
 
-    try {
-      const outcome = await this.proposeToolCall(toolName, args);
-      return compatibilityResultForRecord(outcome.record, this.compatibilityResultConfig);
-    } catch {
-      return buildCompatibilityError(
-        "BRIDGE_UNAVAILABLE",
-        "Could not construct or durably record the MPAS Action.",
-        true,
-      );
-    }
+      try {
+        const outcome = await this.proposeToolCall(toolName, args);
+        return compatibilityResultForRecord(outcome.record, this.compatibilityConfig());
+      } catch {
+        return buildCompatibilityError(
+          "BRIDGE_UNAVAILABLE",
+          "Could not construct or durably record the MPAS Action.",
+          true,
+        );
+      }
+    });
   }
 
-  /** Read-only Task observation; never advances the MPAS workflow. */
+  /**
+   * Task observation. Returns local state without waiting on the network, and
+   * starts the observed Task's next step in the background: a rate-limited
+   * Coordination poll while approvals are awaited, otherwise its due retry
+   * (feature reduce-polling §4, §5). An overdue Task is reported as expired.
+   */
   handleTasksGet(taskId: string): GetTaskResult {
-    return buildGetTaskResult(this.visibleRecord(taskId), this.resultConfig);
+    this.assertOpen();
+    // Observe first: the cleanup sweep would otherwise hold this Task's lane
+    // and keep an overdue Task from reading as expired.
+    const record = this.observe(this.visibleRecord(taskId));
+    this.cleanupLocal();
+    return buildGetTaskResult(record, this.taskResultConfig(record));
   }
 
   /** MPAS v1 has no input_required state, so known responses are ignored. */
   handleTasksUpdate(taskId: string, _inputResponses: Record<string, unknown>): UpdateTaskResult {
+    this.assertOpen();
     this.visibleRecord(taskId);
     return buildUpdateTaskResult();
   }
 
   /** Cooperatively cancel future bridge work and best-effort cancel Coordination. */
-  async handleTasksCancel(taskId: string): Promise<CancelTaskResult> {
-    this.visibleRecord(taskId);
-    const result = await this.engine.cancel(taskId);
-    if (!result) throw new TaskNotFoundError(taskId);
-    return buildCancelTaskResult();
+  handleTasksCancel(taskId: string): Promise<CancelTaskResult> {
+    return this.track(async () => {
+      this.cleanupLocal();
+      this.visibleRecord(taskId);
+      const result = await this.engine.cancel(taskId);
+      if (!result) throw new TaskNotFoundError(taskId);
+      return buildCancelTaskResult();
+    });
   }
 
+  /**
+   * Startup reconciliation, local only: expire overdue workflows and purge
+   * old results. Contacts no remote service. An interrupted submission
+   * resumes when its Task is next observed (feature reduce-polling §6.3).
+   */
   async start(): Promise<void> {
-    if (this.ticker) return;
-    await this.engine.reconcile();
-    this.ticker = setInterval(() => {
-      void this.engine.pollOnce().then(() => {
-        this.store.purgeExpiredResults(this.resultConfig.resultRetentionSeconds * 1_000);
-      });
-    }, this.pollIntervalMs);
-    this.ticker.unref?.();
+    if (this.closed) return;
+    await this.cleanupLocal(true);
   }
 
-  stop(): void {
-    if (this.ticker) {
-      clearInterval(this.ticker);
-      this.ticker = undefined;
+  /**
+   * Nothing runs on a timer, so there is nothing to stop. Kept for API
+   * compatibility; use {@link shutdown} to stop serving requests.
+   */
+  stop(): void {}
+
+  /**
+   * Shut down conservatively (feature reduce-polling §6.2). Idempotent.
+   *
+   * 1. Stop accepting requests and starting new remote calls.
+   * 2. Let calls already sent finish and persist their outcomes, for up to
+   *    `graceMs`. Work started meanwhile, such as applying a late Coordination
+   *    response, is tracked too.
+   * 3. If work remains, call `abortInFlight` (the wrapper aborts its HTTP
+   *    clients), then wait up to {@link SHUTDOWN_SETTLE_MS} for the aborted
+   *    calls to record their interruption.
+   *
+   * Resolves when no tracked work remains or both waits have expired. The
+   * caller closes the store afterwards. Unfinished workflows keep their Task
+   * IDs and idempotency keys; an interrupted call is recorded as an unknown
+   * outcome, never as failed or cancelled.
+   */
+  shutdown(
+    graceMs: number = this.shutdownGraceMs,
+    options: { abortInFlight?: () => void } = {},
+  ): Promise<void> {
+    if (this.shutdownPromise) return this.shutdownPromise;
+    this.closed = true;
+    this.engine.stop();
+    // Compatibility waits answer now with the current state rather than holding shutdown.
+    this.engine.releaseWaiters();
+    this.shutdownPromise = (async () => {
+      if (await this.waitForIdle(graceMs)) return;
+      // Only failures caused by this abort are recorded as interrupted.
+      this.engine.markInFlightAborted();
+      options.abortInFlight?.();
+      await this.waitForIdle(SHUTDOWN_SETTLE_MS);
+    })();
+    return this.shutdownPromise;
+  }
+
+  /**
+   * Poll Coordination now unless a poll is in flight (its result is shared),
+   * the minimum interval since the last poll has not elapsed, or a failure
+   * backoff is active. Never rejects.
+   */
+  refreshCoordination(): Promise<void> {
+    if (this.closed) return Promise.resolve();
+    if (this.refreshInFlight) return this.refreshInFlight;
+    const startedAt = this.now();
+    if (startedAt < this.refreshNotBefore || !this.engine.hasAwaitingApprovals()) {
+      return Promise.resolve();
     }
+    this.refreshNotBefore = startedAt + this.refreshMinIntervalMs;
+    const refresh = this.engine.refreshCoordination({ advanceReady: false }).then(
+      (ready) => {
+        this.refreshFailures = 0;
+        this.coordinationCheckedAt = new Date(this.now()).toISOString();
+        // Directly dependent work: submit every package this poll found approved.
+        for (const taskId of ready) this.runInBackground(this.engine.advanceTask(taskId));
+      },
+      (error: unknown) => {
+        this.refreshFailures += 1;
+        const delay = backoffDelayMs(this.refreshFailures, FAILURE_BACKOFF, this.random, retryAfterMsOf(error));
+        this.refreshNotBefore = Math.max(this.refreshNotBefore, this.now() + delay);
+      },
+    );
+    this.refreshInFlight = refresh.finally(() => {
+      this.refreshInFlight = undefined;
+    });
+    return this.refreshInFlight;
   }
 
+  /**
+   * One unthrottled engine tick, ignoring backoff.
+   *
+   * @deprecated The bridge progresses on Task observation; see {@link handleTasksGet}.
+   */
   async pollOnce(): Promise<void> {
     await this.engine.pollOnce();
     this.store.purgeExpiredResults(this.resultConfig.resultRetentionSeconds * 1_000);
   }
 
+  private taskResultConfig(record: WorkflowRecord): TaskResultConfig {
+    const retryNotBefore = this.engine.retryNotBefore(record);
+    return {
+      ...this.resultConfig,
+      coordinationCheckedAt: this.coordinationCheckedAt,
+      retrying: this.engine.awaitingRetry(record),
+      ...(retryNotBefore !== undefined ? { retryNotBefore, now: this.now() } : {}),
+    };
+  }
+
+  private compatibilityConfig(): CompatibilityResultOptions {
+    return { ...this.compatibilityResultConfig, coordinationCheckedAt: this.coordinationCheckedAt };
+  }
+
+  private assertOpen(): void {
+    if (this.closed) throw new BridgeShuttingDownError();
+  }
+
+  private track<T>(operation: () => Promise<T>): Promise<T> {
+    if (this.closed) return Promise.reject(new BridgeShuttingDownError());
+    const promise = operation();
+    this.active.add(promise);
+    const remove = () => {
+      this.active.delete(promise);
+    };
+    promise.then(remove, remove);
+    return promise;
+  }
+
+  /**
+   * Start the observed Task's next step in the background and return its
+   * current record. Expiry is enforced first, so an overdue Task reads as
+   * expired and starts nothing.
+   */
+  private observe(record: WorkflowRecord): WorkflowRecord {
+    this.engine.expireIfOverdue(record.taskId);
+    const current = this.store.getWorkflow(record.taskId) ?? record;
+    if (current.state === "awaitingApprovals") {
+      void this.refreshCoordination();
+    } else if (ADVANCEABLE_STATES.has(current.state)) {
+      this.runInBackground(this.engine.advanceTask(current.taskId));
+    }
+    return current;
+  }
+
+  /**
+   * Bounded local cleanup on client activity: expire overdue workflows and
+   * purge results past retention, at most once per
+   * {@link LOCAL_CLEANUP_MIN_INTERVAL_MS}. Contacts no remote service.
+   */
+  private cleanupLocal(force = false): Promise<void> {
+    const nowMs = this.now();
+    if (!force && nowMs - this.lastCleanupAt < LOCAL_CLEANUP_MIN_INTERVAL_MS) return Promise.resolve();
+    this.lastCleanupAt = nowMs;
+    this.store.purgeExpiredResults(this.resultConfig.resultRetentionSeconds * 1_000);
+    return this.runInBackground(this.engine.expireOverdue());
+  }
+
+  /**
+   * Wait until no tracked work remains, re-checking as work settles so that
+   * work started during the wait is included. Returns false on timeout.
+   */
+  private async waitForIdle(timeoutMs: number): Promise<boolean> {
+    let timedOut = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<void>((resolve) => {
+      timer = setTimeout(() => {
+        timedOut = true;
+        resolve();
+      }, timeoutMs);
+      timer.unref?.();
+    });
+    try {
+      for (;;) {
+        const pending = this.pendingWork();
+        if (pending.length === 0) return true;
+        await Promise.race([Promise.allSettled(pending), deadline]);
+        if (timedOut) return this.pendingWork().length === 0;
+      }
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  private pendingWork(): Promise<unknown>[] {
+    return [...this.active, ...this.background, this.refreshInFlight]
+      .filter((promise): promise is Promise<unknown> => promise !== undefined);
+  }
+
+  /** Track work that may outlive the request that started it; never rejects. */
+  private runInBackground(work: Promise<unknown>): Promise<void> {
+    const settled = work.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.background.add(settled);
+    void settled.then(() => this.background.delete(settled));
+    return settled;
+  }
+
+  /**
+   * Durably record the Action and begin its initial submission, then wait at
+   * most {@link TOOL_CALL_FAST_PATH_MS} (feature reduce-polling §14.2). Returns
+   * the outcome if it settles in time, or the deferred record as soon as the
+   * Action is known to be deferred or the budget expires. A submission still
+   * in flight is never aborted or repeated: it continues in the background,
+   * tracked for shutdown, under the same Task ID and idempotency key.
+   */
   private async proposeToolCall(toolName: string, args: object): Promise<ProposeResult> {
     if (!this.tools.some((tool) => tool.name === toolName)) {
       throw new UnknownBridgeToolError(toolName);
@@ -239,15 +512,36 @@ export class ProposerBridge {
 
     const actionPackage = await this.buildActionPackage(toolName, args);
     const envelope = actionPackage.actionEnvelope;
-    return this.engine.propose({
-      taskId: `urn:uuid:${randomUUID()}`,
+    const taskId = `urn:uuid:${randomUUID()}`;
+    let markDeferred: () => void = () => {};
+    const knownDeferred = new Promise<undefined>((resolve) => {
+      markDeferred = () => resolve(undefined);
+    });
+    // propose() records the workflow durably before its first await, so the
+    // Task exists before this method can return a handle to it.
+    const outcome = this.engine.propose({
+      taskId,
       actionId: envelope.actionId.value,
       actionIdempotencyKey: randomUUID(),
       actionEnvelopeHash: computeJsonHash(envelope).value,
       toolName,
       actionPackage,
       expiresAt: envelope.expiresAt,
+    }, { onDeferred: () => markDeferred() });
+
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const budget = new Promise<undefined>((resolve) => {
+      timer = setTimeout(() => resolve(undefined), TOOL_CALL_FAST_PATH_MS);
+      timer.unref?.();
     });
+    try {
+      const settled = await Promise.race([outcome.then((result) => ({ result })), knownDeferred, budget]);
+      if (settled) return settled.result;
+    } finally {
+      clearTimeout(timer);
+    }
+    this.runInBackground(outcome);
+    return { kind: "deferred", record: this.store.getWorkflow(taskId) ?? (await outcome).record };
   }
 
   private async handleCompatibilityWait(args: object): Promise<CompatibilityToolResult> {
@@ -259,8 +553,13 @@ export class ProposerBridge {
     }
 
     try {
-      const visible = this.visibleCompatibilityRecord(input.actionId);
-      const record = await this.engine.waitForResult(visible.taskId, input.timeoutSeconds * 1_000);
+      // Start the next step but never await it: the timeout runs from call
+      // entry, and a slow poll or submission cannot extend it.
+      const visible = this.observe(this.visibleCompatibilityRecord(input.actionId));
+      this.cleanupLocal();
+      // A wait that outlives shutdown's waiter release answers with the current state.
+      const timeoutMs = this.closed ? 0 : input.timeoutSeconds * 1_000;
+      const record = await this.engine.waitForResult(visible.taskId, timeoutMs);
       if (!record || workflowProposerDid(record) !== this.proposerDid) {
         return buildCompatibilityError(
           "ACTION_NOT_FOUND",
@@ -268,7 +567,7 @@ export class ProposerBridge {
           false,
         );
       }
-      return compatibilityResultForRecord(record, this.compatibilityResultConfig);
+      return compatibilityResultForRecord(record, this.compatibilityConfig());
     } catch (error) {
       if (error instanceof TaskNotFoundError) {
         return buildCompatibilityError(
@@ -297,6 +596,27 @@ export class ProposerBridge {
     }
     return record;
   }
+}
+
+/** States whose next step is a remote call this bridge makes on observation. */
+const ADVANCEABLE_STATES: ReadonlySet<WorkflowRecord["state"]> = new Set([
+  "created",
+  "submittingToCoordination",
+  "readyForSubmission",
+  "submittingToVerifier",
+  "awaitingVerifierResult",
+]);
+
+let pollIntervalWarningEmitted = false;
+
+function warnPollIntervalDeprecated(): void {
+  if (pollIntervalWarningEmitted) return;
+  pollIntervalWarningEmitted = true;
+  process.emitWarning(
+    "pollIntervalMs is ignored: MPAS bridges poll Coordination only when a client observes a Task. " +
+      "Use coordinationRefreshMinIntervalMs to set the minimum interval between polls.",
+    { type: "DeprecationWarning", code: "MPAS_BRIDGE_POLL_INTERVAL" },
+  );
 }
 
 function inferredSubmissionTimeoutMs(options: ProposerBridgeOptions): number {

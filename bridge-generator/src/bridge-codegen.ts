@@ -40,6 +40,8 @@ import {
   MemoryWorkflowStore,
   MpasProtocolServer,
   ProposerBridge,
+  DEFAULT_SHUTDOWN_GRACE_MS,
+  bindStdioShutdown,
   loadPlugin as loadSdkPlugin,
 } from "@oma3/mpas";
 import type {
@@ -61,17 +63,24 @@ interface WorkflowConfig {
   dbPath?: string;
   /** Minimum post-resolution retention disclosed to clients. Default 86400. */
   resultRetentionSeconds?: number;
-  /** Background tick interval. Default 2000ms. */
+  /** @deprecated Ignored: the bridge polls Coordination only when a client observes a Task. */
   pollIntervalMs?: number;
-  /** Client-facing tasks/get polling hint. Default 5000ms. */
+  /** Client-facing tasks/get polling hint while approvals are awaited. Default 60000ms. */
   taskPollIntervalMs?: number;
+  /** Client-facing tasks/get polling hint while the bridge itself has work to do. Default 2000ms. */
+  processingTaskPollIntervalMs?: number;
+  /** Minimum time between Coordination polls. Default 10000ms; minimum 5000ms. */
+  coordinationRefreshMinIntervalMs?: number;
+  /** Wait for in-flight work at shutdown. Default 5000ms. */
+  shutdownGraceMs?: number;
   /** Compatibility wait-tool maximum. Default 300 seconds. */
   maxWaitTimeoutSeconds?: number;
   /** Deployment assigns maintainer notification outside the proposing client. */
   notificationAssignedElsewhere?: boolean;
   /**
    * Action and Coordination HTTP wait. Must stay below claimLeaseMs.
-   * Default 30000.
+   * Defaults to 45000 for Action requests, above the reference adapter's
+   * 35-second wait for a joined dispatch, and 30000 for Coordination requests.
    */
   submissionTimeoutMs?: number;
   /** Worker claim lease. Must exceed submissionTimeoutMs. Default 60000. */
@@ -133,23 +142,32 @@ function log(level: "info" | "warn" | "error", msg: string, data?: object): void
 export class GeneratedBridge {
   private readonly bridgePromise: Promise<ProposerBridge>;
   private readonly store: WorkflowStore;
+  /** Aborts every in-flight HTTP request when the bridge shuts down. */
+  private readonly lifetime = new AbortController();
+  private shutdownPromise?: Promise<void>;
+  /** How long shutdown lets in-flight work settle. */
+  readonly shutdownGraceMs: number;
 
   constructor(config: BridgeConfig) {
     const plugin = requireValidatedPlugin(config.plugin);
     const keyManagerPromise = loadKeyManager(config.agentKey);
     const workflow = config.workflow ?? {};
     const submissionTimeoutMs = workflow.submissionTimeoutMs;
+    this.shutdownGraceMs = workflow.shutdownGraceMs ?? DEFAULT_SHUTDOWN_GRACE_MS;
+    const signal = this.lifetime.signal;
     const actionEndpoint: WorkflowActionEndpoint = config.actionEndpoint
-      ? relayActionEndpoint(config.actionEndpoint, keyManagerPromise, submissionTimeoutMs)
+      ? relayActionEndpoint(config.actionEndpoint, keyManagerPromise, submissionTimeoutMs, signal)
       : new ActionEndpointClient({
           url: config.adapterUrl,
           signer: keyManagerPromise,
+          signal,
           ...(submissionTimeoutMs !== undefined ? { timeoutMs: submissionTimeoutMs } : {}),
         });
     const coordinationService: WorkflowCoordinationService = config.coordinationUrl
       ? new CoordinationServiceClient({
           url: config.coordinationUrl,
           signer: keyManagerPromise,
+          signal,
           ...(submissionTimeoutMs !== undefined ? { timeoutMs: submissionTimeoutMs } : {}),
         })
       : unconfiguredCoordinationService();
@@ -186,6 +204,13 @@ export class GeneratedBridge {
         resultRetentionSeconds: workflow.resultRetentionSeconds ?? 86_400,
         ...(workflow.pollIntervalMs !== undefined ? { pollIntervalMs: workflow.pollIntervalMs } : {}),
         ...(workflow.taskPollIntervalMs !== undefined ? { taskPollIntervalMs: workflow.taskPollIntervalMs } : {}),
+        ...(workflow.processingTaskPollIntervalMs !== undefined
+          ? { processingTaskPollIntervalMs: workflow.processingTaskPollIntervalMs }
+          : {}),
+        ...(workflow.coordinationRefreshMinIntervalMs !== undefined
+          ? { coordinationRefreshMinIntervalMs: workflow.coordinationRefreshMinIntervalMs }
+          : {}),
+        shutdownGraceMs: this.shutdownGraceMs,
         ...(workflow.maxWaitTimeoutSeconds !== undefined ? { maxWaitTimeoutSeconds: workflow.maxWaitTimeoutSeconds } : {}),
         ...(workflow.notificationAssignedElsewhere !== undefined
           ? { notificationAssignedElsewhere: workflow.notificationAssignedElsewhere }
@@ -209,7 +234,7 @@ export class GeneratedBridge {
     return bridge.handleToolCall(toolName, args);
   }
 
-  /** Startup reconciliation plus the background workflow loop. */
+  /** Local startup cleanup only; remote work happens when a client calls a tool or observes a Task. */
   async start(): Promise<void> {
     const bridge = await this.bridgePromise;
     await bridge.start();
@@ -221,6 +246,24 @@ export class GeneratedBridge {
       bridge.stop();
       this.store.close();
     });
+  }
+
+  /**
+   * Stop new work, let requests already sent finish within the shutdown
+   * grace, abort what remains, then close the store. Idempotent. This wrapper
+   * owns HTTP cancellation, the store, and the process; the SDK runtime only
+   * stops and drains workflow activity, and says when to abort.
+   */
+  shutdown(): Promise<void> {
+    if (!this.shutdownPromise) {
+      this.shutdownPromise = this.bridgePromise
+        .then((bridge) => bridge.shutdown(this.shutdownGraceMs, { abortInFlight: () => this.lifetime.abort() }))
+        .finally(() => {
+          this.lifetime.abort();
+          this.store.close();
+        });
+    }
+    return this.shutdownPromise;
   }
 
   async buildMcpServer(): Promise<MpasProtocolServer> {
@@ -268,10 +311,12 @@ function relayActionEndpoint(
   config: RelayActionEndpointConfig,
   keyManagerPromise: Promise<KeyManager>,
   timeoutMs: number | undefined,
+  signal: AbortSignal,
 ): WorkflowActionEndpoint {
   const client = new ActionRelayClient({
     url: config.url,
     signer: keyManagerPromise,
+    signal,
     ...(timeoutMs !== undefined ? { timeoutMs } : {}),
   });
   const recipients = [...new Set([config.verifierDid, ...(config.additionalRecipients ?? [])])];
@@ -310,8 +355,15 @@ export async function runBridge(argv = process.argv.slice(2)): Promise<void> {
   const server = await bridge.buildMcpServer();
   const transport = new StdioServerTransport();
 
-  await bridge.start();
+  // Exit when the MCP client goes away, even while requests are in flight.
+  // Connect first so stdin is read, and EOF seen, from the start.
+  bindStdioShutdown({
+    shutdown: () => bridge.shutdown(),
+    forceExitAfterMs: bridge.shutdownGraceMs + 1_000,
+    onTrigger: (reason) => log("info", "bridge_shutdown", { reason }),
+  });
   await server.connect(transport);
+  await bridge.start();
 }
 
 function toBridgeConfig(config: CliConfig, configDir: string, plugin: MpasApplicationPlugin): BridgeConfig {

@@ -162,7 +162,7 @@ integrations/
   skills/                       Agent skill packages (proposer, maintainer)
 ```
 
-`cli/` has its own build tooling and depends on the published `@oma3/mpas@0.1.0-alpha.14` package.
+`cli/` has its own build tooling and depends on the published `@oma3/mpas@0.1.0-alpha.15` package.
 
 ## Documentation
 

@@ -2,7 +2,7 @@ import { chmod, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { FastifyInstance } from "fastify";
 import { compactVerify, importJWK, type JWK } from "jose";
 import { buildDeliveryEnvelope, computeToolSurfaceHash, type ActionPackage } from "@oma3/mpas";
@@ -11,17 +11,45 @@ import { FileCredentialProvider } from "../../src/adapter/credential-provider.js
 import {
   buildIndeterminateRecoveryResponse,
   createAdapterApiServer,
+  STILL_EXECUTING_RETRY_AFTER_SECONDS,
+  type HttpEndpointOptions,
   inspectTargetSurface,
 } from "../../src/adapter/adapter-api-server.js";
-import { DispatchLedger } from "../../src/adapter/dispatch-ledger.js";
+import { DispatchLedger, MemoryDispatchJournal } from "../../src/adapter/dispatch-ledger.js";
 import type { Did, ExecutionReceipt, ReceiptPayload } from "../../src/core/types.js";
 import { computeJsonHash } from "../../src/core/verification.js";
+
+/** Hooks around stdio target sessions, for ordering races; unset, sessions behave normally. */
+const stdioHooks = vi.hoisted(() => ({
+  beforePrepare: undefined as (() => Promise<void>) | undefined,
+  beforeClose: undefined as (() => Promise<void>) | undefined,
+}));
+
+vi.mock("../../src/adapter/dispatch/mcp-stdio.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../../src/adapter/dispatch/mcp-stdio.js")>();
+  return {
+    ...original,
+    async prepareMcpStdio(...args: Parameters<typeof original.prepareMcpStdio>) {
+      await stdioHooks.beforePrepare?.();
+      const prepared = await original.prepareMcpStdio(...args);
+      if (prepared.ok) {
+        const close = prepared.session.close.bind(prepared.session);
+        prepared.session.close = async () => {
+          await stdioHooks.beforeClose?.();
+          await close();
+        };
+      }
+      return prepared;
+    },
+  };
+});
 
 /** Deterministic clock pinned inside the fixture validity window. */
 const FIXTURE_NOW = Date.parse("2026-06-05T19:00:00.000Z");
 
 const fixturesDir = fileURLToPath(new URL("../fixtures/", import.meta.url));
 const slowFixtureServer = fileURLToPath(new URL("../fixtures/adapter/slow-mcp-server.mjs", import.meta.url));
+const cancelRecordingServer = fileURLToPath(new URL("../fixtures/adapter/cancel-recording-mcp-server.mjs", import.meta.url));
 const errorFixtureServer = fileURLToPath(new URL("../fixtures/adapter/error-mcp-server.mjs", import.meta.url));
 const protocolVersionFixtureServer = fileURLToPath(
   new URL("../fixtures/adapter/protocol-version-mcp-server.mjs", import.meta.url),
@@ -48,7 +76,12 @@ async function credentialDir() {
   return dir;
 }
 
-async function makeApp(configDir?: string, ledger?: DispatchLedger, configure?: (entry: LoadedDeploymentConfig) => void) {
+async function makeApp(
+  configDir?: string,
+  ledger?: DispatchLedger,
+  configure?: (entry: LoadedDeploymentConfig) => void,
+  extra: Partial<Pick<HttpEndpointOptions, "joinWaitMs">> = {},
+) {
   // The shared configs dir holds the mirror and live-demo applications. They
   // have distinct applicationDids, so both route cleanly — no shadowing.
   const effectiveConfigDir = configDir ?? join(fixturesDir, "configs");
@@ -69,6 +102,7 @@ async function makeApp(configDir?: string, ledger?: DispatchLedger, configure?: 
     // max-envelope-validity guard and approval-time checks are deterministic.
     now: FIXTURE_NOW,
     ledger,
+    ...extra,
   });
   apps.push(app);
   return app;
@@ -125,6 +159,8 @@ async function verifyReceiptPayload(receipt: ExecutionReceipt): Promise<ReceiptP
 }
 
 afterEach(async () => {
+  stdioHooks.beforePrepare = undefined;
+  stdioHooks.beforeClose = undefined;
   await Promise.all(apps.splice(0).map((app) => app.close()));
 });
 
@@ -522,6 +558,165 @@ describe("HTTP endpoint", () => {
     expect(response.json()).toMatchObject({
       result: "rejected",
       error: { code: "PROPOSER_NOT_AUTHORIZED" },
+    });
+  });
+});
+
+describe("duplicate submissions of an executing Action (Core §6.9.2 rule 3)", () => {
+  const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  async function fixtureRequest(context?: Record<string, unknown>) {
+    const actionPackage = await readJson<ActionPackage>(join(fixturesDir, "core", "valid-no-approval-required.json"));
+    return { version: "1", type: "ActionRequest", actionPackage, ...(context ? { context } : {}) };
+  }
+
+  function post(app: FastifyInstance, body: unknown) {
+    return app.inject({
+      method: "POST",
+      url: "/mpas/v1/verifier/action",
+      headers: { "content-type": "application/mpas+json" },
+      payload: JSON.stringify(body),
+    });
+  }
+
+  function executingEvents(journal: MemoryDispatchJournal) {
+    return journal.readAll().filter((event) => event.event === "executing");
+  }
+
+  it("joins the dispatch in progress and returns the same outcome without sending twice", async () => {
+    const journal = new MemoryDispatchJournal();
+    const app = await makeApp(await makeTargetConfigDir(slowFixtureServer, 10_000), new DispatchLedger(journal));
+    const request = await fixtureRequest();
+
+    const first = post(app, request);
+    await delay(500);
+    const second = await post(app, request);
+    const original = await first;
+
+    expect(original.statusCode).toBe(200);
+    expect(second.statusCode).toBe(200);
+    expect(second.json()).toEqual(original.json());
+    expect(second.json()).not.toMatchObject({ result: "pending" });
+    expect(executingEvents(journal)).toHaveLength(1);
+  });
+
+  it("joins a duplicate that arrives as a relay DeliveryEnvelope around the same request", async () => {
+    const journal = new MemoryDispatchJournal();
+    const app = await makeApp(await makeTargetConfigDir(slowFixtureServer, 10_000), new DispatchLedger(journal));
+    const adapter = await readJson<KeyFixture>(join(fixturesDir, "test-keys", "adapter.json"));
+    const request = await fixtureRequest();
+
+    const first = post(app, request);
+    await delay(500);
+    const relayed = await post(app, buildDeliveryEnvelope({
+      sender: request.actionPackage.actionEnvelope.proposer.did,
+      recipients: [adapter.did],
+      payload: request as never,
+    }));
+    const original = await first;
+
+    expect(relayed.statusCode).toBe(200);
+    expect(relayed.json()).toEqual(original.json());
+    expect(executingEvents(journal)).toHaveLength(1);
+  });
+
+  it("joins when the dispatch resolves while the losing submission releases its own session", async () => {
+    const journal = new MemoryDispatchJournal();
+    const app = await makeApp(await makeTargetConfigDir(slowFixtureServer, 10_000), new DispatchLedger(journal));
+    const request = await fixtureRequest();
+
+    // Both submissions pass the early ledger check before either prepares a
+    // session, so one wins the dispatch gate and the other finds it executing.
+    let prepared = 0;
+    let bothArrived!: () => void;
+    const barrier = new Promise<void>((resolve) => { bothArrived = resolve; });
+    stdioHooks.beforePrepare = async () => {
+      prepared += 1;
+      if (prepared === 2) bothArrived();
+      await barrier;
+    };
+    // The loser closes its unused session first; hold that close until the
+    // winner has answered and left the in-flight table.
+    let closes = 0;
+    let winnerAnswered!: Promise<unknown>;
+    stdioHooks.beforeClose = async () => {
+      closes += 1;
+      if (closes === 1) await winnerAnswered;
+    };
+
+    const submissions = [post(app, request), post(app, request)];
+    winnerAnswered = Promise.race(submissions);
+    const [first, second] = await Promise.all(submissions);
+
+    expect(closes).toBe(2);
+    expect(first.statusCode).toBe(200);
+    expect(second.statusCode).toBe(200);
+    expect(second.json()).toEqual(first.json());
+    expect(executingEvents(journal)).toHaveLength(1);
+  });
+
+  it("rejects with 409 a duplicate whose request differs from the dispatched one", async () => {
+    const journal = new MemoryDispatchJournal();
+    const app = await makeApp(await makeTargetConfigDir(slowFixtureServer, 10_000), new DispatchLedger(journal));
+
+    const first = post(app, await fixtureRequest());
+    await delay(500);
+    const different = await post(app, await fixtureRequest({ note: "not the dispatched request" }));
+    await first;
+
+    expect(different.statusCode).toBe(409);
+    expect(different.json()).toMatchObject({ type: "MpasHttpError", error: { code: "conflict", retryable: false } });
+    expect(executingEvents(journal)).toHaveLength(1);
+  });
+
+  it("answers 503 timeout with Retry-After when the joined dispatch outlasts the wait; a retry after it resolves is a replay", async () => {
+    const journal = new MemoryDispatchJournal();
+    const app = await makeApp(
+      await makeTargetConfigDir(slowFixtureServer, 10_000),
+      new DispatchLedger(journal),
+      undefined,
+      { joinWaitMs: 300 },
+    );
+    const request = await fixtureRequest();
+
+    const first = post(app, request);
+    await delay(300);
+    const waiting = await post(app, request);
+    expect(waiting.statusCode).toBe(503);
+    expect(waiting.headers["retry-after"]).toBe(String(STILL_EXECUTING_RETRY_AFTER_SECONDS));
+    expect(waiting.json()).toMatchObject({
+      version: "1",
+      type: "MpasHttpError",
+      error: { code: "timeout", retryable: true },
+    });
+    expect(waiting.json()).not.toHaveProperty("result");
+
+    await first;
+    const late = await post(app, request);
+    expect(late.json()).toMatchObject({ result: "rejected", error: { code: "REPLAY_DETECTED" } });
+    expect(executingEvents(journal)).toHaveLength(1);
+  });
+
+  it("sends MCP's cancellation notification upstream when the dispatch timeout expires", async () => {
+    const dir = await makeTargetConfigDir(cancelRecordingServer, 800);
+    const cancelLog = join(dir, "cancelled.jsonl");
+    const configPath = join(dir, "github-target.json");
+    const config = await readJson<{ executionTarget: { env: Record<string, string> } }>(configPath);
+    config.executionTarget.env.CANCEL_LOG = cancelLog;
+    await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`);
+    const app = await makeApp(dir);
+
+    const response = await submitFixture(app, "valid-no-approval-required.json");
+    expect(response.json()).toMatchObject({ result: "indeterminate", error: { code: "DISPATCH_TIMEOUT" } });
+
+    let logged = "";
+    for (let attempt = 0; attempt < 40 && !logged; attempt += 1) {
+      logged = await readFile(cancelLog, "utf8").catch(() => "");
+      if (!logged) await delay(50);
+    }
+    expect(JSON.parse(logged.trim().split("\n")[0]!)).toMatchObject({
+      method: "notifications/cancelled",
+      params: { requestId: expect.anything() },
     });
   });
 });

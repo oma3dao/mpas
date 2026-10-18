@@ -95,16 +95,60 @@ handle its `authorizationState`:
 - `pending`: MPAS is awaiting a verifier or execution outcome. Do not report
   success yet.
 
-Use the harness-managed `tasks/get` operation to observe the existing Task.
-Treat it as read-only: polling does not advance the MPAS workflow, and the
-bridge continues coordination and resubmission independently. Respect the
-Task's polling and retention hints; continuous polling is unnecessary.
+### Who does what
 
-When `mpas_wait_for_action_result` is present, pass the existing Action ID to
-that tool. A deferred result means the Action is still awaiting authorization
-or execution; use its status and message as progress information and call the
-wait tool again only when useful. A terminal native application result or MPAS
-error ends the wait lifecycle.
+- **Your MCP host** (the harness that runs you) sends tool calls and Task
+  checks (`tasks/get`) to the bridge.
+- **The MPAS bridge** (the MCP server for the application) submits Actions and
+  collects their approvals. It does nothing in the background: it moves an
+  Action forward only when a tool is called or a Task is checked.
+- **The Coordination Service** is where Maintainers review and approve.
+- **The Verifier or credential adapter** executes an Action once it is
+  authorized.
+
+Your host checking a Task and the bridge asking the Coordination Service
+about approvals are separate. Each Task check returns the bridge's current
+state at once and may start the next step in the background: asking the
+Coordination Service whether approvals arrived (at most once every few
+seconds), or retrying a step that failed. Your initial call is always
+submitted, but an Action nobody checks on makes no further progress: an
+approved Action that is never checked again is never executed, and expires.
+
+### Checking a Task
+
+Use the harness-managed `tasks/get` operation. Either way of checking works:
+
+- **Hosts that check automatically** follow the Task's `pollIntervalMs` hint:
+  about 2 seconds while the bridge itself has work to do, about a minute while
+  Maintainers decide, and never sooner than a failed step can be retried. You
+  don't need to add your own checks on top of the host's.
+- **Hosts that check only when asked:** check the Task once when there is a
+  reason to, for example when a Maintainer reports an approval or rejection.
+
+Don't check in a tight loop, and don't depend on a Maintainer's message
+arriving: if you're waiting on an Action, an occasional check at the hinted
+interval is enough. While authorization is required,
+`coordinationCheckedAt` in `_meta["org.oma3/mpas"]` shows when the bridge last
+asked the Coordination Service. If it is older than a Maintainer's report,
+check again after a few seconds.
+
+Read the Task's status message. It says when a step failed and will be
+retried on the next check. If a Maintainer says they can't see your request,
+check the Task: the status message tells you if the request is still being
+registered with the Coordination Service, and the check retries it. Never call
+the application tool again to retry: that creates a new Action that needs new
+approvals.
+
+### The compatibility wait tool
+
+When `mpas_wait_for_action_result` is present (hosts without MCP Tasks), pass
+the existing Action ID to that tool. Each call returns within the timeout you
+pass, even if the bridge's own check is slow, and starts at most one step, as
+a Task check does. A deferred result means the Action is still awaiting
+authorization or execution; use its status and message as progress
+information. Call the tool again when there is a reason to, such as a
+Maintainer reporting a decision, not in a tight loop. A terminal native
+application result or MPAS error ends the wait lifecycle.
 
 Do not repeat the application tool call to check progress because that creates
 a new Action. Do not expect `tasks/list` or `tasks/result`; they are not part

@@ -14,7 +14,7 @@ const META = {
   "io.modelcontextprotocol/clientCapabilities": {
     extensions: {
       "io.modelcontextprotocol/tasks": {},
-      "org.oma3/mpas": { version: "2" },
+      "org.oma3/mpas": { version: "3" },
     },
   },
 };
@@ -118,7 +118,7 @@ describe("MpasTasksServer modern dispatcher", () => {
         capabilities: {
           extensions: {
             "io.modelcontextprotocol/tasks": {},
-            "org.oma3/mpas": { version: "2", disclosure: "transparent" },
+            "org.oma3/mpas": { version: "3", disclosure: "transparent" },
           },
         },
       },
@@ -183,8 +183,36 @@ describe("MpasTasksServer modern dispatcher", () => {
     ).toMatchObject({
       error: {
         code: -32021,
-        data: { requiredCapabilities: { extensions: { "org.oma3/mpas": { version: "2" } } } },
+        data: { requiredCapabilities: { extensions: { "org.oma3/mpas": { version: "3" } } } },
       },
+    });
+  });
+
+  it.each(["2", "2.2", "3.0", 3])("rejects MPAS profile version %j and names the supported version", async (version) => {
+    const params = {
+      name: "merge_pull_request",
+      arguments: {},
+      _meta: {
+        ...META,
+        "io.modelcontextprotocol/clientCapabilities": {
+          extensions: { "io.modelcontextprotocol/tasks": {}, "org.oma3/mpas": { version } },
+        },
+      },
+    };
+    const response = await makeServer().handleMessage({ jsonrpc: "2.0", id: 9, method: "tools/call", params });
+    expect(response).toMatchObject({
+      error: {
+        code: -32021,
+        message: expect.stringContaining('supports version "3" only'),
+        data: { requiredCapabilities: { extensions: { "org.oma3/mpas": { version: "3" } } } },
+      },
+    });
+  });
+
+  it("advertises MPAS profile version 3 in server/discover", async () => {
+    const response = await makeServer().handleMessage({ jsonrpc: "2.0", id: 10, method: "server/discover", params: {} });
+    expect(response).toMatchObject({
+      result: { capabilities: { extensions: { "org.oma3/mpas": { version: "3", disclosure: "transparent" } } } },
     });
   });
 
@@ -220,7 +248,7 @@ describe("MpasTasksServer modern dispatcher", () => {
           requiredCapabilities: {
             extensions: {
               "io.modelcontextprotocol/tasks": {},
-              "org.oma3/mpas": { version: "2" },
+              "org.oma3/mpas": { version: "3" },
             },
           },
         },

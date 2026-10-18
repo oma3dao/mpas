@@ -1,18 +1,29 @@
 import { parseApprovalRequirements } from "./approval-requirements-schema.js";
 import type { ActionPackage, ApprovalRequirements, HashObject } from "../types/mpas.js";
+import { MPAS_MCP_PROFILE_VERSION } from "./mcp-tasks-extension.js";
 import type { WorkflowRecord } from "./workflow-store.js";
 
 export interface MpasTaskMeta {
-  version: "2";
+  version: typeof MPAS_MCP_PROFILE_VERSION;
   actionId: string;
   actionEnvelopeHash: HashObject;
   authorizationState: "submitted" | "authorization_required" | "pending" | "approvals_collected";
   disclosure: "transparent";
   requirements?: ApprovalRequirements;
   expiresAt: string;
+  /**
+   * When this bridge last completed a Coordination poll, or null if it has not
+   * polled since it started. Present only while approvals are awaited.
+   */
+  coordinationCheckedAt?: string | null;
 }
 
-export function buildMpasTaskMeta(record: WorkflowRecord): MpasTaskMeta {
+export interface MpasTaskMetaOptions {
+  /** Omit to leave `coordinationCheckedAt` out of the metadata. */
+  coordinationCheckedAt?: string | null;
+}
+
+export function buildMpasTaskMeta(record: WorkflowRecord, options: MpasTaskMetaOptions = {}): MpasTaskMeta {
   const pkg = actionPackageOf(record);
   const actionEnvelopeHash = pkg.approvalBundle.actionEnvelopeHash;
   if (
@@ -26,7 +37,7 @@ export function buildMpasTaskMeta(record: WorkflowRecord): MpasTaskMeta {
   const authorizationState = authorizationStateOf(record);
   const requirements = authorizationState === "authorization_required" ? approvalRequirementsOf(record) : undefined;
   return {
-    version: "2",
+    version: MPAS_MCP_PROFILE_VERSION,
     actionId: record.actionId,
     actionEnvelopeHash: structuredClone(actionEnvelopeHash),
     authorizationState,
@@ -35,6 +46,9 @@ export function buildMpasTaskMeta(record: WorkflowRecord): MpasTaskMeta {
       ? { requirements: structuredClone(requirements) }
       : {}),
     expiresAt: record.expiresAt,
+    ...(record.state === "awaitingApprovals" && options.coordinationCheckedAt !== undefined
+      ? { coordinationCheckedAt: options.coordinationCheckedAt }
+      : {}),
   };
 }
 

@@ -179,11 +179,16 @@ function requireTaskExtensions(params: Record<string, unknown>): void {
   const missing: Record<string, unknown> = {};
   if (!isObject(extensions[MCP_TASKS_EXTENSION_ID])) missing[MCP_TASKS_EXTENSION_ID] = {};
   const mpasProfileExtension = extensions[MPAS_MCP_PROFILE_EXTENSION_ID];
-  if (!isObject(mpasProfileExtension) || mpasProfileExtension.version !== MPAS_MCP_PROFILE_VERSION) {
+  // Exact match: any other profile version, older or newer, is unsupported.
+  const declaredVersion = isObject(mpasProfileExtension) ? mpasProfileExtension.version : undefined;
+  if (declaredVersion !== MPAS_MCP_PROFILE_VERSION) {
     missing[MPAS_MCP_PROFILE_EXTENSION_ID] = { version: MPAS_MCP_PROFILE_VERSION };
   }
   if (Object.keys(missing).length > 0) {
-    throw rpcError(MISSING_REQUIRED_CLIENT_CAPABILITY, "Missing required client capability", {
+    const message = declaredVersion !== undefined && declaredVersion !== MPAS_MCP_PROFILE_VERSION
+      ? `Unsupported ${MPAS_MCP_PROFILE_EXTENSION_ID} profile version ${JSON.stringify(declaredVersion)}; this bridge supports version "${MPAS_MCP_PROFILE_VERSION}" only.`
+      : "Missing required client capability";
+    throw rpcError(MISSING_REQUIRED_CLIENT_CAPABILITY, message, {
       requiredCapabilities: { extensions: missing },
     });
   }

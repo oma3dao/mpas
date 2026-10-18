@@ -32,6 +32,8 @@ export interface CompatibilityResultOptions {
   resultRetentionSeconds: number;
   notificationAssignedElsewhere?: boolean;
   now?: () => number;
+  /** Last completed Coordination poll, or null if none since the bridge started. */
+  coordinationCheckedAt?: string | null;
 }
 
 export function compatibilityResultForRecord(
@@ -134,6 +136,9 @@ function buildDeferredCompatibilityResult(
     expiresAt: record.expiresAt,
     resultRetentionSeconds: options.resultRetentionSeconds,
     createdAt: new Date(now()).toISOString(),
+    ...(record.state === "awaitingApprovals" && options.coordinationCheckedAt !== undefined
+      ? { coordinationCheckedAt: options.coordinationCheckedAt }
+      : {}),
   };
 
   const text =

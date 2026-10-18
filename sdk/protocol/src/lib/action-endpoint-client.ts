@@ -12,6 +12,8 @@ import {
   parseActionRequestEnvelope,
   parseActionResponse,
 } from "./routing.js";
+import { abortableRequest, isRetryableHttpFailure, isRetryableHttpStatus } from "./client-transport.js";
+import { parseRetryAfterMs } from "./retry-backoff.js";
 import { deriveMpasAudience, signMpasRfc9421, type MpasRfc9421Signer } from "./rfc9421.js";
 
 /** Configuration for the common MPAS Action endpoint client. */
@@ -26,6 +28,8 @@ export interface ActionEndpointClientConfig {
   signer?: MpasRfc9421Signer | PromiseLike<MpasRfc9421Signer>;
   /** Signature lifetime in seconds, subject to the MPAS HTTP profile maximum. */
   signatureLifetimeSeconds?: number;
+  /** Aborts every in-flight and future request, for example at process shutdown. */
+  signal?: AbortSignal;
 }
 
 /** Input for constructing an {@link ActionRequest} around an Action Package. */
@@ -45,19 +49,41 @@ export interface ActionEndpointClientErrorOptions extends ErrorOptions {
   status?: number;
   /** MPAS error code returned inside an `MpasHttpError`, when available. */
   protocolCode?: string;
+  /** Server-requested delay from `Retry-After`, when present. */
+  retryAfterMs?: number;
+  /** Whether retrying the identical request may succeed. */
+  retryable?: boolean;
 }
+
+/**
+ * Default wait for one Action submission. It exceeds a Verifier's usual
+ * bounded wait for a duplicate that joins a dispatch in progress (the
+ * reference adapter waits its 30-second dispatch timeout plus 5 seconds), so
+ * the outcome normally arrives in one response (Core §6.9.2 rule 3).
+ */
+export const DEFAULT_ACTION_REQUEST_TIMEOUT_MS = 45_000;
 
 /** Error returned for Action endpoint transport, HTTP, identity, or response failures. */
 export class ActionEndpointClientError extends Error {
   readonly code = "ACTION_ENDPOINT_CLIENT_ERROR";
   readonly status?: number;
   readonly protocolCode?: string;
+  readonly retryAfterMs?: number;
+  /**
+   * Whether retrying the identical request may succeed: true for network
+   * failures and HTTP 408, 425, 429 and 5xx (or an `MpasHttpError` marked
+   * retryable); false for identity, validation and protocol errors and other
+   * rejections. Undefined when the client cannot tell.
+   */
+  readonly retryable?: boolean;
 
   constructor(message: string, options: ActionEndpointClientErrorOptions = {}) {
     super(message, options);
     this.name = "ActionEndpointClientError";
     this.status = options.status;
     this.protocolCode = options.protocolCode;
+    this.retryAfterMs = options.retryAfterMs;
+    this.retryable = options.retryable;
   }
 }
 
@@ -95,15 +121,17 @@ export class ActionEndpointClient {
   readonly timeoutMs: number;
   private readonly signer?: Promise<MpasRfc9421Signer>;
   private readonly signatureLifetimeSeconds?: number;
+  private readonly signal?: AbortSignal;
 
   /** Creates a client bound to one Action endpoint origin. */
   constructor(config: ActionEndpointClientConfig) {
     this.upstreamBinding = config.upstreamBinding === undefined ? undefined : structuredClone(config.upstreamBinding);
     this.url = config.url.replace(/\/+$/, "");
     this.audience = deriveMpasAudience(config.url);
-    this.timeoutMs = config.timeoutMs ?? 30_000;
+    this.timeoutMs = config.timeoutMs ?? DEFAULT_ACTION_REQUEST_TIMEOUT_MS;
     this.signer = config.signer ? Promise.resolve(config.signer) : undefined;
     this.signatureLifetimeSeconds = config.signatureLifetimeSeconds;
+    this.signal = config.signal;
   }
 
   /**
@@ -132,7 +160,7 @@ export class ActionEndpointClient {
     if (this.upstreamBinding !== undefined) {
       const inner = canonical.type === "DeliveryEnvelope" ? canonical.payload : canonical;
       if (inner.upstreamBinding !== undefined && (inner.upstreamBinding.toolSurface.alg !== this.upstreamBinding.toolSurface.alg || inner.upstreamBinding.toolSurface.value !== this.upstreamBinding.toolSurface.value || inner.upstreamBinding.upstreamDigest !== this.upstreamBinding.upstreamDigest)) {
-        throw new ActionEndpointClientError("Request binding conflicts with configured upstream binding.");
+        throw new ActionEndpointClientError("Request binding conflicts with configured upstream binding.", { retryable: false });
       }
       const bound = parseActionRequest({ ...inner, upstreamBinding: this.upstreamBinding });
       canonical = canonical.type === "DeliveryEnvelope" ? { ...canonical, payload: bound } : bound;
@@ -142,6 +170,7 @@ export class ActionEndpointClient {
     if (signer && signer.did !== requiredDid) {
       throw new ActionEndpointClientError(
         `Action request identity ${requiredDid} does not match signer DID ${signer.did}.`,
+        { retryable: false },
       );
     }
 
@@ -164,23 +193,30 @@ export class ActionEndpointClient {
       }));
     }
 
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
+    const abortable = abortableRequest(this.timeoutMs, this.signal);
     try {
       const response = await fetch(requestUrl, {
         method: "POST",
         headers,
         body: text,
-        signal: controller.signal,
+        signal: abortable.signal,
       });
       const responseText = await response.text();
+      // Read Retry-After before decoding the body: a proxy or load balancer can
+      // send it with a body that isn't JSON.
+      const retryAfterMs = response.ok ? undefined : parseRetryAfterMs(response.headers.get("retry-after"));
       let parsed: unknown;
       try {
         parsed = responseText.length === 0 ? undefined : strictJsonParse(responseText);
       } catch (error) {
         throw new ActionEndpointClientError(
           "Action endpoint response was not valid JSON.",
-          { status: response.status, cause: error },
+          {
+            status: response.status,
+            cause: error,
+            retryable: response.ok ? false : isRetryableHttpStatus(response.status),
+            ...(retryAfterMs !== undefined ? { retryAfterMs } : {}),
+          },
         );
       }
       if (!response.ok) {
@@ -190,6 +226,8 @@ export class ActionEndpointClient {
           {
             status: response.status,
             protocolCode: error?.type === "MpasHttpError" ? error.error?.code : undefined,
+            retryable: isRetryableHttpFailure(response.status, parsed),
+            ...(retryAfterMs !== undefined ? { retryAfterMs } : {}),
           },
         );
       }
@@ -198,17 +236,17 @@ export class ActionEndpointClient {
       } catch (error) {
         throw new ActionEndpointClientError(
           "Action endpoint did not return a valid ActionResponse.",
-          { cause: error },
+          { cause: error, retryable: false },
         );
       }
     } catch (error) {
       if (error instanceof ActionEndpointClientError) throw error;
       throw new ActionEndpointClientError(
         `Action endpoint is unavailable at ${this.url}.`,
-        { cause: error },
+        { cause: error, retryable: true },
       );
     } finally {
-      clearTimeout(timeout);
+      abortable.dispose();
     }
   }
 }

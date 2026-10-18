@@ -176,7 +176,7 @@ describe("official MCP Tasks bridge runtime", () => {
       status: "working",
       _meta: {
         "org.oma3/mpas": {
-          version: "2",
+          version: "3",
           actionId: expect.not.stringMatching(task.taskId),
           authorizationState: "authorization_required",
           disclosure: "transparent",
