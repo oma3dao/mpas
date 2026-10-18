@@ -202,18 +202,25 @@ export class ActionEndpointClient {
         signal: abortable.signal,
       });
       const responseText = await response.text();
+      // Read Retry-After before decoding the body: a proxy or load balancer can
+      // send it with a body that isn't JSON.
+      const retryAfterMs = response.ok ? undefined : parseRetryAfterMs(response.headers.get("retry-after"));
       let parsed: unknown;
       try {
         parsed = responseText.length === 0 ? undefined : strictJsonParse(responseText);
       } catch (error) {
         throw new ActionEndpointClientError(
           "Action endpoint response was not valid JSON.",
-          { status: response.status, cause: error, retryable: response.ok ? false : isRetryableHttpStatus(response.status) },
+          {
+            status: response.status,
+            cause: error,
+            retryable: response.ok ? false : isRetryableHttpStatus(response.status),
+            ...(retryAfterMs !== undefined ? { retryAfterMs } : {}),
+          },
         );
       }
       if (!response.ok) {
         const error = parsed as Partial<MpasHttpError> | undefined;
-        const retryAfterMs = parseRetryAfterMs(response.headers.get("retry-after"));
         throw new ActionEndpointClientError(
           `Action endpoint returned HTTP ${response.status}.`,
           {

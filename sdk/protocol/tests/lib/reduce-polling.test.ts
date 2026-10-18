@@ -21,6 +21,7 @@ import {
   CoordinationUnavailableError,
   CredentialAdapterClient,
   MpasAuthError,
+  buildActionRequest,
   buildDeliveryEnvelope,
   computeHash,
 } from "../../src/index.js";
@@ -148,15 +149,19 @@ function emptyPoll(updates: CoordinationActionUpdate[] = []): CoordinationPollRe
 }
 
 function makeBridge(options: {
-  endpoint: WorkflowActionEndpoint;
+  endpoint?: WorkflowActionEndpoint;
+  /** The deprecated `adapter` option, in place of `endpoint`. */
+  adapter?: CredentialAdapterClient;
   coordination: WorkflowCoordinationService;
   store?: MemoryWorkflowStore;
   expiresInMs?: number;
   workerId?: string;
   claimLeaseMs?: number;
   submissionTimeoutMs?: number;
+  now?: () => number;
 }) {
-  const expiresAt = () => new Date(Date.now() + (options.expiresInMs ?? 30 * 60_000)).toISOString();
+  const now = options.now ?? (() => Date.now());
+  const expiresAt = () => new Date(now() + (options.expiresInMs ?? 30 * 60_000)).toISOString();
   return new ProposerBridge({
     tools: TOOLS,
     buildActionPackage: async (_name, args) => buildPackage(args, expiresAt()),
@@ -174,11 +179,13 @@ function makeBridge(options: {
       };
     },
     store: options.store ?? new MemoryWorkflowStore(),
-    actionEndpoint: options.endpoint,
+    ...(options.endpoint !== undefined ? { actionEndpoint: options.endpoint } : {}),
+    ...(options.adapter !== undefined ? { adapter: options.adapter } : {}),
     coordinationService: options.coordination,
     proposerDid: PROPOSER_DID,
     resultRetentionSeconds: 86_400,
     random: () => 0.999,
+    ...(options.now !== undefined ? { now: options.now } : {}),
     ...(options.workerId !== undefined ? { workerId: options.workerId } : {}),
     ...(options.claimLeaseMs !== undefined ? { claimLeaseMs: options.claimLeaseMs } : {}),
     ...(options.submissionTimeoutMs !== undefined ? { submissionTimeoutMs: options.submissionTimeoutMs } : {}),
@@ -2183,6 +2190,104 @@ describe("Verifier bounded wait for a joined dispatch (Core v0.3 §6.9.2 rule 3)
       await vi.waitFor(() => expect(store.getWorkflow(result.taskId)).toMatchObject({ state: "resolved" }));
       expect(keys).toHaveLength(2);
       expect(keys[1]).toBe(keys[0]);
+      await bridge.shutdown();
+    } finally {
+      await server.close();
+    }
+  }, 10_000);
+});
+
+describe("Retry-After survives every Action client error path", () => {
+  const HTML_BUSY = "<html><body>Service temporarily unavailable</body></html>";
+  const MPAS_BUSY = JSON.stringify({
+    version: "1",
+    type: "MpasHttpError",
+    error: { code: "unavailable", message: "busy", retryable: true },
+  });
+  const EXECUTED = JSON.stringify({
+    version: "1",
+    type: "ActionResponse",
+    verifier: { did: "did:jwk:verifier" },
+    result: "executed",
+    executionResult: { content: [{ type: "text", text: "done" }], isError: false },
+  });
+  const BODIES = [
+    ["an HTML body from a proxy", "text/html", HTML_BUSY],
+    ["an MpasHttpError body", "application/mpas+json", MPAS_BUSY],
+  ] as const;
+
+  function busyServer(contentType: string, body: string) {
+    return startServer((res) => {
+      res.writeHead(503, { "Content-Type": contentType, "Retry-After": "120" });
+      res.end(body);
+    });
+  }
+
+  it.each(BODIES)("ActionEndpointClient keeps Retry-After from a 503 with %s", async (_name, contentType, body) => {
+    const server = await busyServer(contentType, body);
+    try {
+      const request = buildActionRequest({ actionPackage: buildPackage({}, new Date(Date.now() + 60_000).toISOString()) });
+      const error = await new ActionEndpointClient({ url: server.url }).submitActionRequest(request).catch((caught: unknown) => caught);
+      expect(error).toBeInstanceOf(ActionEndpointClientError);
+      expect(error).toMatchObject({ status: 503, retryable: true, retryAfterMs: 120_000 });
+    } finally {
+      await server.close();
+    }
+  });
+
+  it.each(BODIES)("CredentialAdapterClient.submit keeps Retry-After from a 503 with %s", async (_name, contentType, body) => {
+    const server = await busyServer(contentType, body);
+    try {
+      const pkg = buildPackage({}, new Date(Date.now() + 60_000).toISOString());
+      const error = await new CredentialAdapterClient({ url: server.url }).submit(pkg).catch((caught: unknown) => caught);
+      expect(error).toBeInstanceOf(AdapterRequestError);
+      expect(error).toMatchObject({ status: 503, retryable: true, retryAfterMs: 120_000 });
+    } finally {
+      await server.close();
+    }
+  });
+
+  it.each([
+    ["ActionEndpointClient, behind a proxy's HTML 503", "text/html", HTML_BUSY, (url: string) => ({ endpoint: new ActionEndpointClient({ url }) })],
+    ["the deprecated adapter option, with an MpasHttpError 503", "application/mpas+json", MPAS_BUSY, (url: string) => ({ adapter: new CredentialAdapterClient({ url }) })],
+  ] as const)("a bridge using %s keeps the durable deadline and doesn't resend before it", async (_name, contentType, body, client) => {
+    let clock = Date.now();
+    const requests: { actionPackage: ActionPackage }[] = [];
+    const server = await startServer((res) => {
+      if (requests.length === 1) {
+        res.writeHead(503, { "Content-Type": contentType, "Retry-After": "120" });
+        res.end(body);
+        return;
+      }
+      res.writeHead(200, { "Content-Type": "application/mpas+json" });
+      res.end(EXECUTED);
+    }, (raw) => requests.push(JSON.parse(raw) as { actionPackage: ActionPackage }));
+    try {
+      const store = new MemoryWorkflowStore();
+      const bridge = makeBridge({
+        ...client(server.url),
+        coordination: fakeCoordination(async () => emptyPoll()).service,
+        store,
+        now: () => clock,
+      });
+      const result = await bridge.handleToolCall("merge_pull_request", {});
+      if (result.resultType !== "task") throw new Error("Expected a Task.");
+      // The server's delay, not the first-failure backoff (4995 ms with this jitter source).
+      expect(result.pollIntervalMs).toBe(120_000);
+      const last = attemptsOf(store, result.taskId).at(-1)!;
+      expect(last).toMatchObject({ stage: "initial", outcome: "unreachable", retryAfterMs: 120_000 });
+      expect(Date.parse(last.notBefore!)).toBe(clock + 120_000);
+
+      clock += 119_000;
+      bridge.handleTasksGet(result.taskId);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(requests).toHaveLength(1);
+
+      clock += 2_000;
+      bridge.handleTasksGet(result.taskId);
+      await vi.waitFor(() => expect(store.getWorkflow(result.taskId)).toMatchObject({ state: "resolved" }));
+      expect(requests).toHaveLength(2);
+      expect(requests[1]!.actionPackage.actionEnvelope.actionId).toEqual(requests[0]!.actionPackage.actionEnvelope.actionId);
       await bridge.shutdown();
     } finally {
       await server.close();

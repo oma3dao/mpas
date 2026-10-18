@@ -6,6 +6,7 @@ import type {
   MpasHttpError,
 } from "../types/mpas.js";
 import { isRetryableHttpFailure, isRetryableHttpStatus } from "./client-transport.js";
+import { parseRetryAfterMs } from "./retry-backoff.js";
 import {
   ActionEndpointClient,
   ActionEndpointClientError,
@@ -44,16 +45,20 @@ export class AdapterRequestError extends Error {
    * ({@link isRetryableHttpFailure}).
    */
   readonly retryable: boolean;
+  /** Server-requested delay from `Retry-After`, when present. */
+  readonly retryAfterMs?: number;
 
   constructor(
     readonly code: string,
     message: string,
     readonly status: number,
     retryable: boolean = isRetryableHttpStatus(status),
+    options: { retryAfterMs?: number } = {},
   ) {
     super(message);
     this.name = "AdapterRequestError";
     this.retryable = retryable;
+    this.retryAfterMs = options.retryAfterMs;
   }
 }
 
@@ -105,6 +110,7 @@ export class CredentialAdapterClient {
           error.message,
           error.status,
           error.retryable ?? isRetryableHttpStatus(error.status),
+          error.retryAfterMs !== undefined ? { retryAfterMs: error.retryAfterMs } : {},
         );
       }
       throw new AdapterUnavailableError(`Credential Adapter is unavailable at ${this.url}.`, { cause: error });
@@ -133,10 +139,12 @@ export class CredentialAdapterClient {
       if (!response.ok) {
         const httpError = body as Partial<MpasHttpError>;
         const retryable = isRetryableHttpFailure(response.status, body);
+        const retryAfterMs = parseRetryAfterMs(response.headers.get("retry-after"));
+        const options = retryAfterMs !== undefined ? { retryAfterMs } : {};
         if (httpError?.type === "MpasHttpError" && httpError.error) {
-          throw new AdapterRequestError(httpError.error.code, httpError.error.message, response.status, retryable);
+          throw new AdapterRequestError(httpError.error.code, httpError.error.message, response.status, retryable, options);
         }
-        throw new AdapterRequestError("server_error", `Adapter returned HTTP ${response.status}.`, response.status, retryable);
+        throw new AdapterRequestError("server_error", `Adapter returned HTTP ${response.status}.`, response.status, retryable, options);
       }
 
       return body as T;
