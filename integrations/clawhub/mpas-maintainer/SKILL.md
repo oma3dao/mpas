@@ -125,6 +125,9 @@ or when responsible for monitoring an approval queue.
   signing material to the Proposer for transport.
 - Treat Approval as authorization for MPAS to execute the Action, potentially
   immediately. Approve only when that effect is intended.
+- After you approve or reject, tell the Proposer your decision. The Action
+  proceeds, or ends as rejected, when the Proposer's client next checks it, and
+  an agent that checks only when prompted waits for your report.
 - Do not ask the Proposer or Maintainer to perform the approved operation again
   through a product UI, direct API, or CLI. The MPAS Approval authorizes the
   credential-holding adapter to perform it.
