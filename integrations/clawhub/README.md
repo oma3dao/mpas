@@ -70,7 +70,8 @@ republish.
 
 ### Manual (CLI)
 
-From the `integrations/clawhub` directory:
+For updates, replace `x.y.z` with the new release version and `your changelog.`
+with a description of the changes. From the `integrations/clawhub` directory:
 
 ```sh
 cd integrations/clawhub
@@ -80,7 +81,8 @@ clawhub skill publish ./mpas-proposer \
   --name "MPAS Proposer for multi-party approvals" \
   --owner oma3 \
   --categories "security,automation,agents" \
-  --changelog "Initial release" \
+  --version x.y.z \
+  --changelog "your changelog." \
   --dry-run
 ```
 
@@ -92,7 +94,8 @@ clawhub skill publish ./mpas-maintainer \
   --name "MPAS Maintainer for multi-party approvals" \
   --owner oma3 \
   --categories "security,automation,agents" \
-  --changelog "Initial release" \
+  --version x.y.z \
+  --changelog "your changelog." \
   --dry-run
 ```
 
