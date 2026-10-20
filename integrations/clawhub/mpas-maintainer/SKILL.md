@@ -86,11 +86,6 @@ have connected.
 
 ---
 
-Assist an authorized MPAS Signer acting as a Maintainer with decisions about
-specific Actions proposed by others. A Maintainer may be a person,
-organization, policy-controlled service, or authorized agent. Treat the
-configured Signer or authorization step as the authoritative decision-maker.
-
 ## Use the configured approval mechanism
 
 Retrieve and decide requests only through the configured MPAS signer or
@@ -163,5 +158,3 @@ or when responsible for monitoring an approval queue.
   credentials, or credential-bearing configuration to the Proposer.
 - Never let the proposing agent substitute its own decision for the authorized
   Signer or approval step.
-- If the assisting agent is not authorized to decide, present the review and
-  obtain the authoritative decision instead of approving on its own.
