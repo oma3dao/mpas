@@ -122,14 +122,61 @@ To trigger: Actions → "ClawHub Skill Publish" → Run workflow.
 ## Versioning
 
 - New skills start at `1.0.0`.
-- The `version` field in the ClawHub SKILL.md frontmatter must match the
-  version already published on ClawHub. Before publishing an update, bump the
-  version here — ClawHub rejects re-publishing the same version.
+- The `version` field in the ClawHub SKILL.md frontmatter identifies the
+  intended release. Before publishing an update, bump the version here —
+  ClawHub rejects re-publishing the same version.
 - The publish workflow auto-increments the patch version if you don't specify
-  one. Use `--version` to set an explicit version for breaking changes.
+  one. Use `--version` to select an explicit release version, including minor
+  releases, and verify the selected version in the publish preview.
 - ClawHub keeps all published versions; `latest` tag points to the newest.
 - The canonical skills in `../skills/` also have a `version` field — keep
   them in sync or the ClawHub copies become the source of confusion.
+- Skill release versions are independent of MPAS protocol versions. The
+  proposer and maintainer skills may share a version for a coordinated release
+  even when the underlying changes differ.
+
+## Prepared release: 1.1.0
+
+Both skills and their canonical copies target `1.1.0`. Verify that the publish
+preview selects `1.1.0` for both skills; for explicit CLI publishing, pass
+`--version 1.1.0`.
+
+Suggested release notes:
+
+> Coordinated MPAS skill update. The proposer documents client-triggered
+> progress, optional polling while awaiting approvals, and follow-up checks
+> through completion. The maintainer confirms decision submission acceptance
+> and distinguishes a Signer's decision from the Action's outcome. Both skills
+> explicitly disclose their intended behavioral changes, scope persistent
+> instruction installation to operator-requested role setup, and require
+> separate proposer and maintainer agents.
+
+This release updates skill instructions; the maintainer implementation is
+unchanged.
+
+## Security review context
+
+The skills intentionally configure agent behavior for MPAS-governed
+operations. Each published SKILL.md discloses that purpose in its description
+and explains the persistent instruction changes before the setup steps.
+Reading a skill for review does not authorize installing its role preamble.
+
+Suggested explanation for reviewers:
+
+> Behavioral modification is the advertised function of these governance
+> skills. During operator-requested setup, the selected role's instructions
+> are appended to the agent's persistent instruction file. They support
+> separation of duties and prohibit bypassing the configured approval
+> mechanism. The operator chooses and authorizes the role configuration;
+> existing host security controls and unrelated instructions are preserved.
+> Proposers route governed operations through the configured MPAS bridge.
+> Separate maintainers independently review Actions and submit decisions
+> through the configured signer or approval mechanism.
+
+Include this context in release notes or a reviewer response as appropriate.
+Keep the disclosure in the published skills themselves: this README is not
+uploaded with either skill. Clear disclosure helps reviewers assess the
+behavior but does not guarantee that a scanner will remove a warning.
 
 ## Files in this directory
 

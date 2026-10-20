@@ -1,8 +1,8 @@
 ---
 name: mpas-proposer
-description: Allow any combination of agents, humans, or software to approve MCP tool calls that you flag.  Prevent your agent from deleting your production database or violating compliance.  Use this skill for agents that PROPOSE calls, not agents that approve calls.
-version: 1.0.4
-homepage: https://github.com/oma3dao/mpas
+description: Makes this agent a Proposer in an MPAS multi-party approval workflow. Its MCP tool calls go through an MPAS bridge, and high-impact calls, as your policy defines them, execute only after independent approvers sign off, so the agent can't delete your production database on its own. Changes agent behavior by design.
+version: 1.1.0
+homepage: https://www.oma3.org/mpas
 metadata:
   openclaw:
     emoji: "🔐"
@@ -10,26 +10,45 @@ metadata:
 
 # MPAS Proposer for multi-party approvals
 
-**This skill is for the PROPOSER role** — the agent that calls governed tools
-and waits for approval. For the agent that reviews and approves, install
+## What this skill does
+
+This skill makes the agent a **Proposer** in an MPAS multi-party
+authorization workflow. In that workflow, the agent makes its tool calls for
+an application through that application's MPAS bridge, and each call becomes
+an MPAS **Action**. Actions that the policy designates as **high-impact**
+execute only after the required independent Maintainers approve them; the
+rest execute like ordinary tool calls. The policy can depend on an Action's
+arguments, so the agent learns that an Action is high-impact from the
+bridge's response, not in advance. The Proposer never holds the application's
+credentials itself. For the agent that reviews and approves, use
 `mpas-maintainer` instead.
 
-MPAS adds multi-party approval to any MCP tool call. Any combination of
-humans, AI agents, or deterministic policy services can serve as approvers —
-you choose. Credentials are separated: the proposing agent never holds the
-write token, so even a goal-driven agent that would otherwise grab a credential
-and act unilaterally cannot bypass the approval gate. Approvers operate
-independently with their own prime directive — whether that's "nothing
-destructive without human sign-off" or "enforce HIPAA/SOC 2/SEC FD compliance
-before execution." MPAS is policy-mechanism independent: it doesn't care how
-the policy is described, only that the required signatures are present.
+Changing the agent's behavior is the purpose of this skill. As a Proposer, the
+agent:
+
+- performs operations on an application that an MPAS bridge serves only
+  through that bridge, never by direct API, CLI, or UI;
+- when the bridge responds that an Action is high-impact and requires
+  approval, tells Maintainers that it is waiting for their decision, and
+  waits;
+- when a Maintainer reports to the agent that an approval was submitted,
+  observes the bridge to see if the Action completed;
+- never approves its own Actions and never acts as a Maintainer;
+- reports the actual outcome, not an approval, as the result.
+
+These instructions narrow how the agent performs operations on applications
+that MPAS bridges serve, and add a duty to notify Maintainers. They grant no
+new access and do not override the host's security controls or the agent's
+other instructions.
+
+Setup makes the role persistent by appending a short preamble to the agent's
+always-loaded instruction file. Do this only when the user asks to configure
+this agent as an MPAS Proposer. Reading or reviewing this skill is not such a
+request.
 
 Source: https://github.com/oma3dao/mpas
 
-## Setup: always-on preamble (required)
-
-This agent must have exactly one MPAS role. Do not combine proposer and
-maintainer in one agent.
+## Setup: persistent role preamble
 
 Append the following prime-directive block to the instruction file your harness
 always loads (AGENTS.md, CLAUDE.md, or equivalent). If that file already
@@ -41,15 +60,15 @@ file instead.
 ```markdown
 ## Prime Directive — MPAS Proposer
 
-You are an MPAS Proposer. Every governed write operation you perform MUST go
-through the configured MPAS MCP bridge. You cannot execute governed operations
-directly — no direct API calls, no CLI, no product UI, no alternate path. The
-bridge is your only channel for these actions.
+You are an MPAS Proposer. Every operation you perform on an application that
+an MPAS MCP bridge serves MUST go through that bridge. You cannot perform these
+operations directly — no direct API calls, no CLI, no product UI, no alternate
+path. The bridge is your only channel for them.
 
-When an Action requires authorization, you MUST notify the maintainer with the
-Action ID and context before submitting any further governed actions for that
-goal. You cannot approve your own actions. A separate maintainer must authorize
-them through MPAS.
+When the bridge tells you an Action is high-impact and requires approval, you
+MUST notify the maintainer with the Action ID and context before submitting
+any further Actions for that goal. You cannot approve your own Actions. A
+separate maintainer must authorize them through MPAS.
 
 This is not optional behavior. It is the security and governance model you
 operate under. Refer to the mpas-proposer skill for protocol details and
@@ -63,17 +82,26 @@ you have connected.
 
 ---
 
-Use a configured MPAS MCP bridge as the only path for a protected operation.
-Call the application's normal MCP tool. Let the MPAS components construct and
-coordinate the Action and execute it through the credential-holding adapter
-after authorization.
+For an application that an MPAS bridge serves, the bridge is the only path.
+Call the application's normal MCP tools through it. An Action that is not
+high-impact completes like a normal tool call. For a high-impact Action, the
+bridge reports that more approvals are required. The bridge builds the Action
+and collects Maintainers' approvals, but it does not notify Maintainers: you
+do. Checking the Action, described below, is what prompts the bridge to
+check on approvals. Once the required approvals are collected, the bridge executes
+the Action through the credential-holding adapter.
 
-The bridge selects its protocol surface from the harness handshake. The agent
-does not select a mode by command, configuration, client name, or version.
+Every MPAS bridge supports two ways of tracking an Action: MCP Tasks, for
+harnesses on newer MCP versions, and the `mpas_wait_for_action_result` tool,
+for harnesses on older versions. Your harness selects one by the MCP version it
+uses when it connects to the bridge, and that choice holds for the whole
+connection. The harness then makes either the Task interface or the wait tool
+available to you; you don't choose between them. Check your tool list:
 
-If `mpas_wait_for_action_result` is present in the available tools, treat
-application calls as deferred and use that tool to retrieve their results. If
-it is absent, do not attempt to call it; the harness manages MCP Tasks.
+- If `mpas_wait_for_action_result` is in it, application calls may return a
+  deferred Action reference. Call that tool to get their results.
+- If it is not, your harness supports MCP Tasks. Track the Action through Task
+  checks, described below, and don't try to call the wait tool.
 
 ## Propose an Action
 
@@ -106,9 +134,9 @@ support. While the Task is `working`, inspect `_meta["org.oma3/mpas"]` and
 handle its `authorizationState`:
 
 - `submitted`: MPAS is evaluating the Action. It has not completed.
-- `authorization_required`: The Action has not executed and needs additional
-  Approvals. Read `requirements` when present and follow the authorization
-  workflow below.
+- `authorization_required`: The Action is high-impact. It has not executed and
+  needs additional Approvals. Read `requirements` when present and follow the
+  authorization workflow below.
 - `approvals_collected`: Required Approvals have been collected, but execution
   is not yet confirmed.
 - `pending`: MPAS is awaiting a verifier or execution outcome. Do not report
@@ -119,8 +147,8 @@ handle its `authorizationState`:
 - **Your MCP host** (the harness that runs you) sends tool calls and Task
   checks (`tasks/get`) to the bridge.
 - **The MPAS bridge** (the MCP server for the application) submits Actions and
-  collects their approvals. It does nothing in the background: it moves an
-  Action forward only when a tool is called or a Task is checked.
+  collects their approvals. It doesn't poll or retry on its own: each tool
+  call or Task check can start its next step.
 - **The Coordination Service** is where Maintainers review and approve.
 - **The Verifier or credential adapter** executes an Action once it is
   authorized.
@@ -129,9 +157,11 @@ Your host checking a Task and the bridge asking the Coordination Service
 about approvals are separate. Each Task check returns the bridge's current
 state at once and may start the next step in the background: asking the
 Coordination Service whether approvals arrived (at most once every few
-seconds), or retrying a step that failed. Your initial call is always
-submitted, but an Action nobody checks on makes no further progress: an
-approved Action that is never checked again is never executed, and expires.
+seconds), or retrying a step that failed. Your initial call starts
+submission. A step can finish after the check that started it returns,
+including sending an approved Action for execution. If nothing checks, the
+bridge won't notice new approvals or retry failed steps, and the Action can
+expire without executing.
 
 ### Checking a Task
 
@@ -141,15 +171,22 @@ Use the harness-managed `tasks/get` operation. Either way of checking works:
   about 2 seconds while the bridge itself has work to do, about a minute while
   Maintainers decide, and never sooner than a failed step can be retried. You
   don't need to add your own checks on top of the host's.
-- **Hosts that check only when asked:** check the Task once when there is a
-  reason to, for example when a Maintainer reports an approval or rejection.
+- **Hosts that check only when asked:** check when prompted, for example when
+  a Maintainer reports a decision or the user asks for progress. Periodic
+  checking while awaiting approval is optional.
 
-Don't check in a tight loop, and don't depend on a Maintainer's message
-arriving: if you're waiting on an Action, an occasional check at the hinted
-interval is enough. While authorization is required,
-`coordinationCheckedAt` in `_meta["org.oma3/mpas"]` shows when the bridge last
-asked the Coordination Service. If it is older than a Maintainer's report,
-check again after a few seconds.
+A check returns right away; the result of any step it starts shows up on a
+later check. After a Maintainer reports a decision, expect to check more than
+once before you see the decision collected and the Action executed. Space
+follow-up checks by the returned `pollIntervalMs`, never in a tight loop, and
+stop when the Task reaches a terminal state. A Maintainer's message is a
+reason to check, not confirmation that execution succeeded.
+
+While authorization is required, `coordinationCheckedAt` in
+`_meta["org.oma3/mpas"]` shows when the bridge last completed a Coordination
+check. If it is null or older than a Maintainer's report, the bridge has not
+yet confirmed that report; allow time for a fresh check and read the Task
+again.
 
 Read the Task's status message. It says when a step failed and will be
 retried on the next check. If a Maintainer says they can't see your request,
@@ -160,14 +197,21 @@ approvals.
 
 ### The compatibility wait tool
 
-When `mpas_wait_for_action_result` is present (hosts without MCP Tasks), pass
-the existing Action ID to that tool. Each call returns within the timeout you
-pass, even if the bridge's own check is slow, and starts at most one step, as
-a Task check does. A deferred result means the Action is still awaiting
-authorization or execution; use its status and message as progress
-information. Call the tool again when there is a reason to, such as a
-Maintainer reporting a decision, not in a tight loop. A terminal native
-application result or MPAS error ends the wait lifecycle.
+When `mpas_wait_for_action_result` is present (harnesses on older MCP
+versions), pass the existing Action ID to that tool:
+
+- Each call returns within the timeout you pass, even if the bridge's own
+  check is slow. Like a Task check, it can start the bridge's next step, which
+  may finish after the call returns. The timeout only bounds this call;
+  nothing keeps polling after it returns.
+- A deferred result means the Action is still awaiting authorization or
+  execution. Use its status and message as progress information.
+- Call the tool again when prompted, such as when a Maintainer reports a
+  decision or the user asks for progress. Periodic checking while awaiting
+  approval is optional.
+- After a decision is reported, expect more than one call before you see the
+  final outcome. Space the calls out; never call in a tight loop.
+- A terminal native application result or MPAS error ends the wait lifecycle.
 
 Do not repeat the application tool call to check progress because that creates
 a new Action. Do not expect `tasks/list` or `tasks/result`; they are not part
@@ -186,7 +230,7 @@ configured MPAS coordination and signer mechanisms.
    Include the Action ID, application, operation, target resources, arguments,
    reason, and enough context for an informed decision. Distinguish explanatory
    context from the exact Action being authorized.
-4. Send the notification before submitting another governed Action for the
+4. Send the notification before submitting another Action for the
    same goal. Local reading, editing, building, and testing may continue.
 5. Answer Maintainer questions or obtain missing context without changing the
    proposed Action.
