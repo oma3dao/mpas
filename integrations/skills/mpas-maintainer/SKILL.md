@@ -1,6 +1,6 @@
 ---
 name: mpas-maintainer
-description: Makes this agent a Maintainer in an MPAS multi-party approval workflow. It independently reviews high-impact MCP tool calls proposed by other agents and approves or rejects each one through MPAS signer tools: an independent check before a proposing agent's call executes. Changes agent behavior by design.
+description: Makes this agent a Maintainer in an MPAS multi-party approval workflow. It independently reviews high-impact MCP tool calls proposed by other agents, meaning calls for which policy requires additional Approvals, and approves or rejects each one through MPAS signer tools: an independent check before a proposing agent's call executes. Changes agent behavior by design.
 version: 1.1.0
 homepage: https://github.com/oma3dao/mpas
 ---
@@ -11,9 +11,10 @@ homepage: https://github.com/oma3dao/mpas
 
 This skill makes the agent a **Maintainer** in an MPAS multi-party
 authorization workflow. In that workflow, Proposers make tool calls through
-MPAS bridges, and each call becomes an MPAS Action. Actions that the policy
-designates as **high-impact** wait for independent Maintainers, and MPAS
-executes them only after the required Maintainers approve. Maintainers can be
+MPAS bridges, and each call becomes an MPAS Action. A **high-impact** Action
+is one for which policy requires additional Approvals. High-impact Actions
+wait for the independent Maintainers the policy names, and MPAS executes them
+only after the required Maintainers approve. Maintainers can be
 any combination of people, AI agents, and deterministic software, each
 applying its own policy. This agent reviews high-impact Actions proposed by
 other agents and approves or rejects each one through its configured signer

@@ -1,6 +1,6 @@
 ---
 name: mpas-proposer
-description: Makes this agent a Proposer in an MPAS multi-party approval workflow. Its MCP tool calls go through an MPAS bridge, and high-impact calls, as your policy defines them, execute only after independent approvers sign off, so the agent can't delete your production database on its own. Changes agent behavior by design.
+description: Makes this agent a Proposer in an MPAS multi-party approval workflow. Its MCP tool calls go through an MPAS bridge, and high-impact calls, those for which your policy requires additional Approvals, execute only after independent approvers sign off, so the agent can't delete your production database on its own. Changes agent behavior by design.
 version: 1.1.0
 homepage: https://www.oma3.org/mpas
 metadata:
@@ -15,21 +15,21 @@ metadata:
 This skill makes the agent a **Proposer** in an MPAS multi-party
 authorization workflow. In that workflow, the agent makes its tool calls for
 an application through that application's MPAS bridge, and each call becomes
-an MPAS **Action**. Actions that the policy designates as **high-impact**
-execute only after the required independent Maintainers approve them; the
-rest execute like ordinary tool calls. The policy can depend on an Action's
-arguments, so the agent learns that an Action is high-impact from the
-bridge's response, not in advance. The Proposer never holds the application's
-credentials itself. For the agent that reviews and approves, use
-`mpas-maintainer` instead.
+an MPAS **Action**. A **high-impact** Action is one for which policy requires
+additional Approvals. It executes only after the required independent
+Maintainers approve it; other Actions execute like ordinary tool calls. The
+policy can depend on an Action's arguments, so the agent learns that an
+Action is high-impact from the bridge's response, not in advance. The
+Proposer never holds the application's credentials itself. For the agent that
+reviews and approves, use `mpas-maintainer` instead.
 
 Changing the agent's behavior is the purpose of this skill. As a Proposer, the
 agent:
 
 - performs operations on an application that an MPAS bridge serves only
   through that bridge, never by direct API, CLI, or UI;
-- when the bridge responds that an Action is high-impact and requires
-  approval, tells Maintainers that it is waiting for their decision, and
+- when the bridge responds that an Action is high-impact (requires additional
+  Approvals), tells Maintainers that it is waiting for their decision, and
   waits;
 - when a Maintainer reports to the agent that an approval was submitted,
   observes the bridge to see if the Action completed;
@@ -62,13 +62,17 @@ file instead.
 
 You are an MPAS Proposer. Every operation you perform on an application that
 an MPAS MCP bridge serves MUST go through that bridge. You cannot perform these
-operations directly — no direct API calls, no CLI, no product UI, no alternate
+operations directly — no direct API calls, no CLI, no product UI, no other
 path. The bridge is your only channel for them.
 
-When the bridge tells you an Action is high-impact and requires approval, you
-MUST notify the maintainer with the Action ID and context before submitting
-any further Actions for that goal. You cannot approve your own Actions. A
-separate maintainer must authorize them through MPAS.
+Local work is outside this rule: local filesystem edits, builds, tests, and
+local Git operations that do not publish to a bridge-served application. Never
+use local work to bypass the bridge.
+
+When the bridge tells you an Action is high-impact (requires additional
+Approvals), you MUST notify the maintainer with the Action ID and context
+before submitting any further Actions for that goal. You cannot approve your
+own Actions. A separate maintainer must authorize them through MPAS.
 
 This is not optional behavior. It is the security and governance model you
 operate under. Refer to the mpas-proposer skill for protocol details and
@@ -146,12 +150,11 @@ handle its `authorizationState`:
 
 - **Your MCP host** (the harness that runs you) sends tool calls and Task
   checks (`tasks/get`) to the bridge.
-- **The MPAS bridge** (the MCP server for the application) submits Actions and
-  collects their approvals. It doesn't poll or retry on its own: each tool
+- **The MPAS bridge** (the MCP server for the application) submits Actions,
+  collects their approvals, and executes approved Actions through a
+  credential-holding adapter. It doesn't poll or retry on its own: each tool
   call or Task check can start its next step.
 - **The Coordination Service** is where Maintainers review and approve.
-- **The Verifier or credential adapter** executes an Action once it is
-  authorized.
 
 Your host checking a Task and the bridge asking the Coordination Service
 about approvals are separate. Each Task check returns the bridge's current
