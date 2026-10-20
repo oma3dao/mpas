@@ -151,9 +151,11 @@ capacity.
    submission.
 10. **Hosts and agents may check either way.** Hosts that check Tasks
     automatically follow a state-based polling hint; agents that check only
-    when prompted, for example when a Maintainer reports a decision, check
-    once (§8.3, §14.4). (Revised: an earlier draft told agents to rely on
-    Maintainers' reports.)
+    when prompted, for example when a Maintainer reports a decision, may wait
+    for that prompt while approvals are outstanding. Periodic checking while
+    awaiting approval is optional. A prompted check can start asynchronous
+    work; further checks may be needed to collect the decision and observe
+    completion (§8.3, §14.4).
 11. **Profile version 3, and prompt Tasks.** These client-visible changes are
     a new profile version, and a tool call returns a Task within about one
     second (§14).
@@ -854,15 +856,27 @@ Verifier or credential adapter. The host's Task checks and the bridge's
 Coordination polls are separate relationships. The guidance:
 
 - supports hosts that check Tasks automatically, following the hint, and
-  agents that check only when prompted;
+  agents that initiate checks only when prompted; periodic checking while
+  awaiting approval is optional;
 - requires neither continuous polling nor waiting for a Maintainer's
   out-of-band report;
+- explains that a prompted check may start asynchronous work without returning
+  its outcome, so further checks using the returned hint may be needed to
+  collect a reported decision and observe completion; checks stop at a terminal
+  state;
+- distinguishes timer-driven polling and retries, which the bridge does not
+  perform, from request-triggered work that can finish asynchronously and
+  trigger directly dependent work; without further observations, uncollected
+  approvals or required retries can leave an Action to expire without executing;
 - explains that host-managed checks needn't be duplicated by the agent's own
   tool calls;
 - tells an agent whose Maintainer can't see the request to check the Task,
   whose status message says whether registration is still pending, and never
   to call the tool again;
-- documents the compatibility wait tool separately.
+- documents the compatibility wait tool separately: periodic checking while
+  awaiting approval is optional, deferred responses may require further spaced
+  wait calls after a reported decision, and a wait timeout does not create
+  ongoing background polling or retries.
 
 ### 14.5 Acceptance Criteria
 
