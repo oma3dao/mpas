@@ -1,0 +1,33 @@
+{
+  "version": "1",
+  "application": {
+    "name": "Render MCP MPAS Bridge Server",
+    "description": "MPAS-protected bridge for the official hosted Render MCP server.",
+    "applicationDid": "did:web:wivity.com:applications:render-mcp-server"
+  },
+  "native": false,
+  "protocol": "mcp",
+  "upstream": {
+    "name": "render-mcp-server",
+    "protocolVersion": "2024-11-05",
+    "toolSurface": {
+      "alg": "sha-256",
+      "value": "oMmWYMW0bvudI9ipOAFjK0paPEvcd-NByTANSjZ1A_U"
+    },
+    "repository": "https://github.com/render-oss/render-mcp-server",
+    "distributionUrl": "https://mcp.render.com/mcp"
+  },
+  "plugin": {
+    "repository": "https://github.com/oma3dao/mpas-applications/blob/main/applications/render/plugin.json",
+    "artifactDid": "did:artifact:bafkreicmyvhujuluuoicoca6gmxow23ther4zaha5vwdkr7zkfzugsag4e",
+    "pluginDid": "did:web:wivity.com:plugins:render-mcp-server"
+  },
+  "publisher": {
+    "name": "Wivity",
+    "githubOrg": "wivity",
+    "publisherDid": "did:web:wivity.com",
+    "repository": "https://github.com/oma3dao/mpas-applications/tree/main/applications/render"
+  },
+  "status": "beta",
+  "source": "https://github.com/oma3dao/mpas-applications/tree/main/applications/render"
+}
