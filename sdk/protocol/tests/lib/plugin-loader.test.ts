@@ -3,8 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { loadPlugin } from "../../src/core/plugin-loader.js";
-import { PLUGIN_RESOURCE_LIMITS } from "@oma3/mpas/plugin-loader";
+import { loadPlugin, PLUGIN_RESOURCE_LIMITS } from "../../src/lib/plugin-loader.js";
 
 const pluginsDir = fileURLToPath(new URL("../fixtures/plugins/", import.meta.url));
 

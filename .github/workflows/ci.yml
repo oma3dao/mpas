@@ -105,3 +105,11 @@ jobs:
       - name: Test CLI
         working-directory: cli
         run: npm test
+
+      - name: Link local SDK into CLI
+        working-directory: cli
+        run: npm install --no-save --install-links=false ../sdk/protocol
+
+      - name: Test CLI against local SDK
+        working-directory: cli
+        run: npm test

@@ -127,6 +127,16 @@ npm run typecheck --prefix cli
 npm test --prefix cli
 ```
 
+The CLI normally tests against its pinned published `@oma3/mpas` dependency.
+When changing the SDK, build it and link the checkout before running the CLI
+suite; `npm test` detects the link and includes cross-package integration tests:
+
+```sh
+npm run build --prefix sdk/protocol
+npm --prefix cli install --no-save --install-links=false ../sdk/protocol
+npm test --prefix cli
+```
+
 For the complete local governed-action walkthrough, including proposer,
 maintainer, Credential Adapter, policy, and agent-harness configuration, follow
 the [macOS demo setup guide](cli/guides/setup-macos.md).

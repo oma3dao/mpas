@@ -608,7 +608,20 @@ Maintainer release instructions are documented in
 
 ## Tests
 
-Tests cover proposer-side primitives, hash utilities, bridge integration, verification, and type conformance.
+This package owns authoritative coverage for protocol primitives: Action
+Package parsing and verification, signature suites, `did:jwk`, policy
+evaluation, plugin validation, receipts, proposer primitives, hash utilities,
+bridge integration, and type conformance.
+
+Run the SDK suite from this directory:
+
+```sh
+npm test
+```
+
+Consumer behavior belongs in the CLI suite. To exercise this checkout through
+the CLI, build the SDK and link it as documented in
+[`cli/tests/README.md`](../../cli/tests/README.md).
 
 ## Future Package Split
 
