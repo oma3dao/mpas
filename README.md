@@ -133,7 +133,7 @@ suite; `npm test` detects the link and includes cross-package integration tests:
 
 ```sh
 npm run build --prefix sdk/protocol
-npm --prefix cli install --no-save --install-links=false ../sdk/protocol
+npm --prefix cli install --no-save --install-links=false ./sdk/protocol
 npm test --prefix cli
 ```
 

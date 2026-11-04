@@ -391,6 +391,22 @@ describe("verifyActionPackage", () => {
     expect(result).toMatchObject({ status: "rejected", code: "MALFORMED_APPROVAL_BUNDLE" });
   });
 
+  it("rejects an envelope whose remaining validity exceeds the configured maximum", async () => {
+    const pkg = await parseFixture("valid-no-approval-required.json");
+    const config = await verificationConfig();
+
+    const result = await verifyActionPackage(pkg, {
+      ...config,
+      maxEnvelopeValidityMs: 60 * 60 * 1000,
+    });
+
+    expect(result).toMatchObject({
+      status: "rejected",
+      code: "ENVELOPE_VALIDITY_TOO_LONG",
+      path: "$.actionEnvelope.expiresAt",
+    });
+  });
+
   it("rejects a bundle whose propose approval is missing (only maintainer approvals present)", async () => {
     const pkg = await parseFixture("valid-two-approvals.json");
     const withoutPropose = {
