@@ -3,9 +3,9 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { compactVerify, importJWK, type JWK } from "jose";
 import { describe, expect, it } from "vitest";
-import { buildAndSignExecutionReceipt } from "../../src/core/receipt-builder.js";
-import { computeJsonHash } from "../../src/core/verification.js";
-import type { ActionPackage, Did, ReceiptPayload } from "../../src/core/types.js";
+import { buildAndSignExecutionReceipt } from "../../src/lib/receipt-builder.js";
+import { computeJsonHash } from "../../src/lib/verification.js";
+import type { ActionPackage, Did, ReceiptPayload } from "../../src/types/mpas.js";
 
 const fixturesDir = fileURLToPath(new URL("../fixtures/", import.meta.url));
 
@@ -21,8 +21,10 @@ async function readJson<T>(path: string): Promise<T> {
 
 describe("buildAndSignExecutionReceipt", () => {
   it("builds and signs a verifiable Execution Receipt", async () => {
-    const actionPackage = await readJson<ActionPackage>(join(fixturesDir, "core", "valid-no-approval-required.json"));
-    const adapter = await readJson<KeyFixture>(join(fixturesDir, "test-keys", "adapter.json"));
+    const actionPackage = await readJson<ActionPackage>(
+      join(fixturesDir, "verification", "valid-no-approval-required.json"),
+    );
+    const adapter = await readJson<KeyFixture>(join(fixturesDir, "keys", "adapter.json"));
 
     const receipt = await buildAndSignExecutionReceipt({
       actionEnvelope: actionPackage.actionEnvelope,

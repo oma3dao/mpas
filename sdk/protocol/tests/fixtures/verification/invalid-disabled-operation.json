@@ -1,0 +1,77 @@
+{
+  "version": "1",
+  "type": "ActionPackage",
+  "executionPayload": {
+    "name": "delete_branch_mirror",
+    "arguments": {
+      "owner": "example-org",
+      "repo": "mpas-demo-repository",
+      "branch": "feature/disabled-operation"
+    }
+  },
+  "actionEnvelope": {
+    "version": "1",
+    "type": "ActionEnvelope",
+    "proposer": {
+      "did": "did:jwk:eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6Ims2TzdjaVFrbXBodUVFdDFpM3lBaW1KSldlR0ttT3EzdF9mc05renphNm8ifQ"
+    },
+    "target": {
+      "applicationDid": "did:web:github-mirror.example",
+      "resource": "repo:example-org/mpas-demo-repository"
+    },
+    "executionProfile": {
+      "id": "did:web:profiles.oma3.org:mcp",
+      "format": "mcp.toolsCall"
+    },
+    "executionPayloadHash": {
+      "alg": "sha-256",
+      "value": "y7FtOm9qXACQSOk-S1nt8JKKYaidtcMuwGV1YZtCvUA"
+    },
+    "actionId": {
+      "value": "urn:uuid:66666666-6666-4666-8666-666666666666"
+    },
+    "createdAt": "2026-06-05T18:00:00.000Z",
+    "expiresAt": "2026-06-06T17:00:00.000Z"
+  },
+  "approvalBundle": {
+    "version": "1",
+    "type": "ApprovalBundle",
+    "actionEnvelopeHash": {
+      "alg": "sha-256",
+      "value": "B0BBfgE3LSddu8BKKeWmgnFrPc5w3o5O_NvK0R0_S_k"
+    },
+    "approvals": [
+      {
+        "version": "1",
+        "type": "Approval",
+        "actionEnvelopeHash": {
+          "alg": "sha-256",
+          "value": "B0BBfgE3LSddu8BKKeWmgnFrPc5w3o5O_NvK0R0_S_k"
+        },
+        "decision": "propose",
+        "signature": {
+          "format": "jws",
+          "value": "eyJhbGciOiJFZERTQSIsImtpZCI6ImRpZDpqd2s6ZXlKamNuWWlPaUpGWkRJMU5URTVJaXdpYTNSNUlqb2lUMHRRSWl3aWVDSTZJbXMyVHpkamFWRnJiWEJvZFVWRmRERnBNM2xCYVcxS1NsZGxSMHR0VDNFemRGOW1jMDVyZW5waE5tOGlmUSMwIn0.eyJhY3Rpb25FbnZlbG9wZUhhc2giOnsiYWxnIjoic2hhLTI1NiIsInZhbHVlIjoiQjBCQmZnRTNMU2RkdThCS0tlV21nbkZyUGM1dzNvNU9fTnZLMFIwX1NfayJ9LCJjcmVhdGVkQXQiOiIyMDI2LTA2LTA1VDE4OjAxOjAwLjAwMFoiLCJkZWNpc2lvbiI6InByb3Bvc2UiLCJzaWduZXJEaWQiOiJkaWQ6andrOmV5SmpjbllpT2lKRlpESTFOVEU1SWl3aWEzUjVJam9pVDB0UUlpd2llQ0k2SW1zMlR6ZGphVkZyYlhCb2RVVkZkREZwTTNsQmFXMUtTbGRsUjB0dFQzRXpkRjltYzA1cmVucGhObThpZlEiLCJ0eXBlIjoiQXBwcm92YWxQYXlsb2FkIn0.0l0QKlC9yHU_MiKtTg9ir_rbtG8A6k89Qxiy6umC7AOtCke5NDLbtBjDTQX8JKS5rsU2MVrSuLzVjnhAqirsBQ"
+        },
+        "createdAt": "2026-06-05T18:01:00.000Z"
+      },
+      {
+        "version": "1",
+        "type": "Approval",
+        "actionEnvelopeHash": {
+          "alg": "sha-256",
+          "value": "B0BBfgE3LSddu8BKKeWmgnFrPc5w3o5O_NvK0R0_S_k"
+        },
+        "decision": "approve",
+        "signature": {
+          "format": "jws",
+          "value": "eyJhbGciOiJFZERTQSIsImtpZCI6ImRpZDpqd2s6ZXlKamNuWWlPaUpGWkRJMU5URTVJaXdpYTNSNUlqb2lUMHRRSWl3aWVDSTZJamh6UkZZM05tSTRhVVkzTmxCSmJVRjNOVWs1VjNabGFuTmZPR0pUT0U0eE1sZDJTSHBRWVRWV2R6Z2lmUSMwIn0.eyJhY3Rpb25FbnZlbG9wZUhhc2giOnsiYWxnIjoic2hhLTI1NiIsInZhbHVlIjoiQjBCQmZnRTNMU2RkdThCS0tlV21nbkZyUGM1dzNvNU9fTnZLMFIwX1NfayJ9LCJjcmVhdGVkQXQiOiIyMDI2LTA2LTA1VDE4OjAyOjAwLjAwMFoiLCJkZWNpc2lvbiI6ImFwcHJvdmUiLCJzaWduZXJEaWQiOiJkaWQ6andrOmV5SmpjbllpT2lKRlpESTFOVEU1SWl3aWEzUjVJam9pVDB0UUlpd2llQ0k2SWpoelJGWTNObUk0YVVZM05sQkpiVUYzTlVrNVYzWmxhbk5mT0dKVE9FNHhNbGQyU0hwUVlUVldkemdpZlEiLCJ0eXBlIjoiQXBwcm92YWxQYXlsb2FkIn0.JA6IQDmnOHxZuuPZRF_fnAeHIZIAwnsxVJflNUeZxfElskqtE74BfKEWC50eU035_Jp97G21eNDalh_eO_JtBA"
+        },
+        "createdAt": "2026-06-05T18:02:00.000Z"
+      }
+    ],
+    "assembledBy": "did:jwk:eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6Ims2TzdjaVFrbXBodUVFdDFpM3lBaW1KSldlR0ttT3EzdF9mc05renphNm8ifQ",
+    "createdAt": "2026-06-05T18:10:00.000Z"
+  },
+  "createdAt": "2026-06-05T18:10:00.000Z"
+}

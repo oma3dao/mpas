@@ -2,10 +2,13 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { loadPlugin, validatePayloadAgainstPlugin } from "../../src/core/plugin-loader.js";
-import type { MpasApplicationPlugin } from "../../src/core/plugin-loader.js";
-import { PLUGIN_RESOURCE_LIMITS } from "@oma3/mpas/plugin-loader";
-import type { ActionPackage } from "../../src/core/types.js";
+import {
+  loadPlugin,
+  PLUGIN_RESOURCE_LIMITS,
+  validatePayloadAgainstPlugin,
+  type MpasApplicationPlugin,
+} from "../../src/lib/plugin-loader.js";
+import type { ActionPackage } from "../../src/types/mpas.js";
 
 const fixturesDir = fileURLToPath(new URL("../fixtures/", import.meta.url));
 
@@ -68,7 +71,7 @@ describe("validatePayloadAgainstPlugin", () => {
     ["valid-delete-branch.json", "delete_branch_mirror"],
   ])("matches and validates %s", async (fixtureFile, operationName) => {
     const plugin = await githubPlugin();
-    const actionPackage = await readJson<ActionPackage>(join(fixturesDir, "core", fixtureFile));
+    const actionPackage = await readJson<ActionPackage>(join(fixturesDir, "verification", fixtureFile));
     const result = validatePayloadAgainstPlugin(actionPackage.executionPayload, plugin);
 
     expect(result).toMatchObject({
@@ -92,7 +95,9 @@ describe("validatePayloadAgainstPlugin", () => {
 
   it("treats create_issue_mirror as an unknown operation (pass-through)", async () => {
     const plugin = await githubPlugin();
-    const actionPackage = await readJson<ActionPackage>(join(fixturesDir, "core", "valid-no-approval-required.json"));
+    const actionPackage = await readJson<ActionPackage>(
+      join(fixturesDir, "verification", "valid-no-approval-required.json"),
+    );
     const result = validatePayloadAgainstPlugin(actionPackage.executionPayload, plugin);
 
     expect(result).toMatchObject({

@@ -1,4 +1,4 @@
-# MPAS Demo Test Guide
+# MPAS CLI Test Guide
 
 This package uses Vitest for unit, integration, and local E2E coverage. Most tests run with no external services. The MCP
 bridge E2E uses the checked-in generated bridge at `src/bridge/github-bridge.ts`.
@@ -12,20 +12,50 @@ npm run build
 npm test
 ```
 
-`npm test` runs the normal suite, including the generated MCP bridge E2E.
+`npm test` runs the normal CLI suite. SDK primitive coverage lives in
+`sdk/protocol/tests`, not here.
+
+## SDK source (published vs local checkout)
+
+The CLI depends on `@oma3/mpas`. Two development modes are supported:
+
+1. **Published package (default).** After `npm ci`, `npm test` runs CLI-owned
+   tests and prints the installed SDK version:
+
+   ```text
+   MPAS SDK: published package 0.1.0-alpha.15 — skipping local SDK integration tests
+   ```
+
+2. **Local SDK checkout.** When changing the SDK, build it and link it into the
+   CLI:
+
+   ```sh
+   npm --prefix ../sdk/protocol run build
+   npm install --no-save --install-links=false ../sdk/protocol
+   npm test
+   ```
+
+   `npm test` then includes `tests/local-sdk/` and prints:
+
+   ```text
+   MPAS SDK: local checkout — including local SDK integration tests
+   ```
+
+Detection compares the real path of the resolved `@oma3/mpas/package.json`
+with `sdk/protocol/package.json`.
 
 ## Test Layout
 
 | Path | Coverage |
 | --- | --- |
-| `tests/core/` | MPAS package parsing, hash binding, approvals, policy, replay guard, receipts, and plugin validation. |
 | `tests/adapter/` | Credential Adapter HTTP endpoint, config loading, credential provider, and MCP dispatch transports. |
 | `tests/coordination/` | Local Coordination Service fixtures, store state machine, HTTP endpoints, daemon startup, approvals, cancellation, and completed Action Package assembly. |
 | `tests/cli/` | CLI daemon, validation, plugin, credential, and config management commands. |
+| `tests/local-sdk/` | CLI-to-SDK integration tests, included only when the local SDK checkout is linked. |
 | `tests/fixtures/` | Fixture contract tests plus reusable keys, plugins, configs, Action Packages, and mock MCP servers. |
+| `tests/e2e/` | Local stack tests that run the Credential Adapter, Coordination Service, and MCP bridge together. |
 
 > **TEST KEYS ONLY.** The private keys committed under `tests/fixtures/test-keys/` exist so signed fixtures are reproducible. They are public by definition and must never be used outside tests.
-| `tests/e2e/` | Local stack tests that run the Credential Adapter, Coordination Service, and MCP bridge together. |
 
 ## Normal Test Commands
 
@@ -41,12 +71,12 @@ Run one test file:
 npm test -- tests/coordination/store.test.ts
 ```
 
-Run focused groups through the wrapper's `--grep` shortcuts:
+Run focused groups by directory:
 
 ```sh
-npm test -- --grep core/
-npm test -- --grep adapter
-npm test -- --grep cli
+npm test -- tests/adapter
+npm test -- tests/cli
+npm test -- tests/local-sdk
 ```
 
 Run a Vitest name pattern:

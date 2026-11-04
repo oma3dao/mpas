@@ -2,9 +2,9 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { evaluatePolicy, type PolicyConfig } from "../../src/core/policy-engine.js";
-import { verifyActionPackage, type TrustedSigner, type VerificationConfig } from "../../src/core/verification.js";
-import type { ActionPackage, Did } from "../../src/core/types.js";
+import { evaluatePolicy, type PolicyConfig } from "../../src/lib/policy-engine.js";
+import { verifyActionPackage, type TrustedSigner, type VerificationConfig } from "../../src/lib/verification.js";
+import type { ActionPackage, Did } from "../../src/types/mpas.js";
 
 const fixturesDir = fileURLToPath(new URL("../fixtures/", import.meta.url));
 
@@ -33,9 +33,9 @@ async function readJson<T>(path: string): Promise<T> {
 }
 
 async function trustedSigners(): Promise<TrustedSigner[]> {
-  const proposer = await readJson<KeyFixture>(join(fixturesDir, "test-keys", "proposer.json"));
-  const maintainerA = await readJson<KeyFixture>(join(fixturesDir, "test-keys", "maintainer-a.json"));
-  const maintainerB = await readJson<KeyFixture>(join(fixturesDir, "test-keys", "maintainer-b.json"));
+  const proposer = await readJson<KeyFixture>(join(fixturesDir, "keys", "proposer.json"));
+  const maintainerA = await readJson<KeyFixture>(join(fixturesDir, "keys", "maintainer-a.json"));
+  const maintainerB = await readJson<KeyFixture>(join(fixturesDir, "keys", "maintainer-b.json"));
 
   return [
     { did: proposer.did, publicJwk: proposer.publicJwk },
@@ -52,11 +52,12 @@ async function verificationConfig(): Promise<VerificationConfig> {
     trustedSigners: await trustedSigners(),
     trustedApplicationDids: ["did:web:github-mirror.example"],
     now: FIXTURE_NOW,
+    maxEnvelopeValidityMs: Number.MAX_SAFE_INTEGER,
   };
 }
 
 async function verifiedFixture(file: string) {
-  const actionPackage = await readJson<ActionPackage>(join(fixturesDir, "core", file));
+  const actionPackage = await readJson<ActionPackage>(join(fixturesDir, "verification", file));
   const verification = await verifyActionPackage(actionPackage, await verificationConfig());
   if (verification.status !== "verified") {
     throw new Error(`Fixture did not verify: ${file}`);
@@ -79,7 +80,7 @@ describe("evaluatePolicy", () => {
   it("satisfies valid-no-approval-required.json with auto-approve config", async () => {
     const { actionPackage, verifiedApprovals } = await verifiedFixture("valid-no-approval-required.json");
 
-    expect(evaluatePolicy(actionPackage, verifiedApprovals, await policyFromConfig("policy-fixtures/github-auto-approve.json"))).toEqual({
+    expect(evaluatePolicy(actionPackage, verifiedApprovals, await policyFromConfig("github-auto-approve.json"))).toEqual({
       status: "satisfied",
     });
   });
@@ -115,7 +116,7 @@ describe("evaluatePolicy", () => {
     // With enabledOperations removed, the policy engine no longer rejects operations
     // not in an allowlist. The auto-approve config has proposerOnly default, so any
     // operation passes through policy evaluation.
-    expect(evaluatePolicy(actionPackage, verifiedApprovals, await policyFromConfig("policy-fixtures/github-auto-approve.json"))).toMatchObject({
+    expect(evaluatePolicy(actionPackage, verifiedApprovals, await policyFromConfig("github-auto-approve.json"))).toMatchObject({
       status: "satisfied",
     });
   });

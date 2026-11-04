@@ -10,8 +10,10 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { canonicalize } from "json-canonicalize";
-import { DuplicateJsonKeyError, strictJsonParse, validateMcpPayloadStructure, validatePayloadAgainstPlugin } from "@oma3/mpas";
-import { computeJsonHash } from "../../src/core/verification.js";
+import { validatePayloadAgainstPlugin } from "../../src/lib/plugin-loader.js";
+import { validateMcpPayloadStructure } from "../../src/lib/mcp-payload.js";
+import { computeJsonHash } from "../../src/lib/verification.js";
+import { DuplicateJsonKeyError, strictJsonParse } from "../../src/utils/strict-json.js";
 
 function canonicalBytes(value: unknown): Buffer {
   return Buffer.from(canonicalize(value), "utf8");

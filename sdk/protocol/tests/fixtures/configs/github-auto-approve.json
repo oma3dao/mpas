@@ -1,0 +1,96 @@
+{
+  "version": "1",
+  "type": "MpasAdapterDeploymentConfig",
+  "name": "github-auto-approve",
+  "target": {
+    "applicationDid": "did:web:github-mirror.example"
+  },
+  "plugin": {
+    "pluginDid": "did:web:plugins.oma3.org:github-mirror-plugin",
+    "pluginVersion": "0.1.0",
+    "artifactDid": "did:artifact:bafkreiboiym5t7serxxvynew6qzrjjo65lqiqv6jnjunkwmyp3hrvgh7qq",
+    "path": "../plugins/github-mirror-plugin.json"
+  },
+  "credentialBindings": [
+    {
+      "credentialHandle": "github-mirror-token",
+      "provider": "file"
+    }
+  ],
+  "executionTarget": {
+    "type": "mcp.stdio",
+    "command": "node",
+    "args": [
+      "tests/fixtures/adapter/echo-mcp-server.mjs"
+    ],
+    "env": {
+      "GITHUB_PERSONAL_ACCESS_TOKEN": "{{credential:github-mirror-token}}"
+    }
+  },
+  "policy": {
+    "version": "1",
+    "type": "MpasApplicationPolicy",
+    "policyProfileUrl": "https://github.com/oma3dao/mpas/blob/main/specs/mpas-profile-policy-json.md",
+    "applicationDid": "did:web:github-mirror.example",
+    "executionProfile": {
+      "id": "did:web:profiles.oma3.org:mcp",
+      "format": "mcp.toolsCall"
+    },
+    "defaultRequirement": {
+      "type": "proposerOnly"
+    },
+    "signerGroups": {
+      "all": [
+        "did:jwk:eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6Ims2TzdjaVFrbXBodUVFdDFpM3lBaW1KSldlR0ttT3EzdF9mc05renphNm8ifQ",
+        "did:jwk:eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6IjhzRFY3NmI4aUY3NlBJbUF3NUk5V3ZlanNfOGJTOE4xMld2SHpQYTVWdzgifQ",
+        "did:jwk:eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6IjR2OGt4WEppRnBDSHBWeFd4SFJRTExxMGJqSWxVRi1zRTFVSU5veTUwLTgifQ"
+      ],
+      "proposers": [
+        "did:jwk:eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6Ims2TzdjaVFrbXBodUVFdDFpM3lBaW1KSldlR0ttT3EzdF9mc05renphNm8ifQ"
+      ],
+      "maintainers": [
+        "did:jwk:eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6IjhzRFY3NmI4aUY3NlBJbUF3NUk5V3ZlanNfOGJTOE4xMld2SHpQYTVWdzgifQ",
+        "did:jwk:eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6IjR2OGt4WEppRnBDSHBWeFd4SFJRTExxMGJqSWxVRi1zRTFVSU5veTUwLTgifQ"
+      ]
+    },
+    "policies": {}
+  },
+  "signerKeys": [
+    {
+      "did": "did:jwk:eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6Ims2TzdjaVFrbXBodUVFdDFpM3lBaW1KSldlR0ttT3EzdF9mc05renphNm8ifQ",
+      "label": "Proposer Agent",
+      "publicJwk": {
+        "crv": "Ed25519",
+        "x": "k6O7ciQkmphuEEt1i3yAimJJWeGKmOq3t_fsNkzza6o",
+        "kty": "OKP",
+        "alg": "EdDSA",
+        "use": "sig",
+        "kid": "did:jwk:eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6Ims2TzdjaVFrbXBodUVFdDFpM3lBaW1KSldlR0ttT3EzdF9mc05renphNm8ifQ#0"
+      }
+    },
+    {
+      "did": "did:jwk:eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6IjhzRFY3NmI4aUY3NlBJbUF3NUk5V3ZlanNfOGJTOE4xMld2SHpQYTVWdzgifQ",
+      "label": "Maintainer A",
+      "publicJwk": {
+        "crv": "Ed25519",
+        "x": "8sDV76b8iF76PImAw5I9Wvejs_8bS8N12WvHzPa5Vw8",
+        "kty": "OKP",
+        "alg": "EdDSA",
+        "use": "sig",
+        "kid": "did:jwk:eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6IjhzRFY3NmI4aUY3NlBJbUF3NUk5V3ZlanNfOGJTOE4xMld2SHpQYTVWdzgifQ#0"
+      }
+    },
+    {
+      "did": "did:jwk:eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6IjR2OGt4WEppRnBDSHBWeFd4SFJRTExxMGJqSWxVRi1zRTFVSU5veTUwLTgifQ",
+      "label": "Maintainer B",
+      "publicJwk": {
+        "crv": "Ed25519",
+        "x": "4v8kxXJiFpCHpVxWxHRQLLq0bjIlUF-sE1UINoy50-8",
+        "kty": "OKP",
+        "alg": "EdDSA",
+        "use": "sig",
+        "kid": "did:jwk:eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6IjR2OGt4WEppRnBDSHBWeFd4SFJRTExxMGJqSWxVRi1zRTFVSU5veTUwLTgifQ#0"
+      }
+    }
+  ]
+}

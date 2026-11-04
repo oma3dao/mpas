@@ -80,7 +80,7 @@ async function makeApp(
   configDir?: string,
   ledger?: DispatchLedger,
   configure?: (entry: LoadedDeploymentConfig) => void,
-  extra: Partial<Pick<HttpEndpointOptions, "joinWaitMs">> = {},
+  extra: Partial<Pick<HttpEndpointOptions, "joinWaitMs" | "maxEnvelopeValidityMs">> = {},
 ) {
   // The shared configs dir holds the mirror and live-demo applications. They
   // have distinct applicationDids, so both route cleanly — no shadowing.
@@ -191,6 +191,19 @@ describe("HTTP endpoint", () => {
       result: "executed",
       executionReceipt: { version: "1", type: "ExecutionReceipt", format: "jws" },
       executionResult: { content: [{ type: "text" }] },
+    });
+  });
+
+  it("rejects an envelope whose remaining validity exceeds the configured maximum", async () => {
+    const app = await makeApp(undefined, undefined, undefined, {
+      maxEnvelopeValidityMs: 60 * 60 * 1000,
+    });
+    const response = await submitFixture(app, "valid-no-approval-required.json");
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      result: "rejected",
+      error: { code: "ENVELOPE_VALIDITY_TOO_LONG" },
     });
   });
 
