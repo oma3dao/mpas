@@ -657,9 +657,10 @@ class FileOAuthClientProvider implements OAuthClientProvider {
   /** The last token-endpoint failure seen through {@link wrapFetch}, for dispatch-time 401 recovery. */
   private lastTokenFailure?: OAuthOperatorError;
   /**
-   * Set when a refresh got a successful response and cleared by {@link saveTokens}.
-   * If the SDK drops that refresh for any reason in between, the server may already
-   * have rotated the grant (OAUTH-30).
+   * Set when a refresh got a successful response and cleared once {@link saveTokens}
+   * has written the new tokens. If the SDK drops that refresh for any reason in
+   * between, including a failed write, the server may already have rotated the grant
+   * (OAUTH-30). The durable record is the in-flight marker written before sending.
    */
   private refreshAwaitingSave = false;
 
@@ -711,6 +712,7 @@ class FileOAuthClientProvider implements OAuthClientProvider {
   /** Classifies token-endpoint responses on the dispatch transport's own fetch. */
   wrapFetch(fetchFn: FetchLike): FetchLike {
     return observeTokenRequests(fetchFn, {
+      beforeRefresh: () => markRefreshInFlight(this.session, this.path),
       onFailure: (failure) => { this.lastTokenFailure = failure; },
       onResponse: (status, grantType) => {
         if (grantType === "refresh_token" && status >= 200 && status < 300) this.refreshAwaitingSave = true;
@@ -742,7 +744,8 @@ class FileOAuthClientProvider implements OAuthClientProvider {
       ? new OAuthOperatorError("OAUTH_TOKEN_REFRESH_FAILED", "The refresh response could not be used", { ambiguous: true })
       : undefined);
     if (tokenFailure) {
-      await persistTokenFailure(this.session, this.path, tokenFailure);
+      // A failed write leaves the in-flight marker on disk, which is the safe state.
+      await persistTokenFailure(this.session, this.path, tokenFailure).catch(() => {});
       return withOperatorCommand(tokenFailure, operatorCommand);
     }
     return new OAuthReauthorizationRequiredError(
@@ -771,7 +774,6 @@ class FileOAuthClientProvider implements OAuthClientProvider {
     // a returned `scope` replaces it.
     if (typeof next.scope !== "string" && typeof previous?.scope === "string") next = { ...next, scope: previous.scope };
     this.session.tokens = next;
-    this.refreshAwaitingSave = false;
     this.session.tokensSavedAt = new Date().toISOString();
     this.session.refreshJitterMs = boundedJitter(this.runtime?.refreshPolicy.jitterMaxMs ?? 0);
     this.session.reauthorizationRequired = false;
@@ -781,7 +783,9 @@ class FileOAuthClientProvider implements OAuthClientProvider {
     delete this.session.authorization;
     delete this.session.state;
     delete this.session.redirectUrl;
+    // Clears the in-flight refresh marker in the same write that commits the tokens.
     await writeSession(this.path, this.session);
+    this.refreshAwaitingSave = false;
   }
   async redirectToAuthorization(url: URL): Promise<void> {
     // OAUTH-33A: dispatch never starts consent. Report what actually happened.
@@ -914,6 +918,9 @@ export async function prepareOAuthForDispatch(
     ok: false as const,
     error: prepareError(code, message, operatorCommand, retryAfterSeconds),
   });
+  // A refresh already running in this process has written its in-flight marker; wait
+  // for its outcome instead of reading the marker as an unresolved refresh (OAUTH-30).
+  await refreshTransactions.get(credentialPath(credentialDir, credentialHandle))?.catch(() => {});
   const loaded = await readBoundOAuthSession(sessionName, credentialHandle, applicationDid, resourceUrl, credentialDir);
   if (!loaded) {
     return refuse("OAUTH_LOGIN_REQUIRED", `OAuth login required. Run ${operatorCommand}.`);
@@ -1447,7 +1454,10 @@ async function refreshOAuthSession(
     bearerTokenResourceUrl: resourceUrl,
     testOnlyAllowHttpLoopback: isLoopbackUrl(resourceUrl),
     ...(expected.fetch ? { fetch: expected.fetch } : {}),
-  }), { onResponse: () => { responded = true; } });
+  }), {
+    beforeRefresh: () => markRefreshInFlight(loaded.session, path),
+    onResponse: () => { responded = true; },
+  });
   const binding = loaded.session.binding;
   const discovery = loaded.session.discovery;
   const clientInformation = loaded.session.clientInformation;
@@ -1495,7 +1505,8 @@ async function refreshOAuthSession(
         // A 2xx whose body could not be used: the grant may already have rotated.
         ? new OAuthOperatorError("OAUTH_TOKEN_REFRESH_FAILED", "The refresh response could not be used", { cause: error, ambiguous: true })
         : new OAuthOperatorError("OAUTH_UNKNOWN_ERROR", "OAuth token refresh failed before a response was received", { cause: error });
-    await persistTokenFailure(loaded.session, path, failure, auditPath);
+    // A failed write leaves the in-flight marker on disk, which is the safe state.
+    await persistTokenFailure(loaded.session, path, failure, auditPath).catch(() => {});
     throw withOperatorCommand(failure, operatorCommand);
   }
 }
@@ -1510,6 +1521,16 @@ async function persistTokenFailure(
   failure: OAuthOperatorError,
   auditPath?: string,
 ): Promise<void> {
+  if (failure.ambiguous) {
+    session.refreshState = { status: "uncertain", at: new Date().toISOString() };
+    await writeSession(path, session);
+    if (auditPath) await appendOAuthAudit(auditPath, session, "credential-adapter", "refresh", "uncertain");
+    return;
+  }
+  // A definite outcome: the server refused, or the request never reached it. Only then
+  // is the in-flight marker written before sending removed.
+  const clearedInFlight = session.refreshState?.status === "uncertain";
+  if (clearedInFlight) delete session.refreshState;
   if (failure.code === "OAUTH_INVALID_GRANT") {
     if (auditPath) await markReauthorizationRequired(session, path, auditPath, "invalid_grant");
     else {
@@ -1517,12 +1538,6 @@ async function persistTokenFailure(
       session.reauthorizationReason = "invalid_grant";
       await writeSession(path, session);
     }
-    return;
-  }
-  if (failure.ambiguous) {
-    session.refreshState = { status: "uncertain", at: new Date().toISOString() };
-    await writeSession(path, session);
-    if (auditPath) await appendOAuthAudit(auditPath, session, "credential-adapter", "refresh", "uncertain");
     return;
   }
   if (failure.code === "OAUTH_RATE_LIMITED") {
@@ -1533,8 +1548,21 @@ async function persistTokenFailure(
       retryAfter: new Date(Date.now() + seconds * 1000).toISOString(),
     };
     await writeSession(path, session);
+  } else if (clearedInFlight) {
+    await writeSession(path, session);
   }
   if (auditPath) await appendOAuthAudit(auditPath, session, "credential-adapter", "refresh", "failed");
+}
+
+/**
+ * OAUTH-30: records `refresh_uncertain` durably before a refresh request is sent, so
+ * any outcome the adapter cannot record afterwards (a lost response, a crash, a failed
+ * session write) still refuses dispatch instead of resending the old refresh token.
+ * Saving the new tokens or a definite failure removes it.
+ */
+async function markRefreshInFlight(session: StoredOAuthSession, path: string): Promise<void> {
+  session.refreshState = { status: "uncertain", at: new Date().toISOString() };
+  await writeSession(path, session);
 }
 
 function withOperatorCommand(failure: OAuthOperatorError, operatorCommand: string): OAuthOperatorError {
@@ -2403,6 +2431,8 @@ function isDnsFailure(error: unknown, depth = 0): boolean {
 function observeTokenRequests(
   fetchFn: FetchLike,
   hooks: {
+    /** Runs before a refresh request is sent; if it fails, nothing is sent. */
+    beforeRefresh?: () => Promise<void>;
     onFailure?: (failure: OAuthOperatorError) => void;
     onResponse?: (status: number, grantType: "authorization_code" | "refresh_token") => void;
   } = {},
@@ -2410,6 +2440,19 @@ function observeTokenRequests(
   return async (input, init) => {
     const grantType = tokenGrantType(init);
     if (!grantType) return fetchFn(input, init);
+    if (grantType === "refresh_token" && hooks.beforeRefresh) {
+      try {
+        await hooks.beforeRefresh();
+      } catch (error) {
+        const failure = new OAuthOperatorError(
+          "OAUTH_UNKNOWN_ERROR",
+          "The refresh state could not be recorded, so the refresh request was not sent",
+          { cause: error, diagnostic: { phase: grantType } },
+        );
+        hooks.onFailure?.(failure);
+        throw failure;
+      }
+    }
     let response: Response;
     try {
       response = await fetchFn(input, init);

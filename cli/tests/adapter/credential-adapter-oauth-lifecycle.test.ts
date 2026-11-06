@@ -4,7 +4,7 @@
  * (docs/features/credential-adapter-oauth/plan.md).
  */
 import { createServer } from "node:net";
-import { readFile } from "node:fs/promises";
+import { chmod, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { prepareMcpHttp } from "../../src/adapter/dispatch/mcp-http.js";
@@ -548,6 +548,52 @@ describe("Phase 5: refresh and failure classification", () => {
       expect(after.tokens).toEqual(before.tokens);
       expect(after.refreshState).toMatchObject({ status: "uncertain" });
       await expect(harness.service.status(harness.request)).resolves.toMatchObject({ state: "refresh_uncertain" });
+    },
+  );
+  it.each(["after an MCP 401", "proactive"] as const)(
+    "P5-12 a rotating 2xx refresh whose session write fails (%s) leaves durable refresh_uncertain and the old refresh token is not resent",
+    async (path) => {
+      const fixture = await start();
+      const harness = await operator(fixture);
+      await harness.login();
+      const stored = await readStored(harness.credentialDir);
+      if (path === "proactive") {
+        stored.tokensSavedAt = "2020-01-01T00:00:00.000Z";
+        stored.refreshJitterMs = 0;
+      } else {
+        stored.tokens = { ...stored.tokens, access_token: "rejected-upstream" };
+      }
+      await writeStored(harness.credentialDir, stored);
+      const before = await readStored(harness.credentialDir);
+      // The server commits the rotation, then the adapter can no longer write its session.
+      fixture.failures.afterRotation = () => chmod(harness.credentialDir, 0o500);
+      const adapter = await pipeline(fixture, harness.credentialDir);
+      try {
+        const first = await adapter.submit();
+        await chmod(harness.credentialDir, 0o700);
+        fixture.failures.afterRotation = undefined;
+        expect(first.body).toMatchObject({
+          result: "rejected",
+          error: { code: "OAUTH_TOKEN_REFRESH_FAILED", message: expect.stringContaining("will not resend the previous refresh token") },
+          context: { oauth: { reason: "oauth_token_refresh_failed" } },
+        });
+        const after = await readStored(harness.credentialDir);
+        expect(after.tokens).toEqual(before.tokens);
+        expect(after.refreshState).toMatchObject({ status: "uncertain" });
+        await expect(harness.service.status(harness.request)).resolves.toMatchObject({ state: "refresh_uncertain" });
+
+        const second = await adapter.submit();
+        expect(second.body).toMatchObject({ result: "rejected", error: { code: "OAUTH_TOKEN_REFRESH_FAILED" } });
+        expect(adapter.executingCount()).toBe(0);
+        expect(fixture.toolCalls).toHaveLength(0);
+        expect(refreshRequests(fixture).map((request) => request.get("refresh_token"))).toEqual([before.tokens.refresh_token]);
+
+        await harness.login();
+        expect((await adapter.submit()).body).toMatchObject({ result: "executed" });
+      } finally {
+        await chmod(harness.credentialDir, 0o700);
+        await adapter.app.close();
+      }
     },
   );
 });

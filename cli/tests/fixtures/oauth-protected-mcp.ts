@@ -75,6 +75,8 @@ export interface OAuthProtectedMcpFixture {
     scopeChallenge?: string;
     /** Every tools/call returns `isError: true` with this structured content. */
     toolError?: Record<string, unknown>;
+    /** Runs once a refresh rotation is committed, before the response is sent. */
+    afterRotation?: () => void | Promise<void>;
   };
   /** Publishes a client document on the fake SignerSet origin and returns its URL. */
   publishClientDocument(path: string, document: Record<string, unknown>): string;
@@ -306,7 +308,7 @@ export async function startOAuthProtectedMcpFixture(
         const clientError = await authenticateClient(params, "token");
         if (clientError) return json(response, 401, { error: clientError });
         if (params.get("grant_type") === "refresh_token") {
-          const completeRefresh = () => {
+          const completeRefresh = async () => {
             if (failures.refresh === "invalid_client") return json(response, 401, { error: "invalid_client" });
             if (failures.refresh === "5xx") return json(response, 503, { error: "temporarily_unavailable" });
             if (failures.refresh === "unknown_error") {
@@ -333,6 +335,7 @@ export async function startOAuthProtectedMcpFixture(
             rotations.set(grant.resource, (rotations.get(grant.resource) ?? 0) + 1);
             const accessToken = issueAccessToken(grant, true);
             const refreshToken = issueRefreshToken(grant, true);
+            await failures.afterRotation?.();
             if (failures.refresh === "drop_after_rotation") {
               // The rotation is committed; the response never reaches the client.
               request.socket.destroy();
@@ -354,7 +357,7 @@ export async function startOAuthProtectedMcpFixture(
             });
           };
           if ((options.refreshDelayMs ?? 0) > 0) {
-            setTimeout(completeRefresh, options.refreshDelayMs);
+            setTimeout(() => void completeRefresh(), options.refreshDelayMs);
             return;
           }
           return completeRefresh();

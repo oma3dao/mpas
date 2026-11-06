@@ -151,10 +151,11 @@ Extend the in-process authorization server and protected MCP resource:
 | P5-09 | Each §11 code that applies to the CLI appears in status output and agent-facing rejections with no secret, and maps from the existing constants by one table. §11, Phase 0 decision |
 | P5-10 | After an MCP 401, a refresh whose outcome is unknown once sent (a 2xx with invalid JSON, a missing or non-string `access_token`, or a `token_type` other than Bearer; a 5xx; a lost response) persists `refresh_uncertain` and is reported with `oauth_token_refresh_failed`. The next call is refused before the `executing` write without resending the old refresh token, and `mpas oauth login` recovers. OAUTH-30, Phase 0 decision |
 | P5-11 | A proactive refresh answered 2xx with any of those unusable bodies is handled the same way: `refresh_uncertain`, `oauth_token_refresh_failed`, and the old refresh token is not resent. OAUTH-30 |
+| P5-12 | `refresh_uncertain` is recorded before a refresh request is sent and cleared only in the write that commits the new tokens, or on a definite outcome. If the session write fails after a rotating 2xx, after an MCP 401 or on a proactive refresh, the stored session keeps the old tokens marked `refresh_uncertain`, dispatch reports `oauth_token_refresh_failed`, and the old refresh token is not resent. A same-process caller waits for the in-flight refresh instead of reading its marker. OAUTH-30, Phase 0 decision |
 
 ### Exit criteria
 
-- Done: P5-01 to P5-11 pass in CI.
+- Done: P5-01 to P5-12 pass in CI.
 
 ---
 

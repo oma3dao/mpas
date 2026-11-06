@@ -1,7 +1,7 @@
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { StreamableHTTPError } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import {
   classifyOAuthPrepareError,
@@ -336,6 +336,22 @@ describe("OAuth scope resolution and silent-failure reporting", () => {
 
     expect(results.every((result) => result.ok)).toBe(true);
     expect(fixture.tokenRequests.filter((request) => request.get("grant_type") === "refresh_token")).toHaveLength(1);
+
+    // A caller that arrives while the refresh is at the server, after the in-flight
+    // marker is on disk, joins the transaction instead of reading the marker (OAUTH-30).
+    const stored = JSON.parse(await readFile(join(credentialDir, `${credentialHandle}.json`), "utf8"));
+    stored.tokensSavedAt = "2020-01-01T00:00:00.000Z";
+    stored.refreshJitterMs = 0;
+    await writeFile(join(credentialDir, `${credentialHandle}.json`), `${JSON.stringify(stored)}\n`, { mode: 0o600 });
+    const prepareOnce = () => prepareOAuthForDispatch(session, credentialHandle, applicationDid, fixture!.resourceUrl, credentialDir, expected);
+    const early = prepareOnce();
+    await vi.waitFor(() => {
+      expect(fixture!.tokenRequests.filter((request) => request.get("grant_type") === "refresh_token")).toHaveLength(2);
+    }, { interval: 1 });
+    const late = await prepareOnce();
+    await expect(early).resolves.toMatchObject({ ok: true });
+    expect(late).toMatchObject({ ok: true });
+    expect(fixture.tokenRequests.filter((request) => request.get("grant_type") === "refresh_token")).toHaveLength(2);
   });
 
   it("persists invalid_grant as reauthorization-required and suppresses restart retries", async () => {
