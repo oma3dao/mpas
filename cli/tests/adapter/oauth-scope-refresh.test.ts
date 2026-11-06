@@ -1,7 +1,7 @@
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { StreamableHTTPError } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import {
   classifyOAuthPrepareError,
@@ -115,19 +115,19 @@ describe("OAuth scope resolution and silent-failure reporting", () => {
     })]);
   });
 
-  it("errors when neither the plugin refresh scope nor offline_access is advertised", () => {
+  it("warns, without failing, when neither the plugin refresh scope nor offline_access is advertised", () => {
+    // Revised spec §4.2: the adapter MUST NOT require offline_access or assume every
+    // server issues refresh tokens, so an unadvertised refresh scope is a warning.
     const result = resolveRequestedOAuthScopes({
       refreshScope: "offline.access",
       configuredScopes: ["mcp:tools"],
       supportedScopes: ["mcp:tools"],
     });
-    expect(result).toMatchObject({
-      ok: false,
-      requestedScope: "offline.access",
-    });
-    if (result.ok) return;
-    expect(result.message).toContain("offline.access");
-    expect(result.message).toContain("offline_access is not available");
+    expect(result).toMatchObject({ ok: true, scopes: ["mcp:tools"] });
+    if (!result.ok) return;
+    expect(result.warnings).toEqual([expect.objectContaining({ code: "OAUTH_REFRESH_SCOPE_NOT_ADVERTISED" })]);
+    expect(result.warnings[0].message).toContain("offline.access");
+    expect(result.warnings[0].message).toContain("offline_access is not available");
   });
 
   it("selects offline_access when it is advertised only by the authorization server", () => {
@@ -211,7 +211,9 @@ describe("OAuth scope resolution and silent-failure reporting", () => {
     )).toBe(false);
   });
 
-  it("refuses dispatch of an expired non-refreshable grant", async () => {
+  it("refuses dispatch of an expired non-refreshable grant as login required", async () => {
+    // Revised spec §4.2, P4-03: no refresh token means the session expires to
+    // oauth_login_required; it is not an invalid grant.
     const credentialDir = await mkdtemp(join(tmpdir(), "mpas-oauth-expired-"));
     await writeFile(join(credentialDir, `${credentialHandle}.json`), `${JSON.stringify(storedSession(
       "https://mcp.example/mcp",
@@ -231,7 +233,7 @@ describe("OAuth scope resolution and silent-failure reporting", () => {
       credentialDir,
     )).resolves.toMatchObject({
       ok: false,
-      error: { code: "OAUTH_REAUTHORIZATION_REQUIRED" },
+      error: { code: "OAUTH_LOGIN_REQUIRED", reason: "oauth_login_required" },
     });
   });
 
@@ -334,6 +336,22 @@ describe("OAuth scope resolution and silent-failure reporting", () => {
 
     expect(results.every((result) => result.ok)).toBe(true);
     expect(fixture.tokenRequests.filter((request) => request.get("grant_type") === "refresh_token")).toHaveLength(1);
+
+    // A caller that arrives while the refresh is at the server, after the in-flight
+    // marker is on disk, joins the transaction instead of reading the marker (OAUTH-30).
+    const stored = JSON.parse(await readFile(join(credentialDir, `${credentialHandle}.json`), "utf8"));
+    stored.tokensSavedAt = "2020-01-01T00:00:00.000Z";
+    stored.refreshJitterMs = 0;
+    await writeFile(join(credentialDir, `${credentialHandle}.json`), `${JSON.stringify(stored)}\n`, { mode: 0o600 });
+    const prepareOnce = () => prepareOAuthForDispatch(session, credentialHandle, applicationDid, fixture!.resourceUrl, credentialDir, expected);
+    const early = prepareOnce();
+    await vi.waitFor(() => {
+      expect(fixture!.tokenRequests.filter((request) => request.get("grant_type") === "refresh_token")).toHaveLength(2);
+    }, { interval: 1 });
+    const late = await prepareOnce();
+    await expect(early).resolves.toMatchObject({ ok: true });
+    expect(late).toMatchObject({ ok: true });
+    expect(fixture.tokenRequests.filter((request) => request.get("grant_type") === "refresh_token")).toHaveLength(2);
   });
 
   it("persists invalid_grant as reauthorization-required and suppresses restart retries", async () => {

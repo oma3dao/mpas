@@ -265,7 +265,9 @@ describe("CLI daemon and testing commands", () => {
       name: "nonrefreshable-expired",
       tokens: { access_token: "synthetic", token_type: "Bearer", expires_in: 0 },
       savedAt: (): string => "2020-01-01T00:00:00.000Z",
-      expected: { valid: false, ok: false, state: "reauthorization_required" },
+      // Revised spec §4.2, P4-03: with no refresh token the session expires to
+      // login required, not a reauthorization error.
+      expected: { valid: false, ok: false, state: "login_required" },
     },
   ])("config validate classifies managed OAuth state $name without static-secret parsing", async ({ tokens, savedAt, expected }) => {
     const { configDir, config } = await managedOAuthConfigDir();

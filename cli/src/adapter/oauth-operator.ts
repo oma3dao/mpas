@@ -7,6 +7,7 @@ import { join, resolve } from "node:path";
 import {
   auth,
   discoverOAuthServerInfo,
+  extractWWWAuthenticateParams,
   refreshAuthorization,
   UnauthorizedError,
   type OAuthClientProvider,
@@ -17,11 +18,105 @@ import { InvalidGrantError } from "@modelcontextprotocol/sdk/server/auth/errors.
 import type { OAuthClientInformationMixed, OAuthClientMetadata, OAuthTokens } from "@modelcontextprotocol/sdk/shared/auth.js";
 import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { loadPlugin } from "@oma3/mpas/plugin-loader";
-import { assertExactAuthorizationServerIssuer } from "./oauth-discovery.js";
-import { createDeadline } from "./hardened-fetch.js";
-import { createOAuthFetchPolicy, DEFAULT_OAUTH_CALL_BUDGET_MS } from "./oauth-fetch-policy.js";
+import { assertExactAuthorizationServerIssuer, OAuthIssuerMismatchError, OAuthPkceMetadataError } from "./oauth-discovery.js";
+import { connectFailureCode, HardenedFetchError } from "./hardened-fetch.js";
+import { createOAuthFetchPolicy, OAuthFetchPolicyError } from "./oauth-fetch-policy.js";
+import { defaultAdapterKeyPath, loadAdapterKey } from "./adapter-key.js";
+import {
+  applyClientAssertion,
+  assertRevocationAuthentication,
+  selectClientAuthentication,
+  type LoadClientSigningKey,
+  type OAuthClientAuthenticationBinding,
+} from "./oauth-client-auth.js";
+import {
+  OAuthOperatorError,
+  parseRetryAfterSeconds,
+  sanitizeOAuthErrorCode,
+  type OAuthFailureCode,
+} from "./oauth-errors.js";
 
 import { OAuthScopeChangeRequiredError } from "./oauth-scope-guard.js";
+
+export { OAuthOperatorError } from "./oauth-errors.js";
+
+/** Adapter-local reason codes (spec §11). */
+export type OAuthReasonCode =
+  | "oauth_login_required"
+  | "oauth_reauthorization_required"
+  | "oauth_insufficient_scope"
+  | "oauth_access_denied"
+  | "oauth_authorization_denied"
+  | "oauth_discovery_failed"
+  | "oauth_client_registration_failed"
+  | "oauth_client_authentication_failed"
+  | "oauth_temporarily_unavailable"
+  | "oauth_rate_limited"
+  | "oauth_token_refresh_failed";
+
+/**
+ * The one mapping from the adapter's uppercase constants to the §11 reason codes
+ * (plan Phase 0). Status output, operator errors and agent-facing rejections all
+ * read their reason from here. A constant absent from this table has no §11 code:
+ * `OAUTH_RESOURCE_FORBIDDEN` preserves an unexplained denial without guessing a
+ * cause, and `OAUTH_UNKNOWN_ERROR` stays unknown (§11.1).
+ */
+export const OAUTH_REASON_BY_CODE: Readonly<Record<string, OAuthReasonCode>> = Object.freeze({
+  OAUTH_LOGIN_REQUIRED: "oauth_login_required",
+  OAUTH_SESSION_NOT_FOUND: "oauth_login_required",
+  OAUTH_REAUTHORIZATION_REQUIRED: "oauth_reauthorization_required",
+  OAUTH_INVALID_GRANT: "oauth_reauthorization_required",
+  OAUTH_AUTHENTICATION_FAILED: "oauth_reauthorization_required",
+  OAUTH_SESSION_BINDING_MISMATCH: "oauth_reauthorization_required",
+  OAUTH_INSUFFICIENT_SCOPE: "oauth_insufficient_scope",
+  OAUTH_SCOPE_CHANGE_REQUIRED: "oauth_insufficient_scope",
+  OAUTH_ACCESS_DENIED: "oauth_access_denied",
+  OAUTH_AUTHORIZATION_DENIED: "oauth_authorization_denied",
+  OAUTH_DISCOVERY_FAILED: "oauth_discovery_failed",
+  OAUTH_SCOPE_NOT_SUPPORTED: "oauth_discovery_failed",
+  OAUTH_CLIENT_REGISTRATION_FAILED: "oauth_client_registration_failed",
+  OAUTH_CLIENT_AUTHENTICATION_FAILED: "oauth_client_authentication_failed",
+  OAUTH_TEMPORARILY_UNAVAILABLE: "oauth_temporarily_unavailable",
+  OAUTH_RATE_LIMITED: "oauth_rate_limited",
+  OAUTH_TOKEN_REFRESH_FAILED: "oauth_token_refresh_failed",
+});
+
+const OAUTH_REASON_CODES: ReadonlySet<string> = new Set(Object.values(OAUTH_REASON_BY_CODE));
+
+/** The §11 reason for an adapter constant, or for an error already carrying a reason code. */
+export function oauthReasonForCode(code: string | undefined): OAuthReasonCode | undefined {
+  if (!code) return undefined;
+  return OAUTH_REASON_BY_CODE[code] ?? (OAUTH_REASON_CODES.has(code) ? code as OAuthReasonCode : undefined);
+}
+
+/** Reason codes that must not be answered with login advice (§11). */
+const NO_LOGIN_ADVICE: ReadonlySet<OAuthReasonCode> = new Set([
+  "oauth_access_denied",
+  "oauth_authorization_denied",
+  "oauth_temporarily_unavailable",
+  "oauth_rate_limited",
+  "oauth_client_authentication_failed",
+  "oauth_client_registration_failed",
+  "oauth_discovery_failed",
+]);
+
+export type OAuthPrepareErrorCode =
+  | "OAUTH_SCOPE_CHANGE_REQUIRED"
+  | "OAUTH_REAUTHORIZATION_REQUIRED"
+  | "OAUTH_AUTHENTICATION_FAILED"
+  | "OAUTH_INVALID_GRANT"
+  | "TARGET_UNAVAILABLE"
+  | OAuthFailureCode;
+
+export interface OAuthPrepareError {
+  code: OAuthPrepareErrorCode;
+  message: string;
+  retryAfterSeconds?: number;
+  /** §11 reason, when the code has one. */
+  reason?: OAuthReasonCode;
+  /** Only when the operator can act by running it (OAUTH-33A); never executed here. */
+  operatorCommand?: string;
+}
 
 export const DEFAULT_OAUTH_REFRESH_SCOPE = "offline_access";
 export const DEFAULT_OAUTH_REFRESH_SAFETY_WINDOW_MS = 60_000;
@@ -110,12 +205,22 @@ export interface OAuthLoginRequest extends OAuthOperatorRequest {
   openBrowser: boolean;
 }
 
+export type OAuthSessionState =
+  | "authorized"
+  | "refresh_due"
+  | "login_required"
+  | "reauthorization_required"
+  | "refresh_uncertain"
+  | "rate_limited"
+  | "access_denied";
+
 export type OAuthOperatorResult =
   | {
       status: "oauth_login_required" | "oauth_operator_service_unavailable";
       applicationDid: string;
       resourceUrl: string;
       operatorCommand: string;
+      reason?: OAuthReasonCode;
     }
   | {
       status: "authorized";
@@ -123,10 +228,18 @@ export type OAuthOperatorResult =
       issuer: string;
       resource: string;
       clientMode: "static" | "cimd" | "dynamic";
+      clientAuthentication?: "none" | "private_key_jwt";
+      /** Union of requested and granted names, kept for compatibility. */
       scopes: string[];
+      requestedScopes?: string[];
+      grantedScopes?: string[];
       expiresAt?: string;
       refreshable: boolean;
       reauthorizationRequired: boolean;
+      state?: OAuthSessionState;
+      reason?: OAuthReasonCode;
+      operatorCommand?: string;
+      retryAfter?: string;
       warnings?: OAuthOperatorWarning[];
     }
   | {
@@ -142,6 +255,7 @@ export type OAuthOperatorResult =
       applicationDid: string;
       localCredentialsDeleted: boolean;
       remoteRevocation: "succeeded" | "unavailable" | "failed";
+      revocationReason?: OAuthReasonCode;
     };
 
 export interface OAuthOperatorService {
@@ -259,6 +373,8 @@ interface OAuthAuthorizationBinding {
   scopeConfiguration: string;
   requestedScopes: string[];
   redirectUrl: string;
+  /** OAUTH-15D: absent means a public client. Part of the binding for the session's life. */
+  clientAuthentication?: OAuthClientAuthenticationBinding;
 }
 
 interface OAuthAuthorizationAttempt {
@@ -289,6 +405,15 @@ interface StoredOAuthSession {
   discovery?: OAuthDiscoveryState;
   tokensSavedAt?: string;
   refreshJitterMs?: number;
+  /**
+   * OAUTH-30 refresh evidence. `uncertain` means a refresh request may have rotated
+   * the grant without a usable response: the stored tokens are kept, the old refresh
+   * token is never resent, and dispatch is refused until the operator logs in again
+   * (plan Phase 0). `deferred` honors a bounded Retry-After.
+   */
+  refreshState?: { status: "uncertain" | "deferred"; at: string; retryAfter?: string };
+  /** A supported explicit entitlement denial observed at the resource (§11). */
+  accessDenied?: { at: string; error: "account_not_allowed" };
 }
 
 export interface FileOAuthOperatorServiceOptions {
@@ -304,6 +429,12 @@ export interface FileOAuthOperatorServiceOptions {
   auditPath?: string;
   fetch?: FetchLike;
   resolveStaticClientSecret?: (credentialHandle: string) => Promise<string>;
+  /** The daemon's adapter key file (OAUTH-15E). Defaults to the daemon's own path. */
+  adapterKeyPath?: string;
+  /** Test seam replacing the key file load. */
+  loadSigningKey?: LoadClientSigningKey;
+  /** Per-attempt bound for OAuth requests. Defaults to the fetch policy's bound. */
+  requestTimeoutMs?: number;
 }
 
 export function fileOAuthOperatorService(options: FileOAuthOperatorServiceOptions = {}): OAuthOperatorService {
@@ -311,14 +442,23 @@ export function fileOAuthOperatorService(options: FileOAuthOperatorServiceOption
   const callbackTimeoutMs = Math.min(options.callbackTimeoutMs ?? 300_000, 600_000);
   const operatorPrincipal = options.operatorPrincipal ?? localOperatorPrincipal();
   const auditPath = options.auditPath ?? join(credentialDir, "oauth-audit.jsonl");
+  // OAUTH-15E, plan Phase 0: the daemon's own key file, loaded only when a client
+  // document declares private_key_jwt.
+  const loadSigningKey: LoadClientSigningKey = options.loadSigningKey ??
+    (() => loadAdapterKey(options.adapterKeyPath ?? defaultAdapterKeyPath()));
 
   return {
     async login(request) {
       const callback = await startCallbackServer(callbackTimeoutMs);
+      const path = credentialPath(credentialDir, request.credentialHandle);
+      const operatorCommand = oauthLoginCommand(request);
+      const evidence = new OAuthRequestEvidence();
+      let previousRaw: Buffer | undefined;
       let session: StoredOAuthSession | undefined;
+      let committed = false;
       try {
-        const path = credentialPath(credentialDir, request.credentialHandle);
-        const previous = await readSession(path);
+        previousRaw = await readRawSession(path);
+        const previous = previousRaw ? JSON.parse(previousRaw.toString("utf8")) as StoredOAuthSession : undefined;
         const owner = request.owner ?? operatorPrincipal;
         if (owner !== operatorPrincipal) {
           throw new Error("OAuth login is restricted to the configured session owner");
@@ -329,6 +469,38 @@ export function fileOAuthOperatorService(options: FileOAuthOperatorServiceOption
         const clientConfiguration = canonicalClientConfiguration(client);
         const state = randomBytes(32).toString("base64url");
         const createdAt = new Date();
+        let authorizationResponseIssuerRequired = false;
+        const policyFetch = createOAuthFetchPolicy({
+          bearerTokenResourceUrl: request.resourceUrl,
+          testOnlyAllowHttpLoopback: options.testOnlyAllowHttpLoopback,
+          fetch: options.fetch,
+          ...(options.requestTimeoutMs ? { timeoutMs: options.requestTimeoutMs } : {}),
+        });
+        const fetchFn = observeAuthorizationMetadata(
+          observeTokenRequests(evidence.observe(policyFetch)),
+          (required) => { authorizationResponseIssuerRequired ||= required; },
+        );
+        evidence.begin("discovery");
+        const discovered = await discoverLoginScopes(request.resourceUrl, fetchFn);
+        const resolved = resolveRequestedOAuthScopes({
+          configuredScopes: request.scopes,
+          refreshScope: request.refreshScope,
+          supportedScopes: uniqueScopes(discovered.resourceScopes, discovered.authorizationServerScopes),
+          resourceScopes: discovered.resourceScopes,
+          authorizationServerScopes: discovered.authorizationServerScopes,
+          challengeScopes: discovered.challengeScopes,
+          previousGrantedScopes: reauthorizationScopes(previous, request),
+        });
+        if (!resolved.ok) {
+          return {
+            status: "oauth_scope_not_supported",
+            applicationDid: request.applicationDid,
+            resourceUrl: request.resourceUrl,
+            requestedScope: resolved.requestedScope,
+            supportedScopes: resolved.supportedScopes,
+            message: resolved.message,
+          };
+        }
         session = {
           version: 2,
           session: request.session,
@@ -349,38 +521,12 @@ export function fileOAuthOperatorService(options: FileOAuthOperatorServiceOption
             ? { clientInformation: previous?.clientInformation }
             : {}),
         };
-        let authorizationResponseIssuerRequired = false;
-        const policyFetch = createOAuthFetchPolicy({
-          bearerTokenResourceUrl: request.resourceUrl,
-          testOnlyAllowHttpLoopback: options.testOnlyAllowHttpLoopback,
-          fetch: options.fetch,
-        });
-        const fetchFn = observeAuthorizationMetadata(policyFetch, (required) => {
-          authorizationResponseIssuerRequired ||= required;
-        });
-        const supportedScopes = await discoverSupportedScopes(request.resourceUrl, fetchFn);
-        const resolved = resolveRequestedOAuthScopes({
-          configuredScopes: request.scopes,
-          refreshScope: request.refreshScope,
-          supportedScopes,
-        });
-        if (!resolved.ok) {
-          return {
-            status: "oauth_scope_not_supported",
-            applicationDid: request.applicationDid,
-            resourceUrl: request.resourceUrl,
-            requestedScope: resolved.requestedScope,
-            supportedScopes: resolved.supportedScopes,
-            message: resolved.message,
-          };
-        }
         const staticClientInformation = await resolveStaticClientInformation(client, options.resolveStaticClientSecret);
         if (staticClientInformation) session.clientInformation = staticClientInformation;
         await writeSession(path, session);
         const provider = new FileOAuthClientProvider(session, path, request.openBrowser, {
           ...options,
-          stripInventedAdvertisedScope: resolved.scopes.length === 0,
-          operatorCommand: oauthLoginCommand(request),
+          operatorCommand,
         }, {
           client,
           clientConfiguration,
@@ -391,30 +537,44 @@ export function fileOAuthOperatorService(options: FileOAuthOperatorServiceOption
           refreshPolicy: normalizeRefreshPolicy(request.refresh),
           callback,
           fetchFn,
+          loadSigningKey,
         });
+        // §4.2: the selected set is passed explicitly, so the SDK never substitutes its own.
         const scopeOption = resolved.scopes.length > 0 ? { scope: resolved.scopes.join(" ") } : {};
+        const metadataOption = discovered.resourceMetadataUrl
+          ? { resourceMetadataUrl: new URL(discovered.resourceMetadataUrl) }
+          : {};
+        evidence.begin("authorization");
         const start = await auth(provider, {
           serverUrl: request.resourceUrl,
           ...scopeOption,
+          ...metadataOption,
           fetchFn,
         });
         if (start !== "REDIRECT") throw new Error("OAuth login did not require operator authorization");
         const code = await callback.waitForCode();
+        evidence.begin("token");
         const completed = await auth(provider, {
           serverUrl: request.resourceUrl,
           authorizationCode: code,
           ...scopeOption,
+          ...metadataOption,
           fetchFn,
         });
         if (completed !== "AUTHORIZED") throw new Error("OAuth authorization did not complete");
         session.reauthorizationRequired = false;
         delete session.reauthorizationReason;
         await writeSession(path, session);
+        committed = true;
         await appendOAuthAudit(auditPath, session, operatorPrincipal, "login", "succeeded");
-        return authorizedResult(session, resolved.warnings);
+        return authorizedResult(session, resolved.warnings, operatorCommand);
       } catch (error) {
+        const failure = classifyLoginFailure(error, evidence);
         if (session) await appendOAuthAudit(auditPath, session, operatorPrincipal, "login", "failed");
-        throw error;
+        // §6, P2-09, P5-07: a failed or declined login never erases the configured
+        // identity or the previously stored grant.
+        if (session && !committed) await restoreSession(path, previousRaw);
+        throw failure;
       } finally {
         await callback.close();
       }
@@ -428,6 +588,7 @@ export function fileOAuthOperatorService(options: FileOAuthOperatorServiceOption
           applicationDid: request.applicationDid,
           resourceUrl: request.resourceUrl,
           operatorCommand: oauthLoginCommand(request),
+          reason: "oauth_login_required",
         };
       }
       if (!session.owner || !session.sharing) throw new Error("OAuth session owner policy is missing");
@@ -437,12 +598,13 @@ export function fileOAuthOperatorService(options: FileOAuthOperatorServiceOption
       if (!sessionMatchesRequest(session, request)) {
         await markReauthorizationRequired(session, path, auditPath, "binding_mismatch");
       }
-      return authorizedResult(session);
+      return authorizedResult(session, [], oauthLoginCommand(request));
     },
     async logout(request) {
       const path = credentialPath(credentialDir, request.credentialHandle);
       const session = await readSecureSession(path);
       let remoteRevocation: "succeeded" | "unavailable" | "failed" = "unavailable";
+      let revocationReason: OAuthReasonCode | undefined;
       if (session) {
         if (!session.owner || !session.sharing) throw new Error("OAuth session owner policy is missing");
         const owner = session.owner;
@@ -455,12 +617,16 @@ export function fileOAuthOperatorService(options: FileOAuthOperatorServiceOption
             `OAuth session binding changed. Run ${operatorCommand}.`,
           );
         }
-        remoteRevocation = await revokeAdvertisedTokens(session, {
+        const revoked = await revokeAdvertisedTokens(session, {
           fetch: options.fetch,
           testOnlyAllowHttpLoopback: options.testOnlyAllowHttpLoopback,
+          loadSigningKey,
         });
+        remoteRevocation = revoked.outcome;
+        revocationReason = revoked.reason;
         await appendOAuthAudit(auditPath, session, operatorPrincipal, "revocation", remoteRevocation);
       }
+      // OAUTH-31: local deletion succeeds whatever happened remotely.
       await rm(path, { force: true });
       if (session) await appendOAuthAudit(auditPath, session, operatorPrincipal, "logout", "succeeded");
       return {
@@ -468,6 +634,7 @@ export function fileOAuthOperatorService(options: FileOAuthOperatorServiceOption
         applicationDid: request.applicationDid,
         localCredentialsDeleted: true,
         remoteRevocation,
+        ...(revocationReason ? { revocationReason } : {}),
       };
     },
   };
@@ -483,9 +650,20 @@ interface FileOAuthClientRuntime {
   refreshPolicy: OAuthRefreshPolicy;
   callback?: OAuthCallbackServer;
   fetchFn?: FetchLike;
+  loadSigningKey?: LoadClientSigningKey;
 }
 
 class FileOAuthClientProvider implements OAuthClientProvider {
+  /** The last token-endpoint failure seen through {@link wrapFetch}, for dispatch-time 401 recovery. */
+  private lastTokenFailure?: OAuthOperatorError;
+  /**
+   * Set when a refresh got a successful response and cleared once {@link saveTokens}
+   * has written the new tokens. If the SDK drops that refresh for any reason in
+   * between, including a failed write, the server may already have rotated the grant
+   * (OAUTH-30). The durable record is the in-flight marker written before sending.
+   */
+  private refreshAwaitingSave = false;
+
   constructor(
     private readonly session: StoredOAuthSession,
     private readonly path: string,
@@ -508,10 +686,72 @@ class FileOAuthClientProvider implements OAuthClientProvider {
       application_type: redirectUrl && isLoopbackUrl(redirectUrl) ? "native" : "web",
     } as OAuthClientMetadata;
   }
-  state(): string {
+  /**
+   * OAUTH-15D: present only for a session bound to `private_key_jwt`. The SDK then
+   * calls it for the code exchange and every refresh instead of its public-client
+   * handling; a signing failure throws before anything is sent.
+   */
+  get addClientAuthentication(): OAuthClientProvider["addClientAuthentication"] {
+    const binding = this.session.binding;
+    const clientAuthentication = binding?.clientAuthentication;
+    if (!binding || !clientAuthentication) return undefined;
+    const loadSigningKey = this.runtime?.loadSigningKey ?? this.options.loadSigningKey;
+    return async (_headers, params) => {
+      await applyClientAssertion(params, {
+        clientId: binding.clientId,
+        audience: binding.issuer,
+        binding: clientAuthentication,
+        loadSigningKey,
+      });
+    };
+  }
+  /** The fixed scope baseline recorded before consent (§4.2, OAUTH-05A). */
+  scopeBaseline(): string[] | undefined {
+    return this.session.binding?.requestedScopes;
+  }
+  /** Classifies token-endpoint responses on the dispatch transport's own fetch. */
+  wrapFetch(fetchFn: FetchLike): FetchLike {
+    return observeTokenRequests(fetchFn, {
+      beforeRefresh: () => markRefreshInFlight(this.session, this.path),
+      onFailure: (failure) => { this.lastTokenFailure = failure; },
+      onResponse: (status, grantType) => {
+        if (grantType === "refresh_token" && status >= 200 && status < 300) this.refreshAwaitingSave = true;
+      },
+    });
+  }
+  /** Records a supported explicit entitlement denial for `status` (§11, P5-05). */
+  async recordAccessDenied(): Promise<void> {
+    this.session.accessDenied = { at: new Date().toISOString(), error: "account_not_allowed" };
+    await writeSession(this.path, this.session);
+  }
+  async state(): Promise<string> {
+    // The SDK asks for state before redirecting; during dispatch there is no
+    // authorization attempt to give it (OAUTH-33A).
+    if (this.isDispatch()) throw await this.dispatchCannotAuthorize();
     const state = this.session.authorization?.state ?? this.session.state;
     if (!state) throw new Error("OAuth authorization state is unavailable");
     return state;
+  }
+  private isDispatch(): boolean {
+    return !this.shouldOpenBrowser && !this.options.onAuthorizationUrl;
+  }
+  /** What dispatch reports when the SDK would start consent: the real cause, never a browser. */
+  private async dispatchCannotAuthorize(): Promise<Error> {
+    const operatorCommand = this.options.operatorCommand ?? "mpas oauth login";
+    // The SDK swallows a refresh failure that is not one of its own OAuth errors and
+    // falls through to consent, so this is where a dispatch-time refresh is settled.
+    const tokenFailure = this.lastTokenFailure ?? (this.refreshAwaitingSave
+      ? new OAuthOperatorError("OAUTH_TOKEN_REFRESH_FAILED", "The refresh response could not be used", { ambiguous: true })
+      : undefined);
+    if (tokenFailure) {
+      // A failed write leaves the in-flight marker on disk, which is the safe state.
+      await persistTokenFailure(this.session, this.path, tokenFailure).catch(() => {});
+      return withOperatorCommand(tokenFailure, operatorCommand);
+    }
+    return new OAuthReauthorizationRequiredError(
+      operatorCommand,
+      `OAuth reauthorization required. The Credential Adapter cannot start a browser during dispatch. Run ${operatorCommand}.`,
+    );
   }
   clientInformation(): OAuthClientInformationMixed | undefined { return this.session.clientInformation; }
   async saveClientInformation(value: OAuthClientInformationMixed): Promise<void> {
@@ -526,24 +766,30 @@ class FileOAuthClientProvider implements OAuthClientProvider {
   }
   tokens(): OAuthTokens | undefined { return this.session.tokens; }
   async saveTokens(value: OAuthTokens): Promise<void> {
-    const previousRefreshToken = this.session.tokens?.refresh_token;
-    this.session.tokens = previousRefreshToken && typeof value.refresh_token !== "string"
-      ? { ...value, refresh_token: previousRefreshToken }
+    const previous = this.session.tokens;
+    let next = previous?.refresh_token && typeof value.refresh_token !== "string"
+      ? { ...value, refresh_token: previous.refresh_token }
       : value;
+    // §4.2, RFC 6749 §6: a refresh response that omits `scope` keeps the granted set;
+    // a returned `scope` replaces it.
+    if (typeof next.scope !== "string" && typeof previous?.scope === "string") next = { ...next, scope: previous.scope };
+    this.session.tokens = next;
     this.session.tokensSavedAt = new Date().toISOString();
     this.session.refreshJitterMs = boundedJitter(this.runtime?.refreshPolicy.jitterMaxMs ?? 0);
     this.session.reauthorizationRequired = false;
     delete this.session.reauthorizationReason;
+    delete this.session.refreshState;
     delete this.session.codeVerifier;
     delete this.session.authorization;
     delete this.session.state;
     delete this.session.redirectUrl;
+    // Clears the in-flight refresh marker in the same write that commits the tokens.
     await writeSession(this.path, this.session);
+    this.refreshAwaitingSave = false;
   }
   async redirectToAuthorization(url: URL): Promise<void> {
-    const authorizationUrl = this.options.stripInventedAdvertisedScope
-      ? stripInventedAdvertisedScope(url, this.session.discovery)
-      : url;
+    // OAUTH-33A: dispatch never starts consent. Report what actually happened.
+    if (this.isDispatch()) throw await this.dispatchCannotAuthorize();
     const authorization = this.session.authorization;
     const binding = this.session.binding;
     if (!authorization || !binding) {
@@ -563,16 +809,10 @@ class FileOAuthClientProvider implements OAuthClientProvider {
         await writeSession(this.path, this.session);
       },
     });
-    if (!this.shouldOpenBrowser && !this.options.onAuthorizationUrl) {
-      throw new OAuthReauthorizationRequiredError(
-        this.options.operatorCommand ?? "mpas oauth login",
-        `OAuth reauthorization required. The Credential Adapter cannot start a browser during dispatch. Run ${this.options.operatorCommand ?? "mpas oauth login"}.`,
-      );
-    }
-    await this.options.onAuthorizationUrl?.(authorizationUrl);
+    await this.options.onAuthorizationUrl?.(url);
     if (this.shouldOpenBrowser) {
-      if (this.options.openBrowser) await this.options.openBrowser(authorizationUrl);
-      else await openUrl(authorizationUrl);
+      if (this.options.openBrowser) await this.options.openBrowser(url);
+      else await openUrl(url);
     }
   }
   async saveCodeVerifier(value: string): Promise<void> {
@@ -592,13 +832,19 @@ class FileOAuthClientProvider implements OAuthClientProvider {
     this.session.discovery = value;
     if (this.runtime) {
       const selected = selectClientMode(this.runtime.client, value, this.session.clientInformation);
+      let clientAuthentication: OAuthClientAuthenticationBinding | undefined;
       if (selected.mode === "cimd") {
-        await validateClientMetadataDocument(
+        const document = await validateClientMetadataDocument(
           selected.clientId,
           this.redirectUrl,
           true,
           this.runtime.fetchFn,
         );
+        clientAuthentication = await selectClientAuthentication({
+          document,
+          metadata: value.authorizationServerMetadata as Record<string, unknown> | undefined,
+          loadSigningKey: this.runtime.loadSigningKey,
+        });
         this.session.clientInformation = { client_id: selected.clientId };
       }
       this.session.binding = {
@@ -612,6 +858,7 @@ class FileOAuthClientProvider implements OAuthClientProvider {
         scopeConfiguration: this.runtime.scopeConfiguration,
         requestedScopes: this.runtime.requestedScopes,
         redirectUrl: this.redirectUrl ?? "",
+        ...(clientAuthentication ? { clientAuthentication } : {}),
       };
     }
     await writeSession(this.path, this.session);
@@ -643,7 +890,14 @@ export interface OAuthPrepareOptions {
   sharing?: Partial<OAuthSharingPolicy>;
   refresh?: Partial<OAuthRefreshPolicy>;
   auditPath?: string;
+  /** The adapter's DID key for `private_key_jwt` sessions (OAUTH-15E). Not a binding member. */
+  signingKey?: LoadClientSigningKey;
+  /** Test seam for OAuth requests made during preparation. Not a binding member. */
+  fetch?: FetchLike;
 }
+
+/** Expectation members that select behavior but are not part of the session binding. */
+const NON_BINDING_EXPECTATIONS: ReadonlySet<string> = new Set(["auditPath", "refresh", "signingKey", "fetch"]);
 
 const refreshTransactions = new Map<string, Promise<void>>();
 
@@ -656,120 +910,109 @@ export async function prepareOAuthForDispatch(
   expected: OAuthPrepareOptions = {},
 ): Promise<
   | { ok: true; provider: OAuthClientProvider }
-  | { ok: false; error: { code: "OAUTH_SCOPE_CHANGE_REQUIRED" | "OAUTH_REAUTHORIZATION_REQUIRED" | "OAUTH_AUTHENTICATION_FAILED" | "OAUTH_INVALID_GRANT" | "TARGET_UNAVAILABLE"; message: string } }
+  | { ok: false; error: OAuthPrepareError }
 > {
   const operatorCommand = oauthLoginCommand({ applicationDid, resourceUrl, session: sessionName, credentialHandle });
+  const auditPath = expected.auditPath ?? join(credentialDir, "oauth-audit.jsonl");
+  const refuse = (code: OAuthPrepareErrorCode, message: string, retryAfterSeconds?: number) => ({
+    ok: false as const,
+    error: prepareError(code, message, operatorCommand, retryAfterSeconds),
+  });
+  // A refresh already running in this process has written its in-flight marker; wait
+  // for its outcome instead of reading the marker as an unresolved refresh (OAUTH-30).
+  await refreshTransactions.get(credentialPath(credentialDir, credentialHandle))?.catch(() => {});
   const loaded = await readBoundOAuthSession(sessionName, credentialHandle, applicationDid, resourceUrl, credentialDir);
   if (!loaded) {
-    return {
-      ok: false,
-      error: {
-        code: "OAUTH_REAUTHORIZATION_REQUIRED",
-        message: `OAuth login required. Run ${operatorCommand}.`,
-      },
-    };
+    return refuse("OAUTH_LOGIN_REQUIRED", `OAuth login required. Run ${operatorCommand}.`);
   }
   if (loaded.session.reauthorizationRequired) {
-    return {
-      ok: false,
-      error: {
-        code: "OAUTH_REAUTHORIZATION_REQUIRED",
-        message: `OAuth reauthorization required. Run ${operatorCommand}.`,
-      },
-    };
+    return refuse("OAUTH_REAUTHORIZATION_REQUIRED", `OAuth reauthorization required. Run ${operatorCommand}.`);
+  }
+  if (loaded.session.refreshState?.status === "uncertain") {
+    // OAUTH-30, plan Phase 0: refused before the ledger's executing write; the old
+    // refresh token is never resent.
+    return refuse("OAUTH_TOKEN_REFRESH_FAILED", refreshUncertainMessage(operatorCommand));
   }
   if (!sessionMatchesExpectation(loaded.session, expected)) {
-    await markReauthorizationRequired(
-      loaded.session,
-      loaded.path,
-      expected.auditPath ?? join(credentialDir, "oauth-audit.jsonl"),
-      "binding_mismatch",
-    );
-    return {
-      ok: false,
-      error: {
-        code: "OAUTH_REAUTHORIZATION_REQUIRED",
-        message: `OAuth session binding changed. Run ${operatorCommand}.`,
-      },
-    };
+    await markReauthorizationRequired(loaded.session, loaded.path, auditPath, "binding_mismatch");
+    return refuse("OAUTH_REAUTHORIZATION_REQUIRED", `OAuth session binding changed. Run ${operatorCommand}.`);
   }
   const refreshPolicy = normalizeRefreshPolicy(expected.refresh);
   if (shouldRefreshAccessToken(loaded.session, refreshPolicy)) {
     if (typeof loaded.session.tokens?.refresh_token !== "string") {
-      await markReauthorizationRequired(
-        loaded.session,
-        loaded.path,
-        expected.auditPath ?? join(credentialDir, "oauth-audit.jsonl"),
-        "grant_unusable",
-      );
-      return {
-        ok: false,
-        error: {
-          code: "OAUTH_REAUTHORIZATION_REQUIRED",
-          message: `OAuth access token is expired or near expiry and no refresh_token is stored. Run ${operatorCommand}.`,
-        },
-      };
-    }
-    let transaction = refreshTransactions.get(loaded.path);
-    if (!transaction) {
-      transaction = refreshOAuthSession(
-        loaded.path,
-        sessionName,
-        credentialHandle,
-        applicationDid,
-        resourceUrl,
-        credentialDir,
-        expected,
-        operatorCommand,
-      );
-      refreshTransactions.set(loaded.path, transaction);
-      void transaction.finally(() => {
-        if (refreshTransactions.get(loaded.path) === transaction) refreshTransactions.delete(loaded.path);
-      }).catch(() => {});
-    }
-    try {
-      await transaction;
-    } catch (error) {
-      return { ok: false, error: classifyOAuthPrepareError(error, operatorCommand) };
+      // §4.2, P4-03: a server need not issue refresh tokens. The session simply ends
+      // at expiry; until then the access token remains usable.
+      if (isAccessTokenExpired(loaded.session.tokens, loaded.session.tokensSavedAt)) {
+        return refuse(
+          "OAUTH_LOGIN_REQUIRED",
+          `OAuth access token expired and the server issued no refresh token. Run ${operatorCommand}.`,
+        );
+      }
+    } else {
+      const deferredUntil = Date.parse(loaded.session.refreshState?.retryAfter ?? "");
+      if (Number.isFinite(deferredUntil) && deferredUntil > Date.now()) {
+        return refuse(
+          "OAUTH_RATE_LIMITED",
+          "OAuth token refresh is rate limited; the adapter will retry after the server's Retry-After.",
+          Math.ceil((deferredUntil - Date.now()) / 1000),
+        );
+      }
+      let transaction = refreshTransactions.get(loaded.path);
+      if (!transaction) {
+        transaction = refreshOAuthSession(
+          loaded.path,
+          sessionName,
+          credentialHandle,
+          applicationDid,
+          resourceUrl,
+          credentialDir,
+          expected,
+          operatorCommand,
+        );
+        refreshTransactions.set(loaded.path, transaction);
+        void transaction.finally(() => {
+          if (refreshTransactions.get(loaded.path) === transaction) refreshTransactions.delete(loaded.path);
+        }).catch(() => {});
+      }
+      try {
+        await transaction;
+      } catch (error) {
+        return { ok: false, error: classifyOAuthPrepareError(error, operatorCommand) };
+      }
     }
   }
   const refreshed = await readBoundOAuthSession(sessionName, credentialHandle, applicationDid, resourceUrl, credentialDir);
   if (!refreshed || refreshed.session.reauthorizationRequired) {
-    return {
-      ok: false,
-      error: {
-        code: "OAUTH_REAUTHORIZATION_REQUIRED",
-        message: `OAuth reauthorization required. Run ${operatorCommand}.`,
-      },
-    };
+    return refuse("OAUTH_REAUTHORIZATION_REQUIRED", `OAuth reauthorization required. Run ${operatorCommand}.`);
   }
   const provider = new FileOAuthClientProvider(refreshed.session, refreshed.path, false, {
     persistAuthorizationArtifacts: false,
     operatorCommand,
     testOnlyAllowHttpLoopback: isLoopbackUrl(resourceUrl),
+    ...(expected.signingKey ? { loadSigningKey: expected.signingKey } : {}),
   });
   return { ok: true, provider };
 }
 
-export function classifyOAuthPrepareError(
-  error: unknown,
-  operatorCommand: string,
-): { code: "OAUTH_SCOPE_CHANGE_REQUIRED" | "OAUTH_REAUTHORIZATION_REQUIRED" | "OAUTH_AUTHENTICATION_FAILED" | "OAUTH_INVALID_GRANT" | "TARGET_UNAVAILABLE"; message: string } {
-  if (error instanceof OAuthScopeChangeRequiredError) return { code: error.code, message: error.message };
+export function classifyOAuthPrepareError(error: unknown, operatorCommand: string): OAuthPrepareError {
+  if (error instanceof OAuthOperatorError) {
+    return prepareError(error.code, error.message, error.operatorCommand ?? operatorCommand, error.retryAfterSeconds);
+  }
+  if (error instanceof OAuthScopeChangeRequiredError) {
+    return { code: error.code, message: error.message, reason: "oauth_insufficient_scope", operatorCommand };
+  }
   if (error instanceof OAuthReauthorizationRequiredError) {
-    return { code: error.code, message: error.message };
+    return prepareError(error.code, error.message, error.operatorCommand);
   }
   if (error instanceof InvalidGrantError || isInvalidGrantError(error)) {
-    return {
-      code: "OAUTH_INVALID_GRANT",
-      message: `OAuth refresh grant is invalid or revoked. Run ${operatorCommand}.`,
-    };
+    return prepareError("OAUTH_INVALID_GRANT", `OAuth refresh grant is invalid or revoked. Run ${operatorCommand}.`, operatorCommand);
   }
   if (error instanceof UnauthorizedError || isUnauthorizedError(error) || isPostRefreshAuthenticationFailure(error)) {
-    return {
-      code: "OAUTH_AUTHENTICATION_FAILED",
-      message: `OAuth authentication failed after a reachable target rejected the credentials. Run ${operatorCommand}.`,
-    };
+    return prepareError(
+      "OAUTH_AUTHENTICATION_FAILED",
+      `OAuth authentication failed after a reachable target rejected the credentials. Run ${operatorCommand}.`,
+      operatorCommand,
+    );
   }
   return {
     code: "TARGET_UNAVAILABLE",
@@ -777,17 +1020,63 @@ export function classifyOAuthPrepareError(
   };
 }
 
+/**
+ * Builds an agent-facing rejection. Login advice is included only where running login
+ * can help; an entitlement denial, a declined consent, a temporary outage or a client
+ * configuration fault never suggests it (§11).
+ */
+function prepareError(
+  code: OAuthPrepareErrorCode,
+  message: string,
+  operatorCommand: string | undefined,
+  retryAfterSeconds?: number,
+): OAuthPrepareError {
+  const reason = oauthReasonForCode(code);
+  const advise = operatorCommand !== undefined && reason !== undefined && !NO_LOGIN_ADVICE.has(reason);
+  return {
+    code,
+    message: advise && !message.includes(operatorCommand) ? `${message} Run ${operatorCommand}.` : message,
+    ...(reason ? { reason } : {}),
+    ...(advise ? { operatorCommand } : {}),
+    ...(retryAfterSeconds !== undefined ? { retryAfterSeconds } : {}),
+  };
+}
+
+function refreshUncertainMessage(operatorCommand: string): string {
+  return "OAuth token refresh may have rotated the grant without a usable response. " +
+    `The adapter will not resend the previous refresh token. Run ${operatorCommand}.`;
+}
+
+/**
+ * Selects the scopes for an operator login.
+ *
+ * Explicit configuration keeps the shipped behavior (OAUTH-05A, P4-06): every
+ * configured scope must be advertised. Without configuration, §4.2 applies: the
+ * resource's challenge scope, otherwise its protected-resource `scopes_supported`,
+ * otherwise no `scope`; authorization-server `scopes_supported` is never merged into
+ * that baseline. A refresh scope is added only when the authorization server
+ * advertises it, and its absence is a warning, never a failure (§4.2).
+ */
 export function resolveRequestedOAuthScopes(input: {
   configuredScopes?: string[];
   refreshScope?: string;
+  /** Every advertised scope; used to validate explicit configuration. */
   supportedScopes: string[];
+  /** Protected-resource `scopes_supported`, when published. */
+  resourceScopes?: string[];
+  /** Authorization-server `scopes_supported`; defaults to `supportedScopes`. */
+  authorizationServerScopes?: string[];
+  /** The scope in the resource's unauthenticated Bearer challenge, when present. */
+  challengeScopes?: string[];
+  /** Previously granted scopes that current policy still permits (P4-05). */
+  previousGrantedScopes?: string[];
 }):
   | { ok: true; scopes: string[]; warnings: OAuthOperatorWarning[] }
   | { ok: false; requestedScope: string; supportedScopes: string[]; message: string } {
   const refreshScope = input.refreshScope?.trim() || DEFAULT_OAUTH_REFRESH_SCOPE;
   const supported = input.supportedScopes;
-  const configured = input.configuredScopes ?? [];
-  for (const scope of configured) {
+  const configured = input.configuredScopes;
+  for (const scope of configured ?? []) {
     if (!supported.includes(scope)) {
       const error = new OAuthScopeNotSupportedError(scope, supported);
       return {
@@ -799,31 +1088,26 @@ export function resolveRequestedOAuthScopes(input: {
     }
   }
   const warnings: OAuthOperatorWarning[] = [];
-  const scopes = [...configured];
-  const selectedRefreshScope = selectRefreshScope(refreshScope, supported);
-  if (!selectedRefreshScope.ok) {
-    return {
-      ok: false,
-      requestedScope: selectedRefreshScope.requestedScope,
-      supportedScopes: selectedRefreshScope.supportedScopes,
-      message: selectedRefreshScope.message,
-    };
+  const baseline = configured ?? (
+    input.challengeScopes?.length ? input.challengeScopes : input.resourceScopes ?? []
+  );
+  const scopes = [...baseline];
+  for (const scope of input.previousGrantedScopes ?? []) {
+    if (!scopes.includes(scope)) scopes.push(scope);
   }
+  const selectedRefreshScope = selectRefreshScope(refreshScope, input.authorizationServerScopes ?? supported);
   if (selectedRefreshScope.warning) warnings.push(selectedRefreshScope.warning);
-  if (!scopes.includes(selectedRefreshScope.scope)) scopes.push(selectedRefreshScope.scope);
+  if (selectedRefreshScope.scope && !scopes.includes(selectedRefreshScope.scope)) scopes.push(selectedRefreshScope.scope);
   return { ok: true, scopes, warnings };
 }
 
 function selectRefreshScope(
   preferred: string,
   supported: string[],
-):
-  | { ok: true; scope: string; warning?: OAuthOperatorWarning }
-  | { ok: false; requestedScope: string; supportedScopes: string[]; message: string } {
-  if (supported.includes(preferred)) return { ok: true, scope: preferred };
+): { scope?: string; warning?: OAuthOperatorWarning } {
+  if (supported.includes(preferred)) return { scope: preferred };
   if (preferred !== DEFAULT_OAUTH_REFRESH_SCOPE && supported.includes(DEFAULT_OAUTH_REFRESH_SCOPE)) {
     return {
-      ok: true,
       scope: DEFAULT_OAUTH_REFRESH_SCOPE,
       warning: {
         code: "OAUTH_REFRESH_SCOPE_NOT_ADVERTISED",
@@ -831,12 +1115,11 @@ function selectRefreshScope(
       },
     };
   }
-  const error = new OAuthScopeNotSupportedError(preferred, supported);
   return {
-    ok: false,
-    requestedScope: error.requestedScope,
-    supportedScopes: error.supportedScopes,
-    message: `Refresh scope "${preferred}" is not advertised by the authorization server and ${DEFAULT_OAUTH_REFRESH_SCOPE} is not available. Supported: ${formatSupportedScopes(supported)}.`,
+    warning: {
+      code: "OAUTH_REFRESH_SCOPE_NOT_ADVERTISED",
+      message: `Refresh scope "${preferred}" is not advertised by the authorization server and ${DEFAULT_OAUTH_REFRESH_SCOPE} is not available; no refresh scope is requested. The server may still issue a refresh token. Supported: ${formatSupportedScopes(supported)}.`,
+    },
   };
 }
 
@@ -866,7 +1149,11 @@ export function isAccessTokenRefreshDue(
   return savedAt + expiresIn * 1000 - boundedSafety - boundedJitterMs <= now;
 }
 
-function authorizedResult(session: StoredOAuthSession, extraWarnings: OAuthOperatorWarning[] = []): OAuthOperatorResult {
+function authorizedResult(
+  session: StoredOAuthSession,
+  extraWarnings: OAuthOperatorWarning[] = [],
+  operatorCommand?: string,
+): OAuthOperatorResult {
   const expiresIn = typeof session.tokens?.expires_in === "number" ? session.tokens.expires_in : undefined;
   const savedAt = session.tokensSavedAt ? Date.parse(session.tokensSavedAt) : NaN;
   const clientInformationRecord: Record<string, unknown> | undefined = isRecord(session.clientInformation)
@@ -878,22 +1165,52 @@ function authorizedResult(session: StoredOAuthSession, extraWarnings: OAuthOpera
   const scope = typeof session.tokens?.scope === "string"
     ? session.tokens.scope
     : clientScope;
+  const requestedScopes = session.binding?.requestedScopes ?? [];
+  // §4.2: requested and granted stay distinct. An omitted initial `scope` means the
+  // requested set was granted (RFC 6749 §5.1).
+  const grantedScopes = typeof session.tokens?.scope === "string"
+    ? session.tokens.scope.split(/\s+/).filter(Boolean)
+    : requestedScopes;
   const warnings = [...extraWarnings, ...postLoginWarnings(session)];
+  const expiredWithoutRefresh = isAccessTokenExpired(session.tokens, session.tokensSavedAt)
+    && typeof session.tokens?.refresh_token !== "string";
+  const condition = sessionCondition(session, expiredWithoutRefresh);
+  const advise = operatorCommand !== undefined && condition.reason !== undefined && !NO_LOGIN_ADVICE.has(condition.reason);
   return {
     status: "authorized",
     applicationDid: session.applicationDid,
     issuer: session.binding?.issuer ?? session.discovery?.authorizationServerUrl ?? "unknown",
     resource: session.resourceUrl,
     clientMode: session.binding?.clientMode ?? (session.clientInformation ? "dynamic" : "static"),
+    clientAuthentication: session.binding?.clientAuthentication?.method ?? "none",
     scopes: uniqueScopes(session.binding?.requestedScopes, scope.split(/\s+/).filter(Boolean)),
+    requestedScopes,
+    grantedScopes,
     ...(expiresIn && Number.isFinite(savedAt) ? { expiresAt: new Date(savedAt + expiresIn * 1000).toISOString() } : {}),
     refreshable: typeof session.tokens?.refresh_token === "string",
-    reauthorizationRequired: session.reauthorizationRequired === true || (
-      isAccessTokenExpired(session.tokens, session.tokensSavedAt)
-        && typeof session.tokens?.refresh_token !== "string"
-    ),
+    reauthorizationRequired: session.reauthorizationRequired === true || expiredWithoutRefresh,
+    state: condition.state,
+    ...(condition.reason ? { reason: condition.reason } : {}),
+    ...(advise ? { operatorCommand } : {}),
+    ...(condition.retryAfter ? { retryAfter: condition.retryAfter } : {}),
     ...(warnings.length ? { warnings } : {}),
   };
+}
+
+/** The status state and §11 reason for a stored session, most specific first. */
+function sessionCondition(
+  session: StoredOAuthSession,
+  expiredWithoutRefresh: boolean,
+): { state: OAuthSessionState; reason?: OAuthReasonCode; retryAfter?: string } {
+  if (session.accessDenied) return { state: "access_denied", reason: "oauth_access_denied" };
+  if (session.reauthorizationRequired) return { state: "reauthorization_required", reason: "oauth_reauthorization_required" };
+  if (session.refreshState?.status === "uncertain") return { state: "refresh_uncertain", reason: "oauth_token_refresh_failed" };
+  if (expiredWithoutRefresh) return { state: "login_required", reason: "oauth_login_required" };
+  const retryAfter = session.refreshState?.retryAfter;
+  if (session.refreshState?.status === "deferred" && retryAfter && Date.parse(retryAfter) > Date.now()) {
+    return { state: "rate_limited", reason: "oauth_rate_limited", retryAfter };
+  }
+  return { state: "authorized" };
 }
 
 function postLoginWarnings(session: StoredOAuthSession): OAuthOperatorWarning[] {
@@ -963,7 +1280,8 @@ async function startCallbackServer(timeoutMs: number): Promise<OAuthCallbackServ
       validateOAuthCallbackParameters(url, expectation);
       consuming = true;
       await expectation.onConsume();
-      if (url.searchParams.has("error")) throw new Error("OAuth authorization failed");
+      // §11.1: state and issuer are verified above before the error is interpreted.
+      if (url.searchParams.has("error")) throw callbackError(url.searchParams.get("error"));
       const authorizationCode = url.searchParams.get("code");
       if (!authorizationCode) throw new Error("OAuth callback is missing an authorization code");
       response.writeHead(200, { "content-type": "text/plain; charset=utf-8" })
@@ -972,7 +1290,7 @@ async function startCallbackServer(timeoutMs: number): Promise<OAuthCallbackServ
     } catch (error) {
       consuming = true;
       response.writeHead(400, { "content-type": "text/plain; charset=utf-8" })
-        .end("OAuth authorization failed. You may close this window.");
+        .end("OAuth authorization was not completed. You may close this window.");
       reject?.(error instanceof Error ? error : new Error("OAuth authorization failed"));
     }
   });
@@ -995,6 +1313,42 @@ async function startCallbackServer(timeoutMs: number): Promise<OAuthCallbackServ
       server.close(() => resolve());
     }),
   };
+}
+
+/**
+ * Maps a validated authorization callback error. `error_description` and `error_uri`
+ * are never read: no recovery is chosen from free text and no URL is followed (§11.1).
+ */
+function callbackError(value: string | null): OAuthOperatorError {
+  const error = sanitizeOAuthErrorCode(value);
+  const diagnostic = { phase: "authorization", ...(error ? { error } : {}) };
+  switch (error) {
+    case "access_denied":
+      return new OAuthOperatorError(
+        "OAUTH_AUTHORIZATION_DENIED",
+        "Authorization was denied at the authorization server. The connection was not completed and login was not restarted.",
+        { diagnostic },
+      );
+    case "invalid_scope":
+      return new OAuthOperatorError(
+        "OAUTH_INSUFFICIENT_SCOPE",
+        "The authorization server rejected the requested scopes (invalid_scope). Review the configured scopes; login was not retried.",
+        { diagnostic },
+      );
+    case "temporarily_unavailable":
+    case "server_error":
+      return new OAuthOperatorError(
+        "OAUTH_TEMPORARILY_UNAVAILABLE",
+        "The authorization server is temporarily unavailable. Run login again later.",
+        { diagnostic },
+      );
+    default:
+      return new OAuthOperatorError(
+        "OAUTH_UNKNOWN_ERROR",
+        "The authorization server returned an unrecognized authorization error. No recovery was attempted.",
+        { diagnostic },
+      );
+  }
 }
 
 function credentialPath(dir: string, credentialHandle: string): string {
@@ -1077,42 +1431,50 @@ async function refreshOAuthSession(
   expected: OAuthPrepareOptions,
   operatorCommand: string,
 ): Promise<void> {
+  const auditPath = expected.auditPath ?? join(credentialDir, "oauth-audit.jsonl");
   const loaded = await readBoundOAuthSession(sessionName, credentialHandle, applicationDid, resourceUrl, credentialDir);
   if (!loaded || loaded.session.reauthorizationRequired) {
     throw new OAuthReauthorizationRequiredError(operatorCommand);
   }
+  if (loaded.session.refreshState?.status === "uncertain") {
+    throw new OAuthOperatorError("OAUTH_TOKEN_REFRESH_FAILED", refreshUncertainMessage(operatorCommand), { operatorCommand });
+  }
   const refreshPolicy = normalizeRefreshPolicy(expected.refresh);
   if (!shouldRefreshAccessToken(loaded.session, refreshPolicy)) return;
   if (typeof loaded.session.tokens?.refresh_token !== "string") {
-    await markReauthorizationRequired(
-      loaded.session,
-      path,
-      expected.auditPath ?? join(credentialDir, "oauth-audit.jsonl"),
-      "grant_unusable",
+    throw new OAuthOperatorError(
+      "OAUTH_LOGIN_REQUIRED",
+      `OAuth access token expired and the server issued no refresh token. Run ${operatorCommand}.`,
+      { operatorCommand },
     );
-    throw new OAuthReauthorizationRequiredError(operatorCommand);
   }
 
-  const fetchFn = createOAuthFetchPolicy({
+  let responded = false;
+  const fetchFn = observeTokenRequests(createOAuthFetchPolicy({
     bearerTokenResourceUrl: resourceUrl,
     testOnlyAllowHttpLoopback: isLoopbackUrl(resourceUrl),
+    ...(expected.fetch ? { fetch: expected.fetch } : {}),
+  }), {
+    beforeRefresh: () => markRefreshInFlight(loaded.session, path),
+    onResponse: () => { responded = true; },
   });
   const binding = loaded.session.binding;
   const discovery = loaded.session.discovery;
   const clientInformation = loaded.session.clientInformation;
   if (!discovery || !clientInformation) {
-    await markReauthorizationRequired(
-      loaded.session,
-      path,
-      expected.auditPath ?? join(credentialDir, "oauth-audit.jsonl"),
-      "grant_unusable",
-    );
+    await markReauthorizationRequired(loaded.session, path, auditPath, "grant_unusable");
     throw new OAuthReauthorizationRequiredError(operatorCommand);
+  }
+  if (binding?.clientMode === "cimd") {
+    // OAUTH-15D, P3-08: the client authentication method is part of the binding. A
+    // document whose method changed since login makes the session unusable.
+    await assertClientDocumentUnchanged(loaded.session, path, auditPath, binding, discovery, fetchFn, expected.signingKey, operatorCommand);
   }
   const provider = new FileOAuthClientProvider(loaded.session, loaded.path, false, {
     persistAuthorizationArtifacts: false,
     operatorCommand,
     testOnlyAllowHttpLoopback: isLoopbackUrl(resourceUrl),
+    ...(expected.signingKey ? { loadSigningKey: expected.signingKey } : {}),
   }, binding ? {
     client: clientConfigurationForBinding(binding),
     clientConfiguration: binding.clientConfiguration,
@@ -1122,7 +1484,9 @@ async function refreshOAuthSession(
     expectedIssuer: binding.issuer,
     refreshPolicy,
     fetchFn,
+    ...(expected.signingKey ? { loadSigningKey: expected.signingKey } : {}),
   } : undefined);
+  const addClientAuthentication = provider.addClientAuthentication;
   try {
     const tokens = await refreshAuthorization(discovery.authorizationServerUrl, {
       metadata: discovery.authorizationServerMetadata,
@@ -1130,33 +1494,139 @@ async function refreshOAuthSession(
       refreshToken: loaded.session.tokens.refresh_token,
       resource: new URL(resourceUrl),
       fetchFn,
+      ...(addClientAuthentication ? { addClientAuthentication } : {}),
     });
     await provider.saveTokens(tokens);
-    await appendOAuthAudit(
-      expected.auditPath ?? join(credentialDir, "oauth-audit.jsonl"),
-      loaded.session,
-      "credential-adapter",
-      "refresh",
-      "succeeded",
-    );
+    await appendOAuthAudit(auditPath, loaded.session, "credential-adapter", "refresh", "succeeded");
   } catch (error) {
-    if (error instanceof InvalidGrantError || isInvalidGrantError(error)) {
-      await markReauthorizationRequired(
-        loaded.session,
-        path,
-        expected.auditPath ?? join(credentialDir, "oauth-audit.jsonl"),
-        "invalid_grant",
-      );
-    } else {
-      await appendOAuthAudit(
-        expected.auditPath ?? join(credentialDir, "oauth-audit.jsonl"),
-        loaded.session,
-        "credential-adapter",
-        "refresh",
-        "failed",
+    const failure = error instanceof OAuthOperatorError
+      ? error
+      : responded
+        // A 2xx whose body could not be used: the grant may already have rotated.
+        ? new OAuthOperatorError("OAUTH_TOKEN_REFRESH_FAILED", "The refresh response could not be used", { cause: error, ambiguous: true })
+        : new OAuthOperatorError("OAUTH_UNKNOWN_ERROR", "OAuth token refresh failed before a response was received", { cause: error });
+    // A failed write leaves the in-flight marker on disk, which is the safe state.
+    await persistTokenFailure(loaded.session, path, failure, auditPath).catch(() => {});
+    throw withOperatorCommand(failure, operatorCommand);
+  }
+}
+
+/**
+ * Persists what a token-endpoint failure proves about the stored grant (OAUTH-29,
+ * OAUTH-30). Nothing here erases the stored tokens.
+ */
+async function persistTokenFailure(
+  session: StoredOAuthSession,
+  path: string,
+  failure: OAuthOperatorError,
+  auditPath?: string,
+): Promise<void> {
+  if (failure.ambiguous) {
+    session.refreshState = { status: "uncertain", at: new Date().toISOString() };
+    await writeSession(path, session);
+    if (auditPath) await appendOAuthAudit(auditPath, session, "credential-adapter", "refresh", "uncertain");
+    return;
+  }
+  // A definite outcome: the server refused, or the request never reached it. Only then
+  // is the in-flight marker written before sending removed.
+  const clearedInFlight = session.refreshState?.status === "uncertain";
+  if (clearedInFlight) delete session.refreshState;
+  if (failure.code === "OAUTH_INVALID_GRANT") {
+    if (auditPath) await markReauthorizationRequired(session, path, auditPath, "invalid_grant");
+    else {
+      session.reauthorizationRequired = true;
+      session.reauthorizationReason = "invalid_grant";
+      await writeSession(path, session);
+    }
+    return;
+  }
+  if (failure.code === "OAUTH_RATE_LIMITED") {
+    const seconds = failure.retryAfterSeconds ?? 60;
+    session.refreshState = {
+      status: "deferred",
+      at: new Date().toISOString(),
+      retryAfter: new Date(Date.now() + seconds * 1000).toISOString(),
+    };
+    await writeSession(path, session);
+  } else if (clearedInFlight) {
+    await writeSession(path, session);
+  }
+  if (auditPath) await appendOAuthAudit(auditPath, session, "credential-adapter", "refresh", "failed");
+}
+
+/**
+ * OAUTH-30: records `refresh_uncertain` durably before a refresh request is sent, so
+ * any outcome the adapter cannot record afterwards (a lost response, a crash, a failed
+ * session write) still refuses dispatch instead of resending the old refresh token.
+ * Saving the new tokens or a definite failure removes it.
+ */
+async function markRefreshInFlight(session: StoredOAuthSession, path: string): Promise<void> {
+  session.refreshState = { status: "uncertain", at: new Date().toISOString() };
+  await writeSession(path, session);
+}
+
+function withOperatorCommand(failure: OAuthOperatorError, operatorCommand: string): OAuthOperatorError {
+  if (failure.operatorCommand) return failure;
+  const reason = oauthReasonForCode(failure.code);
+  if (!reason || NO_LOGIN_ADVICE.has(reason)) return failure;
+  const message = failure.code === "OAUTH_INVALID_GRANT"
+    ? `OAuth refresh grant is invalid or revoked. Run ${operatorCommand}.`
+    : failure.ambiguous ? refreshUncertainMessage(operatorCommand) : failure.message;
+  return new OAuthOperatorError(failure.code, message, {
+    cause: failure,
+    operatorCommand,
+    ambiguous: failure.ambiguous,
+    ...(failure.retryAfterSeconds !== undefined ? { retryAfterSeconds: failure.retryAfterSeconds } : {}),
+    ...(failure.diagnostic ? { diagnostic: failure.diagnostic } : {}),
+  });
+}
+
+async function assertClientDocumentUnchanged(
+  session: StoredOAuthSession,
+  path: string,
+  auditPath: string,
+  binding: OAuthAuthorizationBinding,
+  discovery: OAuthDiscoveryState,
+  fetchFn: FetchLike,
+  loadSigningKey: LoadClientSigningKey | undefined,
+  operatorCommand: string,
+): Promise<void> {
+  let document: Record<string, unknown>;
+  try {
+    document = await validateClientMetadataDocument(binding.clientId, binding.redirectUrl, true, fetchFn);
+  } catch (error) {
+    if (error instanceof OAuthOperatorError &&
+        (error.code === "OAUTH_TEMPORARILY_UNAVAILABLE" || error.code === "OAUTH_RATE_LIMITED")) {
+      throw error;
+    }
+    await markReauthorizationRequired(session, path, auditPath, "binding_mismatch");
+    throw new OAuthReauthorizationRequiredError(
+      operatorCommand,
+      `The OAuth client document no longer matches this session. Run ${operatorCommand}.`,
+    );
+  }
+  const declared = document.token_endpoint_auth_method ?? "none";
+  const bound = binding.clientAuthentication?.method ?? "none";
+  if (declared !== bound) {
+    await markReauthorizationRequired(session, path, auditPath, "binding_mismatch");
+    throw new OAuthReauthorizationRequiredError(
+      operatorCommand,
+      `The OAuth client document's authentication method changed since login. Run ${operatorCommand}.`,
+    );
+  }
+  if (binding.clientAuthentication) {
+    const current = await selectClientAuthentication({
+      document,
+      metadata: discovery.authorizationServerMetadata as Record<string, unknown> | undefined,
+      loadSigningKey,
+    });
+    if (current?.keyDid !== binding.clientAuthentication.keyDid || current.algorithm !== binding.clientAuthentication.algorithm) {
+      await markReauthorizationRequired(session, path, auditPath, "binding_mismatch");
+      throw new OAuthReauthorizationRequiredError(
+        operatorCommand,
+        `The OAuth client key changed since login. Run ${operatorCommand}.`,
       );
     }
-    throw error;
   }
 }
 
@@ -1188,7 +1658,7 @@ function sessionMatchesRequest(session: StoredOAuthSession, request: OAuthOperat
 
 function sessionMatchesExpectation(session: StoredOAuthSession, expected: OAuthPrepareOptions): boolean {
   const binding = session.binding;
-  if (!binding) return Object.keys(expected).filter((key) => key !== "auditPath" && key !== "refresh").length === 0;
+  if (!binding) return Object.keys(expected).filter((key) => !NON_BINDING_EXPECTATIONS.has(key)).length === 0;
   const hasConfiguredExpectation = expected.issuer !== undefined || expected.client !== undefined ||
     expected.scopes !== undefined || expected.refreshScope !== undefined || expected.owner !== undefined ||
     expected.sharing !== undefined;
@@ -1403,22 +1873,24 @@ function selectClientMode(
   existing: OAuthClientInformationMixed | undefined,
 ): { mode: OAuthClientMode; clientId: string } {
   const metadata = discovery.authorizationServerMetadata;
+  const registrationFailed = (message: string) => new OAuthOperatorError("OAUTH_CLIENT_REGISTRATION_FAILED", message);
   if (client.type === "static" || (client.type === "auto" && client.clientId)) {
     const configuredClientId = client.clientId;
     if (!configuredClientId || existing?.client_id !== configuredClientId) {
-      throw new Error("OAuth static client information is unavailable or does not match configuration");
+      throw registrationFailed("OAuth static client information is unavailable or does not match configuration");
     }
     return { mode: "static", clientId: configuredClientId };
   }
   if (client.type === "cimd") {
+    // OAUTH-12A, §4.1: no dynamic registration and no public-client fallback.
     if (metadata?.client_id_metadata_document_supported !== true) {
-      throw new Error("OAuth CIMD mode is configured but the authorization server does not advertise it");
+      throw registrationFailed("OAuth CIMD mode is configured but the authorization server does not advertise it");
     }
     return { mode: "cimd", clientId: client.clientIdMetadataDocument };
   }
   if (client.type === "dynamic") {
     if (!metadata?.registration_endpoint) {
-      throw new Error("OAuth dynamic client registration is configured but not advertised");
+      throw registrationFailed("OAuth dynamic client registration is configured but not advertised");
     }
     return { mode: "dynamic", clientId: existing?.client_id ?? "dynamic-registration-pending" };
   }
@@ -1428,42 +1900,175 @@ function selectClientMode(
   if (metadata?.registration_endpoint) {
     return { mode: "dynamic", clientId: existing?.client_id ?? "dynamic-registration-pending" };
   }
-  throw new Error("OAuth auto client selection found no static client, advertised CIMD, or advertised dynamic registration");
+  throw registrationFailed("OAuth auto client selection found no static client, advertised CIMD, or advertised dynamic registration");
 }
 
 function assertCimdUrl(value: string): void {
-  const url = new URL(value);
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new OAuthOperatorError("OAUTH_CLIENT_REGISTRATION_FAILED", "OAuth Client ID Metadata Document URL is invalid");
+  }
   if (url.protocol !== "https:" || url.pathname === "/") {
-    throw new Error("OAuth Client ID Metadata Document URL must use HTTPS and contain a non-root path");
+    throw new OAuthOperatorError(
+      "OAUTH_CLIENT_REGISTRATION_FAILED",
+      "OAuth Client ID Metadata Document URL must use HTTPS and contain a non-root path",
+    );
   }
 }
 
-async function validateClientMetadataDocument(
+const MAX_CLIENT_METADATA_DOCUMENT_BYTES = 65_536;
+const LOOPBACK_REDIRECT_HOSTS: ReadonlySet<string> = new Set(["127.0.0.1", "[::1]", "localhost"]);
+const PRIVATE_JWK_MEMBERS = ["d", "p", "q", "dp", "dq", "qi", "oth", "k"];
+
+/**
+ * Fetches and validates a Client ID Metadata Document (OAUTH-12). Retrieval failures
+ * keep their cause (§6): a timeout, 429 or 5xx is temporary and never evidence that
+ * the identity is invalid.
+ */
+export async function validateClientMetadataDocument(
   clientId: string,
   redirectUrl: string | undefined,
   refreshRequested: boolean,
   fetchFn: FetchLike | undefined,
-): Promise<void> {
+): Promise<Record<string, unknown>> {
   assertCimdUrl(clientId);
-  if (!redirectUrl || !fetchFn) throw new Error("OAuth CIMD validation prerequisites are unavailable");
-  const response = await fetchFn(clientId, { redirect: "manual" });
-  if (!response.ok) throw new Error("OAuth Client ID Metadata Document could not be loaded");
+  if (!redirectUrl || !fetchFn) {
+    throw new OAuthOperatorError("OAUTH_CLIENT_REGISTRATION_FAILED", "OAuth CIMD validation prerequisites are unavailable");
+  }
+  let response: Response;
+  try {
+    response = await fetchFn(clientId, { redirect: "manual" });
+  } catch (error) {
+    if (isTransportFailure(error)) {
+      throw new OAuthOperatorError(
+        "OAUTH_TEMPORARILY_UNAVAILABLE",
+        "OAuth Client ID Metadata Document is temporarily unavailable",
+        { cause: error, diagnostic: { phase: "client_metadata" } },
+      );
+    }
+    throw new OAuthOperatorError(
+      "OAUTH_CLIENT_REGISTRATION_FAILED",
+      `OAuth Client ID Metadata Document could not be loaded: ${error instanceof Error ? error.message : "request rejected"}`,
+      { cause: error },
+    );
+  }
+  const diagnostic = { status: response.status, phase: "client_metadata" };
+  if (response.status === 429) {
+    await response.body?.cancel().catch(() => {});
+    const retryAfterSeconds = parseRetryAfterSeconds(response.headers.get("retry-after"));
+    throw new OAuthOperatorError("OAUTH_RATE_LIMITED", "OAuth Client ID Metadata Document retrieval is rate limited", {
+      diagnostic,
+      ...(retryAfterSeconds !== undefined ? { retryAfterSeconds } : {}),
+    });
+  }
+  if (response.status >= 500) {
+    await response.body?.cancel().catch(() => {});
+    throw new OAuthOperatorError("OAUTH_TEMPORARILY_UNAVAILABLE", "OAuth Client ID Metadata Document is temporarily unavailable", { diagnostic });
+  }
+  if (!response.ok) {
+    await response.body?.cancel().catch(() => {});
+    throw new OAuthOperatorError("OAUTH_CLIENT_REGISTRATION_FAILED", "OAuth Client ID Metadata Document could not be loaded", { diagnostic });
+  }
+  const body = await response.arrayBuffer();
+  if (body.byteLength > MAX_CLIENT_METADATA_DOCUMENT_BYTES) {
+    throw new OAuthOperatorError("OAUTH_CLIENT_REGISTRATION_FAILED", "OAuth Client ID Metadata Document exceeds the size limit");
+  }
   let value: unknown;
   try {
-    value = await response.json();
+    value = JSON.parse(new TextDecoder().decode(body));
   } catch {
-    throw new Error("OAuth Client ID Metadata Document is not valid JSON");
+    throw new OAuthOperatorError("OAUTH_CLIENT_REGISTRATION_FAILED", "OAuth Client ID Metadata Document is not valid JSON");
   }
-  if (!isRecord(value) || value.client_id !== clientId || typeof value.client_name !== "string" ||
-      !Array.isArray(value.redirect_uris) || value.redirect_uris.length !== 1 || value.redirect_uris[0] !== redirectUrl) {
-    throw new Error("OAuth Client ID Metadata Document does not match the configured client and redirect URI");
+  return validateClientMetadataDocumentValue(value, clientId, redirectUrl, refreshRequested);
+}
+
+/**
+ * OAUTH-12, OAUTH-15A, OAUTH-15F field rules. Standard RFC 7591 metadata is accepted
+ * subject to field-specific checks; a name containing `token` or `credential` is not a
+ * reason to reject. Private key material, secrets and deployment-secret references are.
+ */
+export function validateClientMetadataDocumentValue(
+  value: unknown,
+  clientId: string,
+  redirectUrl: string,
+  refreshRequested: boolean,
+): Record<string, unknown> {
+  const reject = (message: string) => new OAuthOperatorError("OAUTH_CLIENT_REGISTRATION_FAILED", message);
+  if (!isRecord(value)) throw reject("OAuth Client ID Metadata Document must be a JSON object");
+  if (value.client_id !== clientId) {
+    throw reject("OAuth Client ID Metadata Document client_id does not match its URL");
+  }
+  if (typeof value.client_name !== "string" || value.client_name.length === 0) {
+    throw reject("OAuth Client ID Metadata Document is missing client_name");
+  }
+  const redirectUris = value.redirect_uris;
+  if (!Array.isArray(redirectUris) || redirectUris.length === 0 ||
+      !redirectUris.every((uri) => typeof uri === "string" && uri.length > 0)) {
+    throw reject("OAuth Client ID Metadata Document is missing redirect_uris");
+  }
+  if (!redirectUris.some((registered) => matchesRegisteredRedirectUri(registered as string, redirectUrl))) {
+    throw reject("OAuth Client ID Metadata Document does not register the selected redirect URI");
+  }
+  for (const field of ["grant_types", "response_types"]) {
+    const list = value[field];
+    if (list !== undefined && (!Array.isArray(list) || !list.every((entry) => typeof entry === "string"))) {
+      throw reject(`OAuth Client ID Metadata Document ${field} must be an array of strings`);
+    }
   }
   if (refreshRequested && (!Array.isArray(value.grant_types) || !value.grant_types.includes("refresh_token"))) {
-    throw new Error("OAuth Client ID Metadata Document does not advertise refresh_token");
+    throw reject("OAuth Client ID Metadata Document does not advertise refresh_token");
   }
-  if (Object.keys(value).some((key) => /secret|token|credential/i.test(key))) {
-    throw new Error("OAuth Client ID Metadata Document must not contain credentials");
+  if (value.token_endpoint_auth_method !== undefined && typeof value.token_endpoint_auth_method !== "string") {
+    throw reject("OAuth Client ID Metadata Document token_endpoint_auth_method must be a string");
   }
+  if (value.jwks !== undefined) {
+    const keys = isRecord(value.jwks) ? value.jwks.keys : undefined;
+    if (!Array.isArray(keys) || !keys.every(isRecord)) {
+      throw reject("OAuth Client ID Metadata Document jwks must hold a keys array");
+    }
+    if (keys.some((key) => PRIVATE_JWK_MEMBERS.some((member) => member in key))) {
+      throw reject("OAuth Client ID Metadata Document must not contain private key material");
+    }
+    if (value.jwks_uri !== undefined) {
+      throw reject("OAuth Client ID Metadata Document must not declare both jwks and jwks_uri");
+    }
+  }
+  for (const key of Object.keys(value)) {
+    if (/secret|password|private[_-]?key|registration_access_token/i.test(key)) {
+      throw reject("OAuth Client ID Metadata Document must not contain credentials or private keys");
+    }
+  }
+  if (JSON.stringify(value).includes("{{credential:")) {
+    throw reject("OAuth Client ID Metadata Document must not contain deployment-secret references");
+  }
+  return value;
+}
+
+/**
+ * OAUTH-12, RFC 8252 §7.3: a registered loopback HTTP redirect matches the adapter's
+ * callback on any port, with scheme, host, path and query unchanged. Every other
+ * redirect, HTTPS included, must match exactly. `localhost` never matches an IP literal.
+ */
+export function matchesRegisteredRedirectUri(registered: string, selected: string): boolean {
+  if (registered === selected) return true;
+  let left: URL;
+  let right: URL;
+  try {
+    left = new URL(registered);
+    right = new URL(selected);
+  } catch {
+    return false;
+  }
+  if (left.protocol !== "http:" || !LOOPBACK_REDIRECT_HOSTS.has(left.hostname)) return false;
+  return right.protocol === "http:" &&
+    right.hostname === left.hostname &&
+    right.pathname === left.pathname &&
+    right.search === left.search &&
+    right.hash === "" && left.hash === "" &&
+    right.username === "" && right.password === "" &&
+    left.username === "" && left.password === "";
 }
 
 function boundedJitter(maximum: number): number {
@@ -1474,8 +2079,10 @@ function boundedJitter(maximum: number): number {
 
 async function revokeAdvertisedTokens(
   session: StoredOAuthSession,
-  options: Pick<FileOAuthOperatorServiceOptions, "fetch" | "testOnlyAllowHttpLoopback">,
-): Promise<"succeeded" | "unavailable" | "failed"> {
+  options: Pick<FileOAuthOperatorServiceOptions, "fetch" | "testOnlyAllowHttpLoopback"> & {
+    loadSigningKey?: LoadClientSigningKey;
+  },
+): Promise<{ outcome: "succeeded" | "unavailable" | "failed"; reason?: OAuthReasonCode }> {
   const metadata = session.discovery?.authorizationServerMetadata;
   const rawMetadata = metadata as unknown as Record<string, unknown> | undefined;
   const endpoint = typeof rawMetadata?.revocation_endpoint === "string"
@@ -1483,7 +2090,16 @@ async function revokeAdvertisedTokens(
     : undefined;
   const accessToken = session.tokens?.access_token;
   const refreshToken = session.tokens?.refresh_token;
-  if (!endpoint || (!accessToken && !refreshToken)) return "unavailable";
+  if (!endpoint || (!accessToken && !refreshToken)) return { outcome: "unavailable" };
+  const clientAuthentication = session.binding?.clientAuthentication;
+  if (clientAuthentication) {
+    // OAUTH-15G: never send an unauthenticated revocation for a private_key_jwt client.
+    try {
+      assertRevocationAuthentication(clientAuthentication, rawMetadata);
+    } catch {
+      return { outcome: "failed", reason: "oauth_client_authentication_failed" };
+    }
+  }
   const fetchFn = createOAuthFetchPolicy({
     fetch: options.fetch,
     testOnlyAllowHttpLoopback: options.testOnlyAllowHttpLoopback,
@@ -1493,22 +2109,40 @@ async function revokeAdvertisedTokens(
     ...(accessToken ? [{ value: accessToken, hint: "access_token" }] : []),
   ];
   let succeeded = true;
+  let reason: OAuthReasonCode | undefined;
   for (const token of tokens) {
     const body = new URLSearchParams({ token: token.value, token_type_hint: token.hint });
     if (session.clientInformation?.client_id) body.set("client_id", session.clientInformation.client_id);
     if (session.clientInformation?.client_secret) body.set("client_secret", session.clientInformation.client_secret);
+    try {
+      if (clientAuthentication && session.binding) {
+        await applyClientAssertion(body, {
+          clientId: session.binding.clientId,
+          audience: session.binding.issuer,
+          binding: clientAuthentication,
+          loadSigningKey: options.loadSigningKey,
+        });
+      }
+    } catch {
+      return { outcome: "failed", reason: "oauth_client_authentication_failed" };
+    }
     try {
       const response = await fetchFn(endpoint, {
         method: "POST",
         headers: { "content-type": "application/x-www-form-urlencoded" },
         body,
       });
-      if (!response.ok) succeeded = false;
+      if (!response.ok) {
+        succeeded = false;
+        const failure = await tokenErrorFromResponse(response, "revocation");
+        reason ??= oauthReasonForCode(failure.code);
+      }
     } catch {
       succeeded = false;
+      reason ??= "oauth_temporarily_unavailable";
     }
   }
-  return succeeded ? "succeeded" : "failed";
+  return succeeded ? { outcome: "succeeded" } : { outcome: "failed", ...(reason ? { reason } : {}) };
 }
 
 async function appendOAuthAudit(
@@ -1537,8 +2171,8 @@ async function appendOAuthAudit(
 
 export interface ManagedOAuthSessionValidation {
   ok: boolean;
-  state: "authorized" | "refresh_due" | "reauthorization_required" | "missing" | "malformed" | "misbound" | "insecure_permissions" | "access_denied";
-  error?: "OAUTH_REAUTHORIZATION_REQUIRED" | "OAUTH_SESSION_NOT_FOUND" | "OAUTH_SESSION_MALFORMED" | "OAUTH_SESSION_BINDING_MISMATCH" | "OAUTH_SESSION_INSECURE_PERMISSIONS" | "OAUTH_SESSION_ACCESS_DENIED";
+  state: "authorized" | "refresh_due" | "login_required" | "reauthorization_required" | "refresh_uncertain" | "missing" | "malformed" | "misbound" | "insecure_permissions" | "access_denied";
+  error?: "OAUTH_LOGIN_REQUIRED" | "OAUTH_REAUTHORIZATION_REQUIRED" | "OAUTH_TOKEN_REFRESH_FAILED" | "OAUTH_SESSION_NOT_FOUND" | "OAUTH_SESSION_MALFORMED" | "OAUTH_SESSION_BINDING_MISMATCH" | "OAUTH_SESSION_INSECURE_PERMISSIONS" | "OAUTH_SESSION_ACCESS_DENIED";
 }
 
 export async function validateManagedOAuthSession(
@@ -1578,10 +2212,15 @@ export async function validateManagedOAuthSession(
   if (session.reauthorizationRequired || !session.tokens) {
     return { ok: false, state: "reauthorization_required", error: "OAUTH_REAUTHORIZATION_REQUIRED" };
   }
+  if (session.refreshState?.status === "uncertain") {
+    return { ok: false, state: "refresh_uncertain", error: "OAUTH_TOKEN_REFRESH_FAILED" };
+  }
   if (shouldRefreshAccessToken(session, normalizeRefreshPolicy(request.refresh))) {
-    return typeof session.tokens.refresh_token === "string"
-      ? { ok: true, state: "refresh_due" }
-      : { ok: false, state: "reauthorization_required", error: "OAUTH_REAUTHORIZATION_REQUIRED" };
+    if (typeof session.tokens.refresh_token === "string") return { ok: true, state: "refresh_due" };
+    // §4.2: no refresh token was issued; the session ends at expiry.
+    return isAccessTokenExpired(session.tokens, session.tokensSavedAt)
+      ? { ok: false, state: "login_required", error: "OAUTH_LOGIN_REQUIRED" }
+      : { ok: true, state: "authorized" };
   }
   return { ok: true, state: "authorized" };
 }
@@ -1603,15 +2242,385 @@ async function refreshScopeFromPlugin(configDir: string, pluginPath: string | un
   return declared?.trim() || DEFAULT_OAUTH_REFRESH_SCOPE;
 }
 
-async function discoverSupportedScopes(
+interface LoginDiscovery {
+  challengeScopes?: string[];
+  resourceMetadataUrl?: string;
+  resourceScopes?: string[];
+  authorizationServerScopes?: string[];
+}
+
+/**
+ * §5 steps 1-4 for operator login. The resource is first contacted without
+ * credentials so its challenge scope and `resource_metadata` can be used (OAUTH-11A,
+ * §4.2). Resource and authorization-server scope lists are kept apart (P4-01).
+ */
+async function discoverLoginScopes(resourceUrl: string, fetchFn: FetchLike): Promise<LoginDiscovery> {
+  const challenge = await probeResourceChallenge(resourceUrl, fetchFn);
+  let info: Awaited<ReturnType<typeof discoverOAuthServerInfo>>;
+  try {
+    info = await discoverOAuthServerInfo(resourceUrl, {
+      fetchFn,
+      ...(challenge.resourceMetadataUrl ? { resourceMetadataUrl: new URL(challenge.resourceMetadataUrl) } : {}),
+    });
+  } catch (error) {
+    if (error instanceof OAuthOperatorError) throw error;
+    throw new OAuthOperatorError(
+      "OAUTH_DISCOVERY_FAILED",
+      `OAuth metadata discovery failed: ${error instanceof Error ? error.message : "invalid metadata"}`,
+      { cause: error },
+    );
+  }
+  if (!info.resourceMetadata || !info.authorizationServerMetadata) {
+    throw new OAuthOperatorError("OAUTH_DISCOVERY_FAILED", "OAuth protected-resource or authorization-server metadata is missing");
+  }
+  return {
+    ...(challenge.scopes ? { challengeScopes: challenge.scopes } : {}),
+    ...(challenge.resourceMetadataUrl ? { resourceMetadataUrl: challenge.resourceMetadataUrl } : {}),
+    ...(Array.isArray(info.resourceMetadata.scopes_supported)
+      ? { resourceScopes: uniqueScopes(info.resourceMetadata.scopes_supported) }
+      : {}),
+    ...(Array.isArray(info.authorizationServerMetadata.scopes_supported)
+      ? { authorizationServerScopes: uniqueScopes(info.authorizationServerMetadata.scopes_supported) }
+      : {}),
+  };
+}
+
+async function probeResourceChallenge(
   resourceUrl: string,
-  fetchFn: ReturnType<typeof createOAuthFetchPolicy>,
-): Promise<string[]> {
-  const info = await discoverOAuthServerInfo(resourceUrl, { fetchFn });
-  return uniqueScopes(
-    info.resourceMetadata?.scopes_supported,
-    info.authorizationServerMetadata?.scopes_supported,
+  fetchFn: FetchLike,
+): Promise<{ scopes?: string[]; resourceMetadataUrl?: string }> {
+  let response: Response;
+  try {
+    response = await fetchFn(resourceUrl, {
+      method: "POST",
+      headers: { "content-type": "application/json", accept: "application/json, text/event-stream" },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 0,
+        method: "initialize",
+        params: {
+          protocolVersion: "2025-11-25",
+          capabilities: {},
+          clientInfo: { name: "mpas-credential-adapter", version: "1.0.0" },
+        },
+      }),
+    });
+  } catch {
+    // The probe is advisory; protected-resource discovery below is authoritative.
+    return {};
+  }
+  await response.body?.cancel().catch(() => {});
+  if (response.status !== 401) return {};
+  const { scope, resourceMetadataUrl } = extractWWWAuthenticateParams(response);
+  const scopes = scope?.split(/ +/).filter(Boolean).slice(0, 64);
+  return {
+    ...(scopes?.length ? { scopes } : {}),
+    ...(resourceMetadataUrl ? { resourceMetadataUrl: resourceMetadataUrl.toString() } : {}),
+  };
+}
+
+/**
+ * P4-05: operator reauthorization keeps previously granted scopes that current policy
+ * permits. With explicit scopes that is the configured set; with discovery delegation
+ * it is the prior grant for the same binding. Removed permissions are not retained
+ * as authority; a refused scope is reported once by the authorization server.
+ */
+function reauthorizationScopes(previous: StoredOAuthSession | undefined, request: OAuthOperatorRequest): string[] {
+  if (!previous?.tokens || previous.applicationDid !== request.applicationDid ||
+      canonicalResourceUrl(previous.resourceUrl) !== canonicalResourceUrl(request.resourceUrl)) return [];
+  const granted = typeof previous.tokens.scope === "string"
+    ? previous.tokens.scope.split(/\s+/).filter(Boolean)
+    : previous.binding?.requestedScopes ?? [];
+  if (request.scopes) return granted.filter((scope) => request.scopes!.includes(scope));
+  return granted;
+}
+
+/** Records request outcomes during one login phase so failures keep their cause (§6, §11.1). */
+class OAuthRequestEvidence {
+  private phase = "discovery";
+  private failures: Array<{ status?: number; transport?: boolean; retryAfterSeconds?: number }> = [];
+
+  begin(phase: string): void {
+    this.phase = phase;
+    this.failures = [];
+  }
+
+  observe(fetchFn: FetchLike): FetchLike {
+    return async (input, init) => {
+      try {
+        const response = await fetchFn(input, init);
+        if (response.status === 429 || response.status >= 500) {
+          const retryAfterSeconds = parseRetryAfterSeconds(response.headers.get("retry-after"));
+          this.failures.push({ status: response.status, ...(retryAfterSeconds !== undefined ? { retryAfterSeconds } : {}) });
+        }
+        return response;
+      } catch (error) {
+        if (isTransportFailure(error)) this.failures.push({ transport: true });
+        throw error;
+      }
+    };
+  }
+
+  temporaryFailure(cause: unknown): OAuthOperatorError | undefined {
+    const limited = this.failures.find((failure) => failure.status === 429);
+    if (limited) {
+      return new OAuthOperatorError("OAUTH_RATE_LIMITED", `An OAuth ${this.phase} endpoint is rate limited`, {
+        cause,
+        diagnostic: { status: 429, phase: this.phase },
+        ...(limited.retryAfterSeconds !== undefined ? { retryAfterSeconds: limited.retryAfterSeconds } : {}),
+      });
+    }
+    const unavailable = this.failures.find((failure) => failure.transport || (failure.status ?? 0) >= 500);
+    if (unavailable) {
+      return new OAuthOperatorError("OAUTH_TEMPORARILY_UNAVAILABLE", `An OAuth ${this.phase} endpoint is temporarily unavailable`, {
+        cause,
+        diagnostic: { phase: this.phase, ...(unavailable.status ? { status: unavailable.status } : {}) },
+      });
+    }
+    return undefined;
+  }
+
+  get currentPhase(): string {
+    return this.phase;
+  }
+}
+
+function classifyLoginFailure(error: unknown, evidence: OAuthRequestEvidence): unknown {
+  if (error instanceof OAuthOperatorError) {
+    // A discovery or registration verdict reached while a temporary failure was
+    // observed is reported as temporary: an outage is not invalid enrollment (§6).
+    if (error.code === "OAUTH_DISCOVERY_FAILED" || error.code === "OAUTH_CLIENT_REGISTRATION_FAILED") {
+      return evidence.temporaryFailure(error) ?? error;
+    }
+    return error;
+  }
+  if (error instanceof OAuthScopeChangeRequiredError || error instanceof OAuthReauthorizationRequiredError) return error;
+  const temporary = evidence.temporaryFailure(error);
+  if (temporary) return temporary;
+  if (error instanceof OAuthIssuerMismatchError || error instanceof OAuthPkceMetadataError ||
+      evidence.currentPhase === "discovery") {
+    return new OAuthOperatorError("OAUTH_DISCOVERY_FAILED", error instanceof Error ? error.message : "OAuth discovery failed", { cause: error });
+  }
+  return error;
+}
+
+/** Network-level failures: fetch rejects with these, never for an HTTP response. */
+function isTransportFailure(error: unknown): boolean {
+  if (error instanceof OAuthOperatorError) return false;
+  if (error instanceof HardenedFetchError) return true;
+  if (error instanceof OAuthFetchPolicyError) return error.cause instanceof HardenedFetchError;
+  if (connectFailureCode(error) !== undefined || isDnsFailure(error)) return true;
+  return error instanceof TypeError ||
+    (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError"));
+}
+
+/** A name that did not resolve proves no request reached a server (OAUTH-30). */
+function isDnsFailure(error: unknown, depth = 0): boolean {
+  if (depth > 4 || error === null || typeof error !== "object") return false;
+  const code = (error as { code?: unknown }).code;
+  if (code === "ENOTFOUND" || code === "EAI_AGAIN") return true;
+  return isDnsFailure((error as { cause?: unknown }).cause, depth + 1);
+}
+
+/**
+ * Classifies token-endpoint responses before the MCP SDK sees them, so an OAuth
+ * error never triggers the SDK's own retry with the same code or refresh token
+ * (OAUTH-18, OAUTH-30) and `invalid_client` is never mistaken for a user-grant
+ * failure (§11.1).
+ */
+function observeTokenRequests(
+  fetchFn: FetchLike,
+  hooks: {
+    /** Runs before a refresh request is sent; if it fails, nothing is sent. */
+    beforeRefresh?: () => Promise<void>;
+    onFailure?: (failure: OAuthOperatorError) => void;
+    onResponse?: (status: number, grantType: "authorization_code" | "refresh_token") => void;
+  } = {},
+): FetchLike {
+  return async (input, init) => {
+    const grantType = tokenGrantType(init);
+    if (!grantType) return fetchFn(input, init);
+    if (grantType === "refresh_token" && hooks.beforeRefresh) {
+      try {
+        await hooks.beforeRefresh();
+      } catch (error) {
+        const failure = new OAuthOperatorError(
+          "OAUTH_UNKNOWN_ERROR",
+          "The refresh state could not be recorded, so the refresh request was not sent",
+          { cause: error, diagnostic: { phase: grantType } },
+        );
+        hooks.onFailure?.(failure);
+        throw failure;
+      }
+    }
+    let response: Response;
+    try {
+      response = await fetchFn(input, init);
+    } catch (error) {
+      if (error instanceof OAuthOperatorError) throw error;
+      const failure = tokenTransportFailure(error, grantType);
+      hooks.onFailure?.(failure);
+      throw failure;
+    }
+    hooks.onResponse?.(response.status, grantType);
+    if (response.ok) {
+      if (grantType !== "refresh_token") return response;
+      // OAUTH-30: the server answered success, so it may have rotated the grant. A body
+      // the adapter cannot use is ambiguous, never a reason to resend the old token.
+      const usable = await usableRefreshResponse(response);
+      if (usable) return usable;
+      const failure = new OAuthOperatorError("OAUTH_TOKEN_REFRESH_FAILED", "The refresh response could not be used", {
+        ambiguous: true,
+        diagnostic: { status: response.status, phase: grantType },
+      });
+      hooks.onFailure?.(failure);
+      throw failure;
+    }
+    const failure = await tokenErrorFromResponse(response, grantType);
+    hooks.onFailure?.(failure);
+    throw failure;
+  };
+}
+
+const MAX_TOKEN_RESPONSE_BYTES = 65_536;
+
+/**
+ * Re-creates a successful refresh response for the SDK when its body is a usable
+ * Bearer token response (RFC 6749 §5.1, RFC 6750); otherwise returns undefined.
+ * The SDK's own schema accepts any `token_type`, which this adapter cannot present.
+ */
+async function usableRefreshResponse(response: Response): Promise<Response | undefined> {
+  let text: string;
+  let body: unknown;
+  try {
+    text = await response.text();
+    if (text.length > MAX_TOKEN_RESPONSE_BYTES) return undefined;
+    body = JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+  if (!isRecord(body)) return undefined;
+  if (typeof body.access_token !== "string" || body.access_token.length === 0) return undefined;
+  if (typeof body.token_type !== "string" || body.token_type.toLowerCase() !== "bearer") return undefined;
+  if (body.refresh_token !== undefined && typeof body.refresh_token !== "string") return undefined;
+  if (body.scope !== undefined && typeof body.scope !== "string") return undefined;
+  // The SDK coerces a numeric string, which some servers send.
+  const expiresIn = body.expires_in;
+  if (expiresIn !== undefined &&
+      !(typeof expiresIn === "number" && Number.isFinite(expiresIn)) &&
+      !(typeof expiresIn === "string" && /^\d{1,10}$/.test(expiresIn))) {
+    return undefined;
+  }
+  return new Response(text, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: { "content-type": response.headers.get("content-type") ?? "application/json" },
+  });
+}
+
+function tokenGrantType(init: RequestInit | undefined): "authorization_code" | "refresh_token" | undefined {
+  if (init?.method?.toUpperCase() !== "POST" || !(init.body instanceof URLSearchParams)) return undefined;
+  const grantType = init.body.get("grant_type");
+  return grantType === "authorization_code" || grantType === "refresh_token" ? grantType : undefined;
+}
+
+function tokenTransportFailure(error: unknown, grantType: "authorization_code" | "refresh_token"): OAuthOperatorError {
+  const diagnostic = { phase: grantType };
+  if (connectFailureCode(error) !== undefined || isDnsFailure(error)) {
+    // Proven to precede processing: no request bytes reached the server (OAUTH-30).
+    return new OAuthOperatorError("OAUTH_TEMPORARILY_UNAVAILABLE", "The token endpoint could not be reached; the request was not processed", {
+      cause: error,
+      diagnostic,
+    });
+  }
+  if (grantType === "refresh_token") {
+    return new OAuthOperatorError("OAUTH_TOKEN_REFRESH_FAILED", "The refresh request may have been processed without a usable response", {
+      cause: error,
+      ambiguous: true,
+      diagnostic,
+    });
+  }
+  return new OAuthOperatorError("OAUTH_TEMPORARILY_UNAVAILABLE", "The authorization code exchange did not complete; run login again", {
+    cause: error,
+    diagnostic,
+  });
+}
+
+async function tokenErrorFromResponse(
+  response: Response,
+  phase: "authorization_code" | "refresh_token" | "revocation",
+): Promise<OAuthOperatorError> {
+  const status = response.status;
+  const retryAfterSeconds = parseRetryAfterSeconds(response.headers.get("retry-after"));
+  let error: string | undefined;
+  try {
+    const text = await response.text();
+    if (text.length <= 16_384) {
+      const parsed = JSON.parse(text) as unknown;
+      error = isRecord(parsed) ? sanitizeOAuthErrorCode(parsed.error) : undefined;
+    }
+  } catch {
+    // An unparseable body stays unknown.
+  }
+  const diagnostic = { status, phase, ...(error ? { error } : {}) };
+  if (error === "invalid_client") {
+    return new OAuthOperatorError(
+      "OAUTH_CLIENT_AUTHENTICATION_FAILED",
+      "The authorization server rejected the client authentication (invalid_client). This is a client configuration or enrollment problem, not an invalid user grant.",
+      { diagnostic },
+    );
+  }
+  if (status === 429) {
+    return new OAuthOperatorError("OAUTH_RATE_LIMITED", "The token endpoint is rate limited", {
+      diagnostic,
+      ...(retryAfterSeconds !== undefined ? { retryAfterSeconds } : {}),
+    });
+  }
+  if (status >= 500) {
+    return phase === "refresh_token"
+      ? new OAuthOperatorError("OAUTH_TOKEN_REFRESH_FAILED", "The token endpoint failed after the refresh request was sent", { diagnostic, ambiguous: true })
+      : new OAuthOperatorError("OAUTH_TEMPORARILY_UNAVAILABLE", "The token endpoint is temporarily unavailable", { diagnostic });
+  }
+  if (error === "invalid_grant") {
+    return new OAuthOperatorError("OAUTH_INVALID_GRANT", "The authorization grant is invalid, expired or revoked", { diagnostic });
+  }
+  if (error === "invalid_scope") {
+    return new OAuthOperatorError("OAUTH_INSUFFICIENT_SCOPE", "The authorization server rejected the requested scopes (invalid_scope)", { diagnostic });
+  }
+  if (error === "temporarily_unavailable") {
+    return new OAuthOperatorError("OAUTH_TEMPORARILY_UNAVAILABLE", "The token endpoint is temporarily unavailable", { diagnostic });
+  }
+  return new OAuthOperatorError(
+    "OAUTH_UNKNOWN_ERROR",
+    "The token endpoint returned an unrecognized error. No recovery was attempted.",
+    { diagnostic },
   );
+}
+
+async function readRawSession(path: string): Promise<Buffer | undefined> {
+  try {
+    return await readFile(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
+  }
+}
+
+/** Puts back exactly what was stored before a failed login, or removes the attempt. */
+async function restoreSession(path: string, previous: Buffer | undefined): Promise<void> {
+  if (!previous) {
+    await rm(path, { force: true });
+    return;
+  }
+  const temporaryPath = `${path}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`;
+  try {
+    await writeFile(temporaryPath, previous, { mode: 0o600, flag: "wx" });
+    await chmod(temporaryPath, 0o600);
+    await rename(temporaryPath, path);
+  } catch (error) {
+    await rm(temporaryPath, { force: true }).catch(() => {});
+    throw error;
+  }
 }
 
 function observeAuthorizationMetadata(fetchFn: FetchLike, observe: (issuerRequired: boolean) => void): FetchLike {
@@ -1642,14 +2651,6 @@ function uniqueScopes(...lists: Array<string[] | undefined>): string[] {
     }
   }
   return [...seen];
-}
-
-function stripInventedAdvertisedScope(url: URL, discovery: OAuthDiscoveryState | undefined): URL {
-  const advertised = discovery?.resourceMetadata?.scopes_supported;
-  if (!Array.isArray(advertised) || url.searchParams.get("scope") !== advertised.join(" ")) return url;
-  const stripped = new URL(url);
-  stripped.searchParams.delete("scope");
-  return stripped;
 }
 
 function formatSupportedScopes(supportedScopes: string[]): string {

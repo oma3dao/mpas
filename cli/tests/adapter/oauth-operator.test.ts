@@ -200,7 +200,9 @@ describe("OAuth operator callbacks", () => {
     try {
       const login = await startLogin(fixture);
       const { redirect, state } = await waitForAuthorizationUrl(login.authorizationUrl);
-      const assertion = expect(login.loginPromise).rejects.toThrow(/OAuth authorization failed/);
+      // Revised spec §11.1, P5-07: a validated access_denied callback is reported as
+      // oauth_authorization_denied rather than a generic failure.
+      const assertion = expect(login.loginPromise).rejects.toMatchObject({ code: "OAUTH_AUTHORIZATION_DENIED" });
       redirect.searchParams.set("state", state);
       redirect.searchParams.set("error", "access_denied");
       await fetch(redirect);

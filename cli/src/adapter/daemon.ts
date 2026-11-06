@@ -39,11 +39,9 @@ import {
   type VerifierRelayWorkerEvent,
 } from "./verifier-relay-worker.js";
 
-export interface AdapterKeyFile {
-  did: Did;
-  privateJwk: JWK;
-  publicJwk?: JWK;
-}
+import { defaultAdapterKeyPath, loadAdapterKey, type AdapterKeyFile } from "./adapter-key.js";
+
+export { defaultAdapterKeyPath, loadAdapterKey, type AdapterKeyFile };
 
 export interface DaemonOptions {
   configDir?: string;
@@ -97,10 +95,6 @@ export function defaultCredentialDir(): string {
   return process.env.MPAS_CREDENTIAL_DIR ?? join(homedir(), ".mpas", "credentials");
 }
 
-export function defaultAdapterKeyPath(): string {
-  return process.env.MPAS_ADAPTER_KEY ?? join(homedir(), ".mpas", "keys", "adapter.json");
-}
-
 export function defaultJournalPath(): string {
   return process.env.MPAS_JOURNAL_PATH ?? join(homedir(), ".mpas", "journal", "dispatch-ledger.jsonl");
 }
@@ -152,6 +146,8 @@ export async function startDaemon(options: DaemonOptions = {}): Promise<StartedD
     toolSurfaceDrift,
     adapterDid: adapterKey.did,
     adapterSigner: KeyManager.fromJwk(adapterKey.privateJwk, { did: adapterKey.did }),
+    // OAUTH-15E: the same DID key signs RFC 7523 client assertions in this process.
+    oauthClientSigningKey: async () => adapterKey,
     maxEnvelopeValidityMs: options.maxEnvelopeValidityMs,
     now: options.now,
     ledger,
@@ -289,20 +285,6 @@ export async function daemonStatus(options: Pick<DaemonOptions, "configDir" | "h
       applicationDid: entry.config.target.applicationDid,
       pluginDid: entry.config.plugin.pluginDid,
     })),
-  };
-}
-
-export async function loadAdapterKey(path: string): Promise<AdapterKeyFile> {
-  const parsed = JSON.parse(await readFile(path, "utf8")) as Partial<AdapterKeyFile>;
-  if (!parsed.did || !parsed.privateJwk) {
-    throw new Error(`Adapter key file is invalid: ${path}`);
-  }
-
-  const manager = await KeyManager.fromFile(path);
-  return {
-    did: manager.did,
-    privateJwk: parsed.privateJwk,
-    publicJwk: manager.publicKey,
   };
 }
 
