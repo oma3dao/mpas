@@ -28,6 +28,7 @@ import { DispatchLedger } from "./dispatch-ledger.js";
 import type { LoadedDeploymentConfig, ManagedOAuthConfiguration } from "./config-loader.js";
 import type { FileCredentialProvider } from "./credential-provider.js";
 import { oauthLoginCommand, prepareOAuthForDispatch } from "./oauth-operator.js";
+import type { LoadClientSigningKey } from "./oauth-client-auth.js";
 import { prepareMcpHttp } from "./dispatch/mcp-http.js";
 import { prepareMcpStdio, type DispatchPrepareResult, type McpDispatchResult } from "./dispatch/mcp-stdio.js";
 
@@ -38,6 +39,11 @@ export interface HttpEndpointOptions {
   /** Compatibility input; use adapterSigner for non-exporting providers. */
   adapterSigningKey?: JWK;
   adapterSigner?: MpasJwsSigner;
+  /**
+   * The adapter's DID key for RFC 7523 client assertions (OAUTH-15E). Used only by
+   * OAuth preparation inside this process; never exposed to a submitted Action.
+   */
+  oauthClientSigningKey?: LoadClientSigningKey;
   ledger?: DispatchLedger;
   maxEnvelopeValidityMs?: number;
   /** Deterministic clock for testing. Defaults to Date.now(). */
@@ -408,18 +414,36 @@ export function createAdapterApiServer(options: HttpEndpointOptions): FastifyIns
       credential?.ok ? credential.value : undefined,
       options.credentialProvider.directory,
       (challenge) => trace.emit("dispatch", { actionId, result: "oauth_scope_challenge", ...challenge }),
+      options.oauthClientSigningKey,
     );
     if (!prepared.ok) {
-      trace.emit("dispatch", { actionId, result: "rejected", code: prepared.error.code, reason: "target_prepare_failed" });
+      trace.emit("dispatch", {
+        actionId,
+        result: "rejected",
+        code: prepared.error.code,
+        reason: "target_prepare_failed",
+        ...(prepared.error.reason ? { oauthReason: prepared.error.reason } : {}),
+      });
       return actionResponse(options, {
         result: "rejected",
         actionEnvelopeHash: envelopeHash,
         error: { code: prepared.error.code, message: prepared.error.message },
-        context: diagnosticContext(
-          prepared.error.code,
-          "initialize",
-          loadedConfig.config.executionTarget.type,
-        ),
+        context: {
+          ...diagnosticContext(
+            prepared.error.code,
+            "initialize",
+            loadedConfig.config.executionTarget.type,
+          ),
+          // §11: the stable lowercase reason and, only where it helps, the operator
+          // command to report. Nothing here runs it (OAUTH-33A).
+          ...(prepared.error.reason ? {
+            oauth: {
+              reason: prepared.error.reason,
+              ...(prepared.error.operatorCommand ? { operatorCommand: prepared.error.operatorCommand } : {}),
+              ...(prepared.error.retryAfterSeconds !== undefined ? { retryAfterSeconds: prepared.error.retryAfterSeconds } : {}),
+            },
+          } : {}),
+        },
       });
     }
 
@@ -542,6 +566,10 @@ export function classifyDispatch(dispatchResult: McpDispatchResult): {
     case "OAUTH_SCOPE_CHANGE_REQUIRED":
       return { result: "indeterminate", error: { code: dispatchResult.error.code, message: dispatchResult.error.message } };
     default:
+      // §11.1: an authorization error after tool transmission is recorded, never replayed.
+      if (dispatchResult.error.code.startsWith("OAUTH_")) {
+        return { result: "indeterminate", error: { code: dispatchResult.error.code, message: dispatchResult.error.message } };
+      }
       return { result: "failed", error: { code: dispatchResult.error.code, message: dispatchResult.error.message } };
   }
 }
@@ -588,6 +616,7 @@ async function prepareTarget(
   credential: string | undefined,
   credentialDir?: string,
   onScopeChallenge?: (challenge: import("./oauth-scope-guard.js").OAuthScopeChallenge) => void,
+  signingKey?: LoadClientSigningKey,
 ): Promise<DispatchPrepareResult> {
   const protocolVersion = loadedConfig.plugin.executionProfile.protocolVersion;
   if (loadedConfig.config.executionTarget.type === "mcp.http") {
@@ -617,6 +646,7 @@ async function prepareTarget(
           sharing: oauthAuth.sharing,
           refresh: oauthAuth.refresh,
           ...(credentialDir ? { auditPath: `${credentialDir}/oauth-audit.jsonl` } : {}),
+          ...(signingKey ? { signingKey } : {}),
         },
       );
       if (!preparedOAuth.ok) {
@@ -721,6 +751,26 @@ function diagnosticMessage(code: string): string {
       return "The target requested OAuth authority requiring explicit operator review and reauthorization.";
     case "OAUTH_SCOPE_NOT_SUPPORTED":
       return "A configured OAuth scope is not advertised by the authorization server.";
+    case "OAUTH_LOGIN_REQUIRED":
+      return "No usable OAuth session exists. The operator must run the reported login command.";
+    case "OAUTH_TOKEN_REFRESH_FAILED":
+      return "OAuth token refresh did not complete safely. The previous refresh token was not resent.";
+    case "OAUTH_ACCESS_DENIED":
+      return "The upstream service denied access for this account, organization or adapter.";
+    case "OAUTH_RESOURCE_FORBIDDEN":
+      return "The upstream MCP server refused the request without an OAuth challenge.";
+    case "OAUTH_CLIENT_AUTHENTICATION_FAILED":
+      return "The authorization server rejected the adapter's client authentication.";
+    case "OAUTH_CLIENT_REGISTRATION_FAILED":
+      return "The OAuth client configuration or client document is not usable.";
+    case "OAUTH_DISCOVERY_FAILED":
+      return "OAuth metadata is missing, invalid or incompatible.";
+    case "OAUTH_TEMPORARILY_UNAVAILABLE":
+      return "An OAuth service is temporarily unavailable. The stored session was kept.";
+    case "OAUTH_RATE_LIMITED":
+      return "An OAuth endpoint is rate limiting requests. The stored session was kept.";
+    case "OAUTH_UNKNOWN_ERROR":
+      return "An OAuth endpoint returned an unrecognized error. No recovery was attempted.";
     case "OAUTH_REFRESH_TOKEN_NOT_ISSUED":
       return "Login succeeded but no refresh token was issued. Unattended refresh is unavailable.";
     case "CREDENTIAL_PROVIDER_UNSUPPORTED":

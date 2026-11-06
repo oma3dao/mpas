@@ -20,6 +20,10 @@ import {
   type OAuthOperatorService,
   type ResolveOAuthDeployment,
   fileOAuthOperatorService,
+  oauthLoginCommand,
+  oauthReasonForCode,
+  OAuthOperatorError,
+  OAuthReauthorizationRequiredError,
   resolveOAuthApplication,
   validateManagedOAuthSession,
 } from "../adapter/oauth-operator.js";
@@ -212,6 +216,8 @@ export async function runCli(
       const staticCredentialProvider = new FileCredentialProvider(options.credentialDir ?? defaultCredentialDir());
       const service = dependencies.oauthOperator ?? fileOAuthOperatorService({
         credentialDir: options.credentialDir ?? defaultCredentialDir(),
+        // OAUTH-15E, plan Phase 0: the daemon's key file, read only for private_key_jwt.
+        adapterKeyPath: options.adapterKeyPath ?? defaultAdapterKeyPath(),
         onAuthorizationUrl: (url) => { io.stderr.write(`Open this URL to authorize the Credential Adapter:\n${url}\n`); },
         resolveStaticClientSecret: async (handle) => {
           const result = await staticCredentialProvider.getCredential(handle);
@@ -223,11 +229,38 @@ export async function runCli(
         ...selection,
         refreshScope: selection.refreshScope ?? "offline_access",
       };
-      const response = command === "login"
-        ? await service.login({ ...request, openBrowser: options.noBrowser !== true })
-        : command === "status"
-          ? await service.status(request)
-          : await service.logout(request);
+      let response: Awaited<ReturnType<OAuthOperatorService["status"]>>;
+      try {
+        response = command === "login"
+          ? await service.login({ ...request, openBrowser: options.noBrowser !== true })
+          : command === "status"
+            ? await service.status(request)
+            : await service.logout(request);
+      } catch (error) {
+        // §11: operator errors carry the stable reason code and, only where login can
+        // help, the command to run. Nothing in a server response is echoed.
+        if (!(error instanceof OAuthOperatorError) && !(error instanceof OAuthReauthorizationRequiredError)) throw error;
+        const reason = oauthReasonForCode(error.code);
+        const operatorCommand = error instanceof OAuthReauthorizationRequiredError
+          ? error.operatorCommand
+          : error.operatorCommand ?? (reason === "oauth_reauthorization_required" || reason === "oauth_login_required"
+            || reason === "oauth_token_refresh_failed" || reason === "oauth_insufficient_scope"
+            ? oauthLoginCommand(request)
+            : undefined);
+        io.stdout.write(`${JSON.stringify({
+          status: "failed",
+          applicationDid: request.applicationDid,
+          code: error.code,
+          ...(reason ? { reason } : { reason: "unknown" }),
+          message: error.message,
+          ...(operatorCommand ? { operatorCommand } : {}),
+          ...(error instanceof OAuthOperatorError && error.retryAfterSeconds !== undefined
+            ? { retryAfterSeconds: error.retryAfterSeconds }
+            : {}),
+          ...(error instanceof OAuthOperatorError && error.diagnostic ? { diagnostic: error.diagnostic } : {}),
+        }, null, 2)}\n`);
+        return { exitCode: 1 };
+      }
       if (response.status === "authorized" && response.warnings?.length) {
         for (const warning of response.warnings) {
           io.stderr.write(`WARNING ${warning.code}: ${warning.message}\n`);

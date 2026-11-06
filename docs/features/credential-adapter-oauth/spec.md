@@ -4,7 +4,7 @@
 **Created:** 2026-11-05
 **Supersedes:** the adapter requirements in [the shipped MCP OAuth feature draft](../mcp-oauth/spec.md) for new work. That draft remains the record of what already shipped.
 **Issue:** [#23 — Credential Adapter: support OAuth 2.1 lifecycle for remote MCP servers](https://github.com/oma3dao/mpas/issues/23)
-**Companion:** [plan.md](../mcp-oauth/plan.md), written for the shipped draft
+**Companion:** [plan.md](./plan.md). The shipped draft's [plan](../mcp-oauth/plan.md) covers the work already built.
 **Official profile:** [placeholder](../../../specs/mpas-profile-credential-adapter-oauth.md), not yet normative
 **Affects:** Credential Adapter, MCP execution target configuration, operator tooling
 **Motivating target:** Official Vercel MCP server (`https://mcp.vercel.com`)

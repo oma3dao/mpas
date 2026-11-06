@@ -1,4 +1,6 @@
 import { OAuthScopeChangeRequiredError } from "../oauth-scope-guard.js";
+import { OAuthOperatorError, type OAuthFailureCode } from "../oauth-errors.js";
+import type { OAuthReasonCode } from "../oauth-operator.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import {
@@ -25,7 +27,7 @@ export interface McpDispatchError {
   ok: false;
   error: {
     kind: "McpDispatchError";
-    code: "PROCESS_EXITED" | "INVALID_RESPONSE" | "DISPATCH_TIMEOUT" | "TRANSPORT_ERROR" | "OAUTH_SCOPE_CHANGE_REQUIRED";
+    code: "PROCESS_EXITED" | "INVALID_RESPONSE" | "DISPATCH_TIMEOUT" | "TRANSPORT_ERROR" | "OAUTH_SCOPE_CHANGE_REQUIRED" | OAuthFailureCode;
     message: string;
   };
 }
@@ -44,8 +46,14 @@ export interface DispatchPrepareError {
     | "TARGET_UNAVAILABLE"
     | "OAUTH_REAUTHORIZATION_REQUIRED"
     | "OAUTH_AUTHENTICATION_FAILED"
-    | "OAUTH_INVALID_GRANT";
+    | "OAUTH_INVALID_GRANT"
+    | OAuthFailureCode;
   message: string;
+  /** §11 reason code for OAuth preparation failures. */
+  reason?: OAuthReasonCode;
+  /** Operator command to report, never to execute (OAUTH-33A). */
+  operatorCommand?: string;
+  retryAfterSeconds?: number;
 }
 
 export interface DispatchSession {
@@ -93,7 +101,7 @@ export class McpClientSession implements DispatchSession {
       );
       return { ok: true, result };
     } catch (error) {
-      if (error instanceof OAuthScopeChangeRequiredError) {
+      if (error instanceof OAuthScopeChangeRequiredError || error instanceof OAuthOperatorError) {
         return { ok: false, error: { kind: "McpDispatchError", code: error.code, message: error.message } };
       }
       if (error instanceof SdkMcpError && error.code === ErrorCode.RequestTimeout) {

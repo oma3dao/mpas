@@ -115,19 +115,19 @@ describe("OAuth scope resolution and silent-failure reporting", () => {
     })]);
   });
 
-  it("errors when neither the plugin refresh scope nor offline_access is advertised", () => {
+  it("warns, without failing, when neither the plugin refresh scope nor offline_access is advertised", () => {
+    // Revised spec §4.2: the adapter MUST NOT require offline_access or assume every
+    // server issues refresh tokens, so an unadvertised refresh scope is a warning.
     const result = resolveRequestedOAuthScopes({
       refreshScope: "offline.access",
       configuredScopes: ["mcp:tools"],
       supportedScopes: ["mcp:tools"],
     });
-    expect(result).toMatchObject({
-      ok: false,
-      requestedScope: "offline.access",
-    });
-    if (result.ok) return;
-    expect(result.message).toContain("offline.access");
-    expect(result.message).toContain("offline_access is not available");
+    expect(result).toMatchObject({ ok: true, scopes: ["mcp:tools"] });
+    if (!result.ok) return;
+    expect(result.warnings).toEqual([expect.objectContaining({ code: "OAUTH_REFRESH_SCOPE_NOT_ADVERTISED" })]);
+    expect(result.warnings[0].message).toContain("offline.access");
+    expect(result.warnings[0].message).toContain("offline_access is not available");
   });
 
   it("selects offline_access when it is advertised only by the authorization server", () => {
@@ -211,7 +211,9 @@ describe("OAuth scope resolution and silent-failure reporting", () => {
     )).toBe(false);
   });
 
-  it("refuses dispatch of an expired non-refreshable grant", async () => {
+  it("refuses dispatch of an expired non-refreshable grant as login required", async () => {
+    // Revised spec §4.2, P4-03: no refresh token means the session expires to
+    // oauth_login_required; it is not an invalid grant.
     const credentialDir = await mkdtemp(join(tmpdir(), "mpas-oauth-expired-"));
     await writeFile(join(credentialDir, `${credentialHandle}.json`), `${JSON.stringify(storedSession(
       "https://mcp.example/mcp",
@@ -231,7 +233,7 @@ describe("OAuth scope resolution and silent-failure reporting", () => {
       credentialDir,
     )).resolves.toMatchObject({
       ok: false,
-      error: { code: "OAUTH_REAUTHORIZATION_REQUIRED" },
+      error: { code: "OAUTH_LOGIN_REQUIRED", reason: "oauth_login_required" },
     });
   });
 

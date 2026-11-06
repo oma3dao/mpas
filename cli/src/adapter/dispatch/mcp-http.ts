@@ -1,6 +1,6 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import type { TransportSendOptions } from "@modelcontextprotocol/sdk/shared/transport.js";
+import type { FetchLike, TransportSendOptions } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
 import type { OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
 import { guardOAuthScopes, type OAuthScopeChallenge } from "../oauth-scope-guard.js";
@@ -35,10 +35,18 @@ export async function prepareMcpHttp(
 ): Promise<DispatchPrepareResult> {
   const timeoutMs = target.timeoutMs ?? 30_000;
   const fetchFn = createHardenedFetch({ label: "MCP request" });
-  const guardedFetch = authProvider ? guardOAuthScopes(
-    fetchFn, authProvider, target.auth?.scopes ?? [],
+  const managed = authProvider as (OAuthClientProvider & {
+    wrapFetch?: (fetchFn: FetchLike) => FetchLike;
+    recordAccessDenied?: () => Promise<void>;
+  }) | undefined;
+  const guardedFetch = managed ? guardOAuthScopes(
+    fetchFn, managed, target.auth?.scopes ?? [],
     oauthOperatorCommand ?? "mpas oauth login", onScopeChallenge,
+    () => managed.recordAccessDenied?.(),
   ) : fetchFn;
+  // A managed provider classifies token-endpoint responses on this transport too, so a
+  // refresh after a 401 follows the same OAUTH-30 rules as one before dispatch.
+  const transportFetch = managed?.wrapFetch ? managed.wrapFetch(guardedFetch) : guardedFetch;
   const transport = new VersionedStreamableHttpClientTransport(
     new URL(target.url),
     {
@@ -49,7 +57,7 @@ export async function prepareMcpHttp(
       // deadline is set: a tools/call may legitimately run long, so the caller's own
       // timeout stays the only response bound and retries remain limited to connect
       // failures, where no request bytes were sent.
-      fetch: guardedFetch,
+      fetch: transportFetch,
       requestInit: {
         headers: credential ? injectCredential(target.headers ?? {}, credential) : target.headers,
       },
