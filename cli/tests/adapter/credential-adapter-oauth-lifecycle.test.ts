@@ -17,6 +17,7 @@ import {
 import { runCli } from "../../src/cli/index.js";
 import {
   authorizeFixture,
+  MALFORMED_REFRESH_RESPONSES,
   startOAuthProtectedMcpFixture,
   type OAuthProtectedMcpFixture,
   type OAuthProtectedMcpFixtureOptions,
@@ -480,6 +481,75 @@ describe("Phase 5: refresh and failure classification", () => {
     expect(failed).toMatchObject({ status: "failed", code: "OAUTH_AUTHORIZATION_DENIED", reason: "oauth_authorization_denied" });
     expect(failed.operatorCommand).toBeUndefined();
   });
+  // Every outcome after the refresh request was sent that leaves the rotation unknown.
+  const POST_SEND_REFRESH_FAILURES = [...MALFORMED_REFRESH_RESPONSES, "5xx", "drop_after_rotation"] as const;
+
+  it.each(POST_SEND_REFRESH_FAILURES)(
+    "P5-10 an ambiguous refresh after an MCP 401 (%s) persists refresh_uncertain and the next call never resends the old refresh token",
+    async (mode) => {
+      const fixture = await start();
+      const harness = await operator(fixture);
+      await harness.login();
+      // A fresh-looking access token the resource rejects: the refresh happens on the 401.
+      const stored = await readStored(harness.credentialDir);
+      stored.tokens = { ...stored.tokens, access_token: "rejected-upstream" };
+      await writeStored(harness.credentialDir, stored);
+      const before = await readStored(harness.credentialDir);
+      fixture.failures.refresh = mode;
+      const adapter = await pipeline(fixture, harness.credentialDir);
+      try {
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+          const response = await adapter.submit();
+          expect(response.body).toMatchObject({
+            result: "rejected",
+            error: { code: "OAUTH_TOKEN_REFRESH_FAILED", message: expect.stringContaining("will not resend the previous refresh token") },
+            context: { oauth: { reason: "oauth_token_refresh_failed", operatorCommand: expect.stringContaining("mpas oauth login") } },
+          });
+          expect(response.body.executionReceipt).toBeUndefined();
+        }
+        expect(adapter.executingCount()).toBe(0);
+        expect(refreshRequests(fixture).map((request) => request.get("refresh_token"))).toEqual([before.tokens.refresh_token]);
+        const after = await readStored(harness.credentialDir);
+        expect(after.tokens).toEqual(before.tokens);
+        expect(after.refreshState).toMatchObject({ status: "uncertain" });
+        expect(after.reauthorizationRequired).toBe(false);
+        expect(fixture.toolCalls).toHaveLength(0);
+        await expect(harness.service.status(harness.request)).resolves.toMatchObject({
+          state: "refresh_uncertain",
+          reason: "oauth_token_refresh_failed",
+        });
+        fixture.failures.refresh = undefined;
+        await harness.login();
+        expect((await adapter.submit()).body).toMatchObject({ result: "executed" });
+        expect(refreshRequests(fixture)).toHaveLength(1);
+      } finally {
+        await adapter.app.close();
+      }
+    },
+  );
+
+  it.each(MALFORMED_REFRESH_RESPONSES)(
+    "P5-11 a proactive refresh answered 2xx with an unusable body (%s) persists refresh_uncertain and is not resent",
+    async (mode) => {
+      const fixture = await start();
+      const harness = await operator(fixture);
+      await harness.login();
+      await expireAccessToken(harness.credentialDir);
+      const before = await readStored(harness.credentialDir);
+      fixture.failures.refresh = mode;
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        await expect(prepare(fixture, harness.credentialDir)).resolves.toMatchObject({
+          ok: false,
+          error: { code: "OAUTH_TOKEN_REFRESH_FAILED", reason: "oauth_token_refresh_failed", operatorCommand: expect.stringContaining("mpas oauth login") },
+        });
+      }
+      expect(refreshRequests(fixture)).toHaveLength(1);
+      const after = await readStored(harness.credentialDir);
+      expect(after.tokens).toEqual(before.tokens);
+      expect(after.refreshState).toMatchObject({ status: "uncertain" });
+      await expect(harness.service.status(harness.request)).resolves.toMatchObject({ state: "refresh_uncertain" });
+    },
+  );
 });
 
 describe("Phase 6: dispatch, accounts and results", () => {

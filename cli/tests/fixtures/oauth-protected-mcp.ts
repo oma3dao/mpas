@@ -20,7 +20,17 @@ export type FixtureRefreshFailure =
   | "5xx"
   | "429"
   | "invalid_client"
-  | "unknown_error";
+  | "unknown_error"
+  /** The rotation is committed, then a 2xx body the client cannot use (OAUTH-30). */
+  | MalformedRefreshResponse;
+
+export const MALFORMED_REFRESH_RESPONSES = [
+  "invalid_json",
+  "missing_access_token",
+  "non_string_access_token",
+  "wrong_token_type",
+] as const;
+export type MalformedRefreshResponse = (typeof MALFORMED_REFRESH_RESPONSES)[number];
 
 export interface RecordedClientAssertion {
   endpoint: "token" | "revocation";
@@ -328,6 +338,13 @@ export async function startOAuthProtectedMcpFixture(
               request.socket.destroy();
               return;
             }
+            const malformed = malformedRefreshBody(failures.refresh, accessToken, refreshToken);
+            if (malformed !== undefined) {
+              response.statusCode = 200;
+              response.setHeader("content-type", "application/json");
+              response.end(malformed);
+              return;
+            }
             json(response, 200, {
               access_token: accessToken,
               token_type: "Bearer",
@@ -605,4 +622,25 @@ function readBody(request: http.IncomingMessage, callback: (body: string) => voi
   request.setEncoding("utf8");
   request.on("data", (chunk) => { body += chunk; });
   request.on("end", () => { void callback(body); });
+}
+
+/** A successful-status refresh body the client cannot use; the rotation has already happened. */
+function malformedRefreshBody(
+  mode: FixtureRefreshFailure | undefined,
+  accessToken: string,
+  refreshToken: string,
+): string | undefined {
+  const usable = { token_type: "Bearer", expires_in: 3600, refresh_token: refreshToken };
+  switch (mode) {
+    case "invalid_json":
+      return `{"access_token":"${accessToken}","token_type":"Bearer",`;
+    case "missing_access_token":
+      return JSON.stringify(usable);
+    case "non_string_access_token":
+      return JSON.stringify({ ...usable, access_token: 42 });
+    case "wrong_token_type":
+      return JSON.stringify({ ...usable, access_token: accessToken, token_type: "mac" });
+    default:
+      return undefined;
+  }
 }

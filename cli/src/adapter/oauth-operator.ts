@@ -656,6 +656,12 @@ interface FileOAuthClientRuntime {
 class FileOAuthClientProvider implements OAuthClientProvider {
   /** The last token-endpoint failure seen through {@link wrapFetch}, for dispatch-time 401 recovery. */
   private lastTokenFailure?: OAuthOperatorError;
+  /**
+   * Set when a refresh got a successful response and cleared by {@link saveTokens}.
+   * If the SDK drops that refresh for any reason in between, the server may already
+   * have rotated the grant (OAUTH-30).
+   */
+  private refreshAwaitingSave = false;
 
   constructor(
     private readonly session: StoredOAuthSession,
@@ -704,7 +710,12 @@ class FileOAuthClientProvider implements OAuthClientProvider {
   }
   /** Classifies token-endpoint responses on the dispatch transport's own fetch. */
   wrapFetch(fetchFn: FetchLike): FetchLike {
-    return observeTokenRequests(fetchFn, { onFailure: (failure) => { this.lastTokenFailure = failure; } });
+    return observeTokenRequests(fetchFn, {
+      onFailure: (failure) => { this.lastTokenFailure = failure; },
+      onResponse: (status, grantType) => {
+        if (grantType === "refresh_token" && status >= 200 && status < 300) this.refreshAwaitingSave = true;
+      },
+    });
   }
   /** Records a supported explicit entitlement denial for `status` (§11, P5-05). */
   async recordAccessDenied(): Promise<void> {
@@ -724,12 +735,16 @@ class FileOAuthClientProvider implements OAuthClientProvider {
   }
   /** What dispatch reports when the SDK would start consent: the real cause, never a browser. */
   private async dispatchCannotAuthorize(): Promise<Error> {
-    const tokenFailure = this.lastTokenFailure;
+    const operatorCommand = this.options.operatorCommand ?? "mpas oauth login";
+    // The SDK swallows a refresh failure that is not one of its own OAuth errors and
+    // falls through to consent, so this is where a dispatch-time refresh is settled.
+    const tokenFailure = this.lastTokenFailure ?? (this.refreshAwaitingSave
+      ? new OAuthOperatorError("OAUTH_TOKEN_REFRESH_FAILED", "The refresh response could not be used", { ambiguous: true })
+      : undefined);
     if (tokenFailure) {
       await persistTokenFailure(this.session, this.path, tokenFailure);
-      return tokenFailure;
+      return withOperatorCommand(tokenFailure, operatorCommand);
     }
-    const operatorCommand = this.options.operatorCommand ?? "mpas oauth login";
     return new OAuthReauthorizationRequiredError(
       operatorCommand,
       `OAuth reauthorization required. The Credential Adapter cannot start a browser during dispatch. Run ${operatorCommand}.`,
@@ -756,6 +771,7 @@ class FileOAuthClientProvider implements OAuthClientProvider {
     // a returned `scope` replaces it.
     if (typeof next.scope !== "string" && typeof previous?.scope === "string") next = { ...next, scope: previous.scope };
     this.session.tokens = next;
+    this.refreshAwaitingSave = false;
     this.session.tokensSavedAt = new Date().toISOString();
     this.session.refreshJitterMs = boundedJitter(this.runtime?.refreshPolicy.jitterMaxMs ?? 0);
     this.session.reauthorizationRequired = false;
@@ -2386,7 +2402,10 @@ function isDnsFailure(error: unknown, depth = 0): boolean {
  */
 function observeTokenRequests(
   fetchFn: FetchLike,
-  hooks: { onFailure?: (failure: OAuthOperatorError) => void; onResponse?: (status: number) => void } = {},
+  hooks: {
+    onFailure?: (failure: OAuthOperatorError) => void;
+    onResponse?: (status: number, grantType: "authorization_code" | "refresh_token") => void;
+  } = {},
 ): FetchLike {
   return async (input, init) => {
     const grantType = tokenGrantType(init);
@@ -2400,12 +2419,60 @@ function observeTokenRequests(
       hooks.onFailure?.(failure);
       throw failure;
     }
-    hooks.onResponse?.(response.status);
-    if (response.ok) return response;
+    hooks.onResponse?.(response.status, grantType);
+    if (response.ok) {
+      if (grantType !== "refresh_token") return response;
+      // OAUTH-30: the server answered success, so it may have rotated the grant. A body
+      // the adapter cannot use is ambiguous, never a reason to resend the old token.
+      const usable = await usableRefreshResponse(response);
+      if (usable) return usable;
+      const failure = new OAuthOperatorError("OAUTH_TOKEN_REFRESH_FAILED", "The refresh response could not be used", {
+        ambiguous: true,
+        diagnostic: { status: response.status, phase: grantType },
+      });
+      hooks.onFailure?.(failure);
+      throw failure;
+    }
     const failure = await tokenErrorFromResponse(response, grantType);
     hooks.onFailure?.(failure);
     throw failure;
   };
+}
+
+const MAX_TOKEN_RESPONSE_BYTES = 65_536;
+
+/**
+ * Re-creates a successful refresh response for the SDK when its body is a usable
+ * Bearer token response (RFC 6749 §5.1, RFC 6750); otherwise returns undefined.
+ * The SDK's own schema accepts any `token_type`, which this adapter cannot present.
+ */
+async function usableRefreshResponse(response: Response): Promise<Response | undefined> {
+  let text: string;
+  let body: unknown;
+  try {
+    text = await response.text();
+    if (text.length > MAX_TOKEN_RESPONSE_BYTES) return undefined;
+    body = JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+  if (!isRecord(body)) return undefined;
+  if (typeof body.access_token !== "string" || body.access_token.length === 0) return undefined;
+  if (typeof body.token_type !== "string" || body.token_type.toLowerCase() !== "bearer") return undefined;
+  if (body.refresh_token !== undefined && typeof body.refresh_token !== "string") return undefined;
+  if (body.scope !== undefined && typeof body.scope !== "string") return undefined;
+  // The SDK coerces a numeric string, which some servers send.
+  const expiresIn = body.expires_in;
+  if (expiresIn !== undefined &&
+      !(typeof expiresIn === "number" && Number.isFinite(expiresIn)) &&
+      !(typeof expiresIn === "string" && /^\d{1,10}$/.test(expiresIn))) {
+    return undefined;
+  }
+  return new Response(text, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: { "content-type": response.headers.get("content-type") ?? "application/json" },
+  });
 }
 
 function tokenGrantType(init: RequestInit | undefined): "authorization_code" | "refresh_token" | undefined {
