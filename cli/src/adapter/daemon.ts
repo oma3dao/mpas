@@ -126,6 +126,7 @@ export async function startDaemon(options: DaemonOptions = {}): Promise<StartedD
   }
 
   const adapterKey = await loadAdapterKey(options.adapterKeyPath ?? defaultAdapterKeyPath());
+  const adapterSigner = KeyManager.fromJwk(adapterKey.privateJwk, { did: adapterKey.did });
   const ledger = new DispatchLedger(new FileDispatchJournal(options.journalPath ?? defaultJournalPath()));
   const traceWriter = options.tracePath ? new TraceWriter(options.tracePath) : undefined;
   const traceLogger = new TraceLogger("adapter", traceWriter);
@@ -145,9 +146,9 @@ export async function startDaemon(options: DaemonOptions = {}): Promise<StartedD
     credentialProvider,
     toolSurfaceDrift,
     adapterDid: adapterKey.did,
-    adapterSigner: KeyManager.fromJwk(adapterKey.privateJwk, { did: adapterKey.did }),
-    // OAUTH-15E: the same DID key signs RFC 7523 client assertions in this process.
-    oauthClientSigningKey: async () => adapterKey,
+    adapterSigner,
+    // OAUTH-15E: the same DID-key signer signs RFC 7523 client assertions in this process.
+    oauthClientSigningKey: async () => adapterSigner,
     maxEnvelopeValidityMs: options.maxEnvelopeValidityMs,
     now: options.now,
     ledger,

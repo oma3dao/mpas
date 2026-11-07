@@ -110,7 +110,7 @@ mkdir -p "$MPAS_HOME/config" \
 | `config/` | Deployment config files — one per application (`<name>-adapter-config.json`) |
 | `plugins/` | Application plugin files referenced by deployment configs |
 | `credentials/` | Credential files (file-based tokens). `chmod 600` every file here. |
-| `keys/` | Adapter signing key (`adapter-key.json`). `chmod 600`. |
+| `keys/` | Adapter signing key (`signing-key.json`). `chmod 600`. |
 | `journal/` | Dispatch ledger (`dispatch-ledger.jsonl`) — private append-only lifecycle and terminal-response log |
 | `mcp-server-configs/` | Bridge configs (proposer) and signer-server configs (maintainer) |
 | `workflows/` | Persistent workflow state databases for proposer bridges |
@@ -143,8 +143,8 @@ Execution Receipts:
 
 ```sh
 cd "$HOME/Projects/mpas/cli"
-node dist/cli/index.js key generate adapter-key --key-dir "$MPAS_HOME/keys"
-chmod 600 "$MPAS_HOME/keys/adapter-key.json"
+node dist/cli/index.js key generate signing-key --key-dir "$MPAS_HOME/keys"
+chmod 600 "$MPAS_HOME/keys/signing-key.json"
 ```
 
 This key does not go into `signerGroups`. It is passed directly to the daemon
@@ -372,6 +372,71 @@ When `provider` is `oauth` in the deployment config's `credentialBindings`,
 the adapter resolves the credential from its managed OAuth session at dispatch
 time instead of from a file.
 
+#### If the server gives you a client ID
+
+Some servers accept only clients that they, or a service they trust, have
+registered, and their documentation says how to get a client ID. When the
+client ID is an HTTPS URL, the address of an OAuth Client ID Metadata Document,
+add it to `executionTarget.auth` in the deployment config:
+
+```json
+"auth": {
+  "type": "oauth2",
+  "session": "<session>",
+  "scopes": ["<scope>"],
+  "client": {
+    "type": "cimd",
+    "clientIdMetadataDocument": "<client ID>"
+  }
+}
+```
+
+Whoever publishes the document needs the mpas CLI's redirect URI:
+
+```text
+http://127.0.0.1/oauth/callback
+```
+
+The CLI listens on a new port for each login, and servers ignore the port on a
+loopback address, but the rest must match exactly. With `localhost` or another
+path, login stops with "OAuth Client ID Metadata Document does not register the
+selected redirect URI". If the server asks for the adapter's DID, `mpas config`
+prints it on its `DID:` line.
+
+When the document declares `token_endpoint_auth_method` `private_key_jwt` and
+holds the adapter's public key in `jwks`, `mpas oauth login` and
+`mpas oauth logout` sign their token requests with the adapter's key; there is
+no client secret. Like `mpas adapter start`, they use
+`~/.mpas/keys/signing-key.json`, the key that `mpas init verifier` and §3
+create, or the file `--adapter-key` names. Versions up to 0.1.0-alpha.4 look
+for `~/.mpas/keys/adapter.json` instead, so with those, pass `--adapter-key`.
+With another key, login stops with "The client document's jwks does not hold
+this adapter's DID key".
+
+### Logging in from another account
+
+`mpas oauth login` runs in the adapter's account, which stores the session in
+that account's `~/.mpas/credentials/`. The command opens a browser and waits up to
+five minutes for the server to send the browser back to
+`http://127.0.0.1:<port>/oauth/callback`, where the adapter is listening. The
+browser never receives the tokens.
+
+- **Signed in to the adapter's account on the desktop**, for example through
+  fast user switching: the browser opens there as usual.
+- **In a terminal reached from another account**, for example with
+  `su - <adapter-user>` or SSH: add `--no-browser`, then open the URL the
+  command prints in your own browser on the same machine. All accounts on a
+  Mac or Linux host share `127.0.0.1`, so the redirect reaches the adapter.
+- **Adapter on another machine:** log in there with `--no-browser`, and forward
+  the callback port before opening the URL. The port is in the printed URL's
+  `redirect_uri` parameter, as
+  `127.0.0.1%3A<port>`, and changes with every login. On the machine with the
+  browser, run the following, then open the URL there within the five minutes:
+
+  ```sh
+  ssh -N -L <port>:127.0.0.1:<port> <adapter-host>
+  ```
+
 ---
 
 ## 7. Validate and start the adapter
@@ -411,7 +476,7 @@ cd "$HOME/Projects/mpas/cli"
 node dist/cli/index.js daemon start \
   --config-dir "$MPAS_HOME/config" \
   --credential-dir "$MPAS_HOME/credentials" \
-  --adapter-key "$MPAS_HOME/keys/adapter-key.json" \
+  --adapter-key "$MPAS_HOME/keys/signing-key.json" \
   --journal-path "$MPAS_HOME/journal/dispatch-ledger.jsonl" \
   --host 127.0.0.1 \
   --port 7544 \
@@ -445,7 +510,7 @@ Add the hosted service URL when this Credential Adapter acts as its Verifier:
 node dist/cli/index.js adapter start \
   --config-dir "$MPAS_HOME/config" \
   --credential-dir "$MPAS_HOME/credentials" \
-  --adapter-key "$MPAS_HOME/keys/adapter-key.json" \
+  --adapter-key "$MPAS_HOME/keys/signing-key.json" \
   --verifier-relay-url https://api.signerset.com
 ```
 
@@ -513,7 +578,7 @@ strings are never printed.
   maintainer agents.
 - The adapter is the only component that holds upstream credentials. Bridges,
   agents, and the Coordination Service must not have access to `$MPAS_HOME/credentials/`
-  or `$MPAS_HOME/keys/adapter-key.json`.
+  or `$MPAS_HOME/keys/signing-key.json`.
 - Signer group membership comes from the deployment config, which is
   operator-owned. A proposer cannot modify its own group membership or the
   policy through Action Packages or Execution Payload parameters.
