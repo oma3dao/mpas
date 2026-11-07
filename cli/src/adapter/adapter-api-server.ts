@@ -40,8 +40,9 @@ export interface HttpEndpointOptions {
   adapterSigningKey?: JWK;
   adapterSigner?: MpasJwsSigner;
   /**
-   * The adapter's DID key for RFC 7523 client assertions (OAUTH-15E). Used only by
-   * OAuth preparation inside this process; never exposed to a submitted Action.
+   * The adapter's DID-key signer for RFC 7523 client assertions (OAUTH-15E): any SDK
+   * signer with `signBytes`, including one whose key never leaves its provider. Used
+   * only by OAuth preparation inside this process; never exposed to a submitted Action.
    */
   oauthClientSigningKey?: LoadClientSigningKey;
   ledger?: DispatchLedger;

@@ -6,8 +6,9 @@ import { decodeProtectedHeader, importJWK, jwtVerify, type JWK } from "jose";
  * In-process OAuth authorization server and protected MCP resource.
  *
  * Everything runs on 127.0.0.1 with no outbound network access. Client ID Metadata
- * Documents are served from a fake SignerSet origin through {@link OAuthProtectedMcpFixture.fetch},
- * which intercepts only that origin and passes every other URL to the runtime fetch.
+ * Documents are served from a fake SignerSet origin, and from any other origin a test
+ * publishes one to, through {@link OAuthProtectedMcpFixture.fetch}, which intercepts
+ * only those origins and passes every other URL to the runtime fetch.
  * The fixture writes nothing to the console.
  */
 
@@ -78,7 +79,7 @@ export interface OAuthProtectedMcpFixture {
     /** Runs once a refresh rotation is committed, before the response is sent. */
     afterRotation?: () => void | Promise<void>;
   };
-  /** Publishes a client document on the fake SignerSet origin and returns its URL. */
+  /** Publishes a client document on the fake SignerSet origin, or at an absolute URL on another origin, and returns its URL. */
   publishClientDocument(path: string, document: Record<string, unknown>): string;
   clientDocumentUrlForDid(did: string): string;
   /** Selects the upstream account bound to the next authorization-code grant. */
@@ -139,6 +140,8 @@ export async function startOAuthProtectedMcpFixture(
   const eventOrder: string[] = [];
   const failures: OAuthProtectedMcpFixture["failures"] = {};
   const clientDocuments = new Map<string, Record<string, unknown>>();
+  /** The fake SignerSet origin and every origin a test has published a document to. */
+  const documentOrigins = new Set([FAKE_SIGNERSET_ORIGIN]);
   const seenJtis = new Set<string>();
   const accessTokens = new Map<string, IssuedGrant>();
   const refreshTokens = new Map<string, IssuedGrant>();
@@ -506,7 +509,7 @@ export async function startOAuthProtectedMcpFixture(
 
   const fixtureFetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = new URL(input instanceof Request ? input.url : String(input));
-    if (url.origin !== FAKE_SIGNERSET_ORIGIN) return fetch(input, init);
+    if (!documentOrigins.has(url.origin)) return fetch(input, init);
     clientDocumentRequests.push(url.toString());
     switch (failures.clientDocument) {
       case "404":
@@ -550,9 +553,10 @@ export async function startOAuthProtectedMcpFixture(
     eventOrder,
     failures,
     publishClientDocument(path, document) {
-      const url = new URL(path, FAKE_SIGNERSET_ORIGIN).toString();
-      clientDocuments.set(url, document);
-      return url;
+      const url = new URL(path, FAKE_SIGNERSET_ORIGIN);
+      documentOrigins.add(url.origin);
+      clientDocuments.set(url.toString(), document);
+      return url.toString();
     },
     clientDocumentUrlForDid(did) {
       return `${FAKE_SIGNERSET_ORIGIN}/signerset/v1/clients/${did}`;

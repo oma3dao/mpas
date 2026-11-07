@@ -14,7 +14,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { generateMpasKey } from "@oma3/mpas";
 import { prepareMcpHttp } from "../../src/adapter/dispatch/mcp-http.js";
 import { fileOAuthOperatorService, prepareOAuthForDispatch, type OAuthLoginRequest } from "../../src/adapter/oauth-operator.js";
-import { loadAdapterKey } from "../../src/adapter/adapter-key.js";
+import { loadAdapterSigner } from "../../src/adapter/adapter-key.js";
 
 const wivityLinkDir = process.env.WIVITY_LINK_DIR;
 const enabled = Boolean(wivityLinkDir) && process.env.WIVITY_LINK_INTEROP === "1";
@@ -148,7 +148,7 @@ describe.skipIf(!enabled)("Phase 7: local Wivity Link", () => {
       clientAuthentication: "private_key_jwt",
       refreshable: true,
     });
-    const signingKey = () => loadAdapterKey(keyPath);
+    const signingKey = () => loadAdapterSigner(keyPath);
     const created = await callTool(request, credentialDir, documents, signingKey);
     expect(JSON.stringify(created)).toContain("item-");
     expect(h.upstream.items.at(-1)?.text).toBe(`from the credential adapter at ${request.resourceUrl}`);

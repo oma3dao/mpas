@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { FastifyInstance } from "fastify";
 import type { JWK } from "jose";
-import { generateMpasKey } from "@oma3/mpas";
+import { generateMpasKey, KeyManager } from "@oma3/mpas";
 import { loadDeploymentConfigs } from "../../src/adapter/config-loader.js";
 import { FileCredentialProvider } from "../../src/adapter/credential-provider.js";
 import { createAdapterApiServer } from "../../src/adapter/adapter-api-server.js";
@@ -50,7 +50,7 @@ export async function adapterKey(suite: "Ed25519" | "P-256" = "Ed25519"): Promis
 }
 
 export function keyLoader(key: TestKey): LoadClientSigningKey {
-  return async () => key;
+  return async () => KeyManager.fromJwk(key.privateJwk, { did: key.did });
 }
 
 /** Publishes the adapter's SignerSet-style client document and returns its URL. */

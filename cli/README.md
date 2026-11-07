@@ -67,7 +67,10 @@ mpas config validate <name>
 printed instructions show both `mpas adapter start` commands. `mpas mcp add` downloads
 and verifies the application's plugin and deployment config template, and
 writes a draft under `config/drafts/`. Follow the
-application's README for upstream setup such as credentials or OAuth.
+application's README for upstream setup such as credentials or OAuth. When a
+server gives you a client ID, it goes in a `client` block in the deployment
+config; see
+[If the server gives you a client ID](guides/credential-adapter.md#if-the-server-gives-you-a-client-id).
 `mpas signer list` shows each signer group and any placeholders left, and
 `mpas signer remove` takes a DID out. When `mpas config validate` passes, move
 the draft into `config/` and run the `mpas adapter start` command that

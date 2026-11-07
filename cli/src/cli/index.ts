@@ -934,9 +934,9 @@ function usage(): string {
     "  mpas plugin list [--plugin-dir <dir>]",
     "  mpas credential set <handle> [--credential-dir <dir>] [--value <secret>]",
     "  mpas credential list [--credential-dir <dir>]",
-    "  mpas oauth login --application-did <did> [--no-browser] [--config-dir <dir>]",
+    "  mpas oauth login --application-did <did> [--no-browser] [--config-dir <dir>] [--adapter-key <file>]",
     "  mpas oauth status --application-did <did> [--config-dir <dir>]",
-    "  mpas oauth logout --application-did <did> [--config-dir <dir>]",
+    "  mpas oauth logout --application-did <did> [--config-dir <dir>] [--adapter-key <file>]",
     "  mpas config validate <name> [--config-dir <dir>] [--credential-dir <dir>] [--bridge-dir <dir>]",
     "  mpas trace inspect <file>",
   ].join("\n");

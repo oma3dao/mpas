@@ -21,7 +21,7 @@ import { loadPlugin } from "@oma3/mpas/plugin-loader";
 import { assertExactAuthorizationServerIssuer, OAuthIssuerMismatchError, OAuthPkceMetadataError } from "./oauth-discovery.js";
 import { connectFailureCode, HardenedFetchError } from "./hardened-fetch.js";
 import { createOAuthFetchPolicy, OAuthFetchPolicyError } from "./oauth-fetch-policy.js";
-import { defaultAdapterKeyPath, loadAdapterKey } from "./adapter-key.js";
+import { defaultAdapterKeyPath, loadAdapterSigner } from "./adapter-key.js";
 import {
   applyClientAssertion,
   assertRevocationAuthentication,
@@ -431,7 +431,7 @@ export interface FileOAuthOperatorServiceOptions {
   resolveStaticClientSecret?: (credentialHandle: string) => Promise<string>;
   /** The daemon's adapter key file (OAUTH-15E). Defaults to the daemon's own path. */
   adapterKeyPath?: string;
-  /** Test seam replacing the key file load. */
+  /** Replaces the key file with another signer, such as one whose key never leaves its provider. */
   loadSigningKey?: LoadClientSigningKey;
   /** Per-attempt bound for OAuth requests. Defaults to the fetch policy's bound. */
   requestTimeoutMs?: number;
@@ -445,7 +445,7 @@ export function fileOAuthOperatorService(options: FileOAuthOperatorServiceOption
   // OAUTH-15E, plan Phase 0: the daemon's own key file, loaded only when a client
   // document declares private_key_jwt.
   const loadSigningKey: LoadClientSigningKey = options.loadSigningKey ??
-    (() => loadAdapterKey(options.adapterKeyPath ?? defaultAdapterKeyPath()));
+    (() => loadAdapterSigner(options.adapterKeyPath ?? defaultAdapterKeyPath()));
 
   return {
     async login(request) {
