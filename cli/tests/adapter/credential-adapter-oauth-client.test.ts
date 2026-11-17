@@ -5,7 +5,7 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { KeyManager, signMpasRfc9421, verifyMpasRfc9421 } from "@oma3/mpas";
+import { KeyManager, signMpasRfc9421, verifyMpasRfc9421, type MpasRawSigner } from "@oma3/mpas";
 import { createOAuthFetchPolicy } from "../../src/adapter/oauth-fetch-policy.js";
 import {
   fileOAuthOperatorService,
@@ -15,9 +15,11 @@ import {
   validateClientMetadataDocumentValue,
 } from "../../src/adapter/oauth-operator.js";
 import { prepareMcpHttp } from "../../src/adapter/dispatch/mcp-http.js";
-import { runCli } from "../../src/cli/index.js";
+import { AdapterKeyNotFoundError, defaultAdapterKeyPath, loadAdapterKey } from "../../src/adapter/adapter-key.js";
+import { generateKeyFile, runCli } from "../../src/cli/index.js";
 import {
   CLIENT_ASSERTION_TYPE,
+  enrolledAdapterClientDocument,
   FAKE_SIGNERSET_ORIGIN,
   startOAuthProtectedMcpFixture,
   type OAuthProtectedMcpFixture,
@@ -339,6 +341,21 @@ describe("Phase 2: client documents and selection", () => {
       clientAuthentication: "private_key_jwt",
     });
   });
+
+  it("P2-10 logs in the same way with a document another enrollment service publishes at its own host and path", async () => {
+    const fixture = await start(ENROLLED);
+    const key = await adapterKey();
+    // Not SignerSet's origin or path, and no DID in the URL: the CLI reads nothing from either.
+    const url = "https://enrollment.example.test/registered/adapter-7";
+    fixture.publishClientDocument(url, enrolledAdapterClientDocument(url, key.publicJwk));
+    const harness = await operator(fixture, { key, client: { type: "cimd", clientIdMetadataDocument: url } });
+    await expect(harness.login()).resolves.toMatchObject({ status: "authorized", clientMode: "cimd", clientAuthentication: "private_key_jwt" });
+    expect(fixture.clientDocumentRequests).toContain(url);
+    expect(harness.authorizationUrls[0].searchParams.get("client_id")).toBe(url);
+    expect(fixture.tokenRequests[0].get("client_id")).toBe(url);
+    expect(fixture.clientAssertions[0].claims).toMatchObject({ iss: url, sub: url });
+    expect((await readStored(harness.credentialDir)).binding).toMatchObject({ clientMode: "cimd", clientId: url });
+  });
 });
 
 describe.each(["Ed25519", "P-256"] as const)("Phase 3: private_key_jwt with an %s adapter key", (suite) => {
@@ -611,5 +628,79 @@ describe.each(["Ed25519", "P-256"] as const)("Phase 3: private_key_jwt with an %
     await expect(readFile(join(harness.credentialDir, `${credentialHandle}.json`))).rejects.toMatchObject({ code: "ENOENT" });
     const audit = await readFile(join(harness.credentialDir, "oauth-audit.jsonl"), "utf8");
     expect(audit).toContain('"action":"revocation","outcome":"failed"');
+  });
+
+  it("P3-14 a signer that never exposes its private key signs every assertion, and a signature its key does not verify sends nothing", async () => {
+    const fixture = await start(ENROLLED);
+    const key = await adapterKey(suite);
+    const manager = KeyManager.fromJwk(key.privateJwk, { did: key.did });
+    const signBytes = vi.fn((payload: Uint8Array) => manager.signBytes(payload));
+    // What an HSM or KMS provider offers: the public identity and a sign operation.
+    const provider: MpasRawSigner = { did: manager.did, kid: manager.kid, algorithm: manager.algorithm, publicKey: manager.publicKey, signBytes };
+    expect(JSON.stringify(provider)).not.toContain(String(key.privateJwk.d));
+    const url = enroll(fixture, key);
+    const harness = await operator(fixture, {
+      client: { type: "cimd", clientIdMetadataDocument: url },
+      extra: { loadSigningKey: async () => provider },
+    });
+    await expect(harness.login()).resolves.toMatchObject({ status: "authorized", clientAuthentication: "private_key_jwt" });
+    await expireAccessToken(harness.credentialDir);
+    await expect(prepare(fixture, harness.credentialDir, { expected: { signingKey: async () => provider } })).resolves.toMatchObject({ ok: true });
+    await expect(harness.service.logout(harness.request)).resolves.toMatchObject({ remoteRevocation: "succeeded" });
+    // The fixture records an assertion only after verifying it against the document's jwks.
+    expect(fixture.tokenRequests.map((request) => request.get("grant_type"))).toEqual(["authorization_code", "refresh_token"]);
+    expect(fixture.clientAssertions.map((assertion) => assertion.endpoint)).toEqual(["token", "token", "revocation", "revocation"]);
+    expect(fixture.clientAssertions.every((assertion) => assertion.header.alg === algorithm)).toBe(true);
+    expect(signBytes).toHaveBeenCalledTimes(fixture.clientAssertions.length);
+
+    const refusing = await start(ENROLLED);
+    const refused = await operator(refusing, {
+      client: { type: "cimd", clientIdMetadataDocument: enroll(refusing, key) },
+      extra: { loadSigningKey: async () => ({ ...provider, signBytes: async () => new Uint8Array(64) }) },
+    });
+    await expect(refused.login()).rejects.toMatchObject({ code: "OAUTH_CLIENT_AUTHENTICATION_FAILED" });
+    expect(refusing.tokenRequests).toHaveLength(0);
+  });
+});
+
+describe("Phase 3: the adapter key file", () => {
+  /** A home directory whose `~/.mpas/keys/` holds the named key files. */
+  async function homeWith(...names: string[]) {
+    const home = await tempDir("home");
+    const keys = join(home, ".mpas", "keys");
+    const dids = new Map<string, string>();
+    for (const name of names) dids.set(name, (await generateKeyFile(name, keys)).did);
+    return { home, keys, dids };
+  }
+
+  it("P3-13 without --adapter-key or MPAS_ADAPTER_KEY, uses the account key signing-key.json, never the old adapter.json", async () => {
+    const account = await homeWith("signing-key");
+    const accountKey = join(account.keys, "signing-key.json");
+    expect(defaultAdapterKeyPath({}, account.home)).toBe(accountKey);
+    expect((await loadAdapterKey(defaultAdapterKeyPath({}, account.home))).did).toBe(account.dids.get("signing-key"));
+
+    // The default up to 0.1.0-alpha.4 is not consulted, even when it is the only key.
+    const old = await homeWith("adapter");
+    expect(defaultAdapterKeyPath({}, old.home)).toBe(join(old.keys, "signing-key.json"));
+    await expect(loadAdapterKey(defaultAdapterKeyPath({}, old.home))).rejects.toBeInstanceOf(AdapterKeyNotFoundError);
+
+    expect(defaultAdapterKeyPath({ MPAS_ADAPTER_KEY: "/elsewhere/key.json" }, account.home)).toBe("/elsewhere/key.json");
+  });
+
+  it("P3-13 a missing key file stops login with its path and the flag, and sends no token request", async () => {
+    const fixture = await start(ENROLLED);
+    const key = await adapterKey();
+    const url = enroll(fixture, key);
+    const missing = join(await tempDir("missing-key"), "adapter.json");
+    const harness = await operator(fixture, {
+      client: { type: "cimd", clientIdMetadataDocument: url },
+      extra: { adapterKeyPath: missing },
+    });
+    await expect(harness.login()).rejects.toMatchObject({
+      code: "OAUTH_CLIENT_AUTHENTICATION_FAILED",
+      message: `No adapter key file at ${missing}. Pass --adapter-key <file> or set MPAS_ADAPTER_KEY.`,
+    });
+    expect(fixture.tokenRequests).toHaveLength(0);
+    await expect(loadAdapterKey(missing)).rejects.toBeInstanceOf(AdapterKeyNotFoundError);
   });
 });

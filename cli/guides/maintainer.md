@@ -27,7 +27,8 @@ the terminal with `mpas action review` (section 4); `mpas mcp add --harness
 <name>` registers the signer later. Before the first `@oma3/mpas-cli` release,
 build the command from `cli` with `npm ci && npm run build && npm link`.
 If you set this account up by hand, keep its DID with
-`mpas init maintainer --use-key ~/.mpas/keys/maintainer-key.json` (plus the flags above).
+`mpas init maintainer --use-key ~/.mpas/keys/signing-key.json` (plus the flags above),
+or `maintainer-key.json` if you followed an earlier version of this guide.
 
 The rest of this guide is the manual setup.
 
@@ -55,16 +56,16 @@ export MPAS_HOME="$HOME/.mpas"
 mkdir -p "$MPAS_HOME/keys" "$MPAS_HOME/mcp-server-configs"
 
 cd "$HOME/Projects/mpas/cli"
-node dist/cli/index.js key generate maintainer-key --key-dir "$MPAS_HOME/keys"
-chmod 600 "$MPAS_HOME/keys/maintainer-key.json"
+node dist/cli/index.js key generate signing-key --key-dir "$MPAS_HOME/keys"
+chmod 600 "$MPAS_HOME/keys/signing-key.json"
 ```
 
 The command prints your DID:
 
 ```
-Generated key: maintainer-key
+Generated key: signing-key
   did: did:jwk:eyJjcnYiOiJFZDI1NTE5...
-  Saved to: /Users/you/.mpas/keys/maintainer-key.json
+  Saved to: /Users/you/.mpas/keys/signing-key.json
 ```
 
 **Send the `did:jwk:...` string to the adapter operator.** They need it to
@@ -85,7 +86,7 @@ cat > "$MPAS_HOME/mcp-server-configs/maintainer-signer-config.json" <<EOF
 {
   "agent": {
     "did": "REPLACE_WITH_YOUR_DID",
-    "keyFile": "$MPAS_HOME/keys/maintainer-key.json"
+    "keyFile": "$MPAS_HOME/keys/signing-key.json"
   },
   "coordination": {
     "url": "http://127.0.0.1:7545"

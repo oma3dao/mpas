@@ -196,7 +196,7 @@ node dist/index.js --config ./bridge-config.json
   "plugin": "/path/to/applications/my-app/plugin.json",
   "adapter": { "url": "http://127.0.0.1:7544" },
   "coordination": { "url": "http://127.0.0.1:7545" },
-  "agent": { "did": "<did:jwk from key generate>", "keyFile": "/path/to/keys/proposer-key.json" },
+  "agent": { "did": "<did:jwk from key generate>", "keyFile": "/path/to/keys/signing-key.json" },
   "target": { "applicationDid": "did:web:my-app.example" },
   "workflow": { "dbPath": "./bridge-workflows.sqlite" }
 }

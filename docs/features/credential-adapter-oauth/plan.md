@@ -52,7 +52,7 @@ Accepted 2026-11-05.
 Extend the in-process authorization server and protected MCP resource:
 
 - `private_key_jwt` mode: advertises it with `EdDSA` and `ES256`, verifies assertions on the token and revocation endpoints, records each `jti`, and returns `invalid_client` for a bad assertion.
-- Client documents served from a fake SignerSet origin: several redirect URIs, a portless loopback redirect, an HTTPS callback on another domain, `token_endpoint_auth_method`, and public `jwks`.
+- Client documents served from a fake SignerSet origin, and from any other origin a test publishes to: several redirect URIs, a portless loopback redirect, an HTTPS callback on another domain, `token_endpoint_auth_method`, and public `jwks`.
 - Failure injection: metadata 404, invalid JSON, timeout, 429 and 5xx; a refresh that rotates the token and then drops the response; a 403 with body `{"error":"account_not_allowed"}` and no Bearer challenge; an authorization callback with `access_denied`.
 - Scope modes: `offline_access` only in authorization-server metadata; a refresh token issued without it; no refresh token at all; provider-prefixed scopes in the token response.
 - A write tool that checks an `expectedAccountId` argument against the grant's account and returns a tool error on mismatch.
@@ -82,10 +82,12 @@ Extend the in-process authorization server and protected MCP resource:
 | P2-07 | CIMD configured but `client_id_metadata_document_supported` absent fails with `oauth_client_registration_failed`; no dynamic registration and no public-client fallback happen. OAUTH-12A, §4.1 |
 | P2-08 | Client document, callback and signing-key reference come only from operator configuration. A tool argument, Action payload, chat-supplied value or server error URL cannot change them. §4.1, OAUTH-04 |
 | P2-09 | A metadata timeout, 429 or 5xx reports `oauth_temporarily_unavailable` or `oauth_rate_limited`, and the stored session and configured identity are unchanged. A 404 or invalid document reports `oauth_discovery_failed` or `oauth_client_registration_failed`. §6, §11.1 |
+| P2-10 | A document that another enrollment service publishes at its own HTTPS host and path, with no DID in the URL, logs in as in P2-06, with that URL as `client_id` and as the assertion's `iss` and `sub`. The CLI keeps no list of enrollment services and reads nothing from the URL. OAUTH-15F |
 
 ### Exit criteria
 
 - Done: P2-01 to P2-09 pass in CI.
+- Added 2026-11-07: P2-10 passes locally.
 
 ---
 
@@ -107,10 +109,13 @@ Extend the in-process authorization server and protected MCP resource:
 | P3-10 | Logs, status output, errors and audit records across login, refresh and logout contain no assertion. OAUTH-38 |
 | P3-11 | Agent, proposer and bridge processes cannot read the adapter key or cause an assertion to be signed. OAUTH-25 |
 | P3-12 | Logout with an unavailable signing key still deletes local credentials, reports that revocation failed, and sends no unauthenticated revocation. OAUTH-15G, OAUTH-31 |
+| P3-13 | Without `--adapter-key` or `MPAS_ADAPTER_KEY`, `mpas oauth login`, `oauth logout` and `adapter start` share one default: `~/.mpas/keys/signing-key.json`, the account key that `mpas init` and the manual guides write for every role. The old default, `adapter.json`, is not consulted. The variable takes precedence. A missing key file stops login before any token request, with a message naming the path and `--adapter-key`. Phase 0 (signing key), OAUTH-15G |
+| P3-14 | A signer that never exposes its private key, offering only its DID, key ID, public key and `signBytes` as an HSM or KMS provider does, signs the assertions for code exchange, refresh and revocation through the SDK signer contract, and each verifies against the document's `jwks`. A signature that its public key does not verify stops the request with `oauth_client_authentication_failed`, and nothing is sent. OAUTH-15E, OAUTH-15G |
 
 ### Exit criteria
 
 - Done: P3-01 to P3-12 pass in CI for both key types.
+- Added 2026-11-07: P3-13 and P3-14 pass locally.
 
 ---
 
