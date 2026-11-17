@@ -838,7 +838,7 @@ the project can open a shell in it and read every credential.
       | How you reach the machine | Command |
       | :--- | :--- |
       | SSH | `ssh -N -L <port>:127.0.0.1:<port> <admin user>@<machine>` |
-      | Google Cloud (IAP) | `gcloud compute start-iap-tunnel <vm> <port> --local-host-port=localhost:<port> --zone <zone>` |
+      | Google Cloud (SSH through IAP) | `gcloud compute ssh <vm> --zone <zone> --tunnel-through-iap -- -N -L <port>:127.0.0.1:<port>` |
       | AWS (Session Manager) | `aws ssm start-session --target <instance-id> --document-name AWS-StartPortForwardingSession --parameters portNumber=<port>,localPortNumber=<port>` |
 
    3. **Open the sign-in URL** in your browser on your own computer, and
