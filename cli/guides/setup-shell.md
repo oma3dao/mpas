@@ -812,14 +812,46 @@ the project can open a shell in it and read every credential.
    unset TOKEN
    ```
 
-   *An OAuth sign-in* (for example Netlify):
+   *An OAuth sign-in* (for example Netlify). The README gives the
+   `applicationDid`. The application's configuration is still a draft until
+   Part 6, so point the command at the drafts folder:
 
    ```bash
-   mpas oauth login --application-did <applicationDid> --no-browser
+   mpas oauth login --application-did <applicationDid> --no-browser \
+     --config-dir ~/.mpas/config/drafts
    ```
 
-   Open the printed URL on your computer and sign in. The README gives the
-   `applicationDid`.
+   The command prints a sign-in URL and waits up to 5 minutes. When you
+   sign in, the browser is sent back to a small listener that the command
+   starts **on the adapter's machine**, at
+   `http://127.0.0.1:<port>/oauth/callback`. Your browser runs on your own
+   computer, so carry that port across with a tunnel. `--no-browser` only
+   stops the command from trying to open a browser itself.
+
+   1. **Find the port** in the printed URL, in its `redirect_uri` parameter,
+      which reads `http%3A%2F%2F127.0.0.1%3A<port>%2Foauth%2Fcallback`. The
+      port is different every time you run the command.
+   2. **Open a tunnel to that port** from your own computer, in a second
+      terminal, while the command waits. Use the same port number on both
+      sides:
+
+      | How you reach the machine | Command |
+      | :--- | :--- |
+      | SSH | `ssh -N -L <port>:127.0.0.1:<port> <admin user>@<machine>` |
+      | Google Cloud (IAP) | `gcloud compute start-iap-tunnel <vm> <port> --local-host-port=localhost:<port> --zone <zone>` |
+      | AWS (Session Manager) | `aws ssm start-session --target <instance-id> --document-name AWS-StartPortForwardingSession --parameters portNumber=<port>,localPortNumber=<port>` |
+
+   3. **Open the sign-in URL** in your browser on your own computer, and
+      sign in. The browser is sent to `127.0.0.1:<port>` on your computer,
+      the tunnel delivers it to the adapter, and the command reports that it
+      is signed in.
+   4. **Close the tunnel** (Ctrl+C in the second terminal).
+
+   If the 5 minutes run out, run the command again; it uses a new port.
+   Check the result with
+   `mpas oauth status --application-did <applicationDid> --config-dir ~/.mpas/config/drafts`.
+   After Part 6 moves the configuration out of `drafts`, leave
+   `--config-dir` off.
 
    If the application starts its tool with Docker (the README says so, and
    the draft configuration shows `"command": "docker"`), Docker must be
@@ -1161,6 +1193,8 @@ the new key first with `mpas key generate`, have it registered, then run
 | `openclaw` says only "The CLI command failed" | Run the same command with `OPENCLAW_DEBUG=1` in front to see why. Right after a start or restart, the gateway may not be ready yet: check `curl -s http://127.0.0.1:18789/readyz` and try again. |
 | `Missing gateway auth token` (OpenClaw) | On Railway: `OPENCLAW_GATEWAY_TOKEN` isn't set, or onboarding didn't use it. Check it as in 2.2, step 2, then run the Railway `openclaw onboard` command in 2.2, step 3 again. On Linux: run `openclaw onboard --install-daemon` again. |
 | The agent ignores you | OpenClaw: approve the pairing (2.2, step 8). Hermes: your ID isn't on the allowed list; run `hermes gateway setup` again. |
+| `Unknown OAuth application DID` from `mpas oauth` | The application's configuration is still in `config/drafts`. Add `--config-dir ~/.mpas/config/drafts` (Part 4, step 6), or leave it off after Part 6 moves the configuration. |
+| `mpas oauth login` times out after you sign in | The browser couldn't reach the command's sign-in listener on the adapter's machine. Open a tunnel to the port in the URL's `redirect_uri` (Part 4, step 6) and run the command again. |
 | The adapter declines the plugin | It was started without a terminal, or someone answered `n`. Start it in `tmux` (Part 6, step 3). |
 | An Action never reaches the adapter | The adapter isn't running, isn't connected to the relay, or isn't reachable from the Proposer (Part 6, step 4). Or the Proposer's Action URL is wrong; fix it with `mpas config --action <url>`. |
 | `ECONNREFUSED 127.0.0.1` | A URL is still the local default. Set the real Coordination or Action URL with `mpas config`. |
