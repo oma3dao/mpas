@@ -241,6 +241,84 @@ describe("VerifierRelayWorker", () => {
     expect(processAction).not.toHaveBeenCalled();
   });
 
+  it.each([{ pageSizes: [3] }, { pageSizes: [2, 1] }])(
+    "drains multiple actions across pages $pageSizes after one work notification",
+    async ({ pageSizes }) => {
+      const requests = await Promise.all([1, 2, 3].map(index =>
+        actionRequestEnvelope(`urn:uuid:00000000-0000-4000-8000-00000000000${index}`)));
+      const client = new FakeCoordinationClient();
+      let available = false;
+      const polls = vi.spyOn(client, "pollDeliveries").mockImplementation(async (options = {}) => {
+        client.pollCount += 1;
+        const offset = options.cursor ? Number(options.cursor.slice("cursor-".length)) : 0;
+        const pageIndex = pageSizes.findIndex((_, index) =>
+          pageSizes.slice(0, index).reduce((total, size) => total + size, 0) === offset);
+        const deliveries = available && pageIndex >= 0
+          ? requests.slice(offset, offset + pageSizes[pageIndex]!) : [];
+        return {
+          version: "1", type: "RelayPollResponse", deliveries: deliveries as unknown as RelayPollResponse["deliveries"],
+          ...(deliveries.length ? { nextCursor: `cursor-${offset + deliveries.length}` }
+            : options.cursor ? { nextCursor: options.cursor } : {}),
+        };
+      });
+      const store = new MemoryStateStore();
+      const processAction = vi.fn(async (envelope: DeliveryEnvelope<ActionRequest>) => actionResponse(envelope));
+      const worker = await createWorker(client, store, processAction);
+
+      worker.start();
+      try {
+        await vi.waitFor(() => expect(client.pollCount).toBe(1));
+        available = true;
+        await client.notify();
+
+        expect(processAction.mock.calls.map(([envelope]) => envelope)).toEqual(requests);
+        expect(client.submissions.map(envelope => envelope.payload.actionEnvelopeHash)).toEqual(
+          requests.map(envelope => computeJsonHash(envelope.payload.actionPackage.actionEnvelope)));
+        expect(polls.mock.calls.slice(1).map(([options]) => options?.cursor)).toEqual(
+          pageSizes.length === 1 ? [undefined, "cursor-3"] : [undefined, "cursor-2", "cursor-3"]);
+        expect(worker.getCursor()).toBe("cursor-3");
+        expect(store.state?.responses).toEqual({});
+        expect(client.connectCount).toBe(1);
+      } finally { await worker.stop(); }
+    },
+  );
+
+  it("resumes a partially delivered batch after restart without processing completed actions again", async () => {
+    const requests = await Promise.all([1, 2, 3].map(index =>
+      actionRequestEnvelope(`urn:uuid:00000000-0000-4000-8000-00000000000${index}`)));
+    const client = new FakeCoordinationClient();
+    vi.spyOn(client, "pollDeliveries").mockImplementation(async (options = {}) => ({
+      version: "1", type: "RelayPollResponse",
+      deliveries: options.cursor ? [] : requests as unknown as RelayPollResponse["deliveries"],
+      nextCursor: "cursor-3",
+    }));
+    const submit = client.submitActionResponse.bind(client);
+    const attempts: DeliveryEnvelope<ActionResponse>[] = [];
+    vi.spyOn(client, "submitActionResponse").mockImplementation(async envelope => {
+      attempts.push(structuredClone(envelope));
+      if (attempts.length === 2) throw new ActionRelayUnavailableError("temporary outage mid-batch");
+      return submit(envelope);
+    });
+    const store = new MemoryStateStore();
+    const processAction = vi.fn(async (envelope: DeliveryEnvelope<ActionRequest>) => actionResponse(envelope));
+    const worker = await createWorker(client, store, processAction);
+
+    await expect(worker.pollNow()).rejects.toBeInstanceOf(ActionRelayUnavailableError);
+    expect(processAction).toHaveBeenCalledTimes(2);
+    expect(worker.getCursor()).toBeUndefined();
+    expect(Object.values(store.state!.responses).map(response => response.delivered)).toEqual([true, false]);
+
+    const restarted = await createWorker(client, store, processAction);
+    await restarted.pollNow();
+
+    expect(processAction.mock.calls.map(([envelope]) => envelope)).toEqual(requests);
+    expect(attempts).toHaveLength(4);
+    expect(attempts[2]).toEqual(attempts[1]);
+    expect(client.submissions).toHaveLength(3);
+    expect(restarted.getCursor()).toBe("cursor-3");
+    expect(store.state?.responses).toEqual({});
+  });
+
   it("reconnects and retries the same delivery after a transient processing failure", async () => {
     const requestEnvelope = await actionRequestEnvelope();
     const client = new FakeCoordinationClient(requestEnvelope);
@@ -401,10 +479,12 @@ async function createWorker(
   });
 }
 
-async function actionRequestEnvelope(): Promise<DeliveryEnvelope<ActionRequest>> {
+async function actionRequestEnvelope(actionId?: string): Promise<DeliveryEnvelope<ActionRequest>> {
   const actionPackage = JSON.parse(
     await readFile(`${fixtures}/insufficient-approvals.json`, "utf8"),
   ) as ActionPackage;
+  // These worker tests stub the Verifier; signatures are exercised by core tests.
+  if (actionId) actionPackage.actionEnvelope.actionId = { value: actionId };
   return buildDeliveryEnvelope({
     sender: actionPackage.actionEnvelope.proposer.did,
     recipients: [verifier],

@@ -183,6 +183,7 @@ integrations/
 - Human Maintainer CLI: [`cli/guides/maintainer.md`](cli/guides/maintainer.md#human-maintainer-cli)
 - Agent skills: `integrations/skills/`
 - Credential Adapter operator guide: [`cli/guides/credential-adapter.md`](cli/guides/credential-adapter.md)
+- Shell setup guide (Linux servers and Railway): [`cli/guides/setup-shell.md`](cli/guides/setup-shell.md)
 - Application registry: `application-registry/`
 - Application plugins and bridges: [oma3dao/mpas-applications](https://github.com/oma3dao/mpas-applications)
 
