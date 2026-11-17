@@ -27,7 +27,8 @@ prints the role preamble for step 6 below. Check the result with
 `mpas config validate <name>`. To run a version that is not published yet,
 build the command from `cli` with `npm ci && npm run build && npm link`.
 If you set this account up by hand, keep its DID with
-`mpas init proposer --use-key ~/.mpas/keys/proposer-key.json` (plus the flags above).
+`mpas init proposer --use-key ~/.mpas/keys/signing-key.json` (plus the flags above),
+or `proposer-key.json` if you followed an earlier version of this guide.
 
 `<url>` is the application's folder, for example
 `https://github.com/oma3dao/mpas-applications/tree/main/applications/railway`.
@@ -62,16 +63,16 @@ export MPAS_HOME="$HOME/.mpas"
 mkdir -p "$MPAS_HOME/keys" "$MPAS_HOME/mcp-server-configs" "$MPAS_HOME/plugins" "$MPAS_HOME/workflows"
 
 cd "$HOME/Projects/mpas/cli"
-node dist/cli/index.js key generate proposer-key --key-dir "$MPAS_HOME/keys"
-chmod 600 "$MPAS_HOME/keys/proposer-key.json"
+node dist/cli/index.js key generate signing-key --key-dir "$MPAS_HOME/keys"
+chmod 600 "$MPAS_HOME/keys/signing-key.json"
 ```
 
 The command prints your DID:
 
 ```
-Generated key: proposer-key
+Generated key: signing-key
   did: did:jwk:eyJjcnYiOiJFZDI1NTE5...
-  Saved to: /Users/you/.mpas/keys/proposer-key.json
+  Saved to: /Users/you/.mpas/keys/signing-key.json
 ```
 
 **Send the `did:jwk:...` string to the adapter operator.** They need it to
@@ -144,7 +145,7 @@ cat > "$MPAS_HOME/mcp-server-configs/github-mcp-bridge-config.json" <<EOF
   },
   "agent": {
     "did": "REPLACE_WITH_YOUR_DID",
-    "keyFile": "$MPAS_HOME/keys/proposer-key.json"
+    "keyFile": "$MPAS_HOME/keys/signing-key.json"
   },
   "target": {
     "applicationDid": "did:web:wivity.com:applications:github-mcp-server"
